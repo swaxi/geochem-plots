@@ -876,26 +876,6 @@ class GeochemistryDialog(QDialog):
         if layer:
             self.update_feature_list(layer)
 
-    def update_feature_list_old(self, layer):
-        self.feature_list.clear()
-        id_field = self.id_field_combo.currentText()
-        
-        # Get the currently selected feature IDs in QGIS
-        selected_ids = layer.selectedFeatureIds()
-        
-        for feature in layer.getFeatures():
-            if id_field and id_field in [f.name() for f in layer.fields()]:
-                label = str(feature[id_field])
-            else:
-                label = f"Feature {feature.id()}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, feature.id())
-            self.feature_list.addItem(item)
-            
-            # Pre-select if this feature is selected in QGIS
-            if feature.id() in selected_ids:
-                item.setSelected(True)
-
     def update_feature_list(self, layer):
         self.feature_list.clear()
         id_field = self.id_field_combo.currentText()
@@ -915,19 +895,6 @@ class GeochemistryDialog(QDialog):
             # Pre-select if this feature is selected in QGIS
             if feature.id() in selected_ids:
                 item.setSelected(True)
-
-
-    def update_feature_list_old(self, layer):
-        self.feature_list.clear()
-        id_field = self.id_field_combo.currentText()
-        for feature in layer.getFeatures():
-            if id_field and id_field in [f.name() for f in layer.fields()]:
-                label = str(feature[id_field])
-            else:
-                label = f"Feature {feature.id()}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, feature.id())
-            self.feature_list.addItem(item)
 
     def select_all_features(self):
         for i in range(self.feature_list.count()):
@@ -1087,13 +1054,11 @@ class GeochemistryDialog(QDialog):
         for name, coords in zip(sample_names, data):
             if 'Ternary' in diagram_name:
                 if coords[0] is not None:
-                    print(f"  {name}: a={coords[0]:.2f}, b={coords[1]:.2f}, c={coords[2]:.2f}")
                     valid_count += 1
                 else:
                     print(f"  {name}: Missing data")
             else:
                 if coords[0] is not None:
-                    print(f"  {name}: x={coords[0]:.4f}, y={coords[1]:.4f}")
                     valid_count += 1
                 else:
                     print(f"  {name}: Missing data")
@@ -1121,12 +1086,7 @@ class GeochemistryDialog(QDialog):
 # ENTRY POINT
 # =============================================================================
 
-def run_dialog_old():
-    if not MATPLOTLIB_AVAILABLE:
-        print("ERROR: matplotlib is not installed.")
-        return
-    dialog = GeochemistryDialog(iface.mainWindow())
-    dialog.exec_()
+
 
 def run_dialog():
     if not MATPLOTLIB_AVAILABLE:
