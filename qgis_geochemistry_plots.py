@@ -846,7 +846,7 @@ class Cox1979_TAS:
         ax.text(48.8,5.5, 'Trachy-\nbasalt', fontsize=12, ha='center', va='center', fontweight='bold')
         ax.text(52.7, 7.5, 'Basaltic\ntrachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
         ax.text(58, 8, 'Trachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(65, 10, 'Trachyte\n(q<20%)\n\nTrachydacite\n(q<20%)', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(65, 10, 'Trachyte\n(q<20%)\n\nTrachydacite\n(q>20%)', fontsize=12, ha='center', va='center', fontweight='bold')
         ax.text(48,9.5, 'Phono-\ntephrite', fontsize=12, ha='center', va='center', fontweight='bold')
         ax.text(53,12, 'Tephri-\nphonolite', fontsize=12, ha='center', va='center', fontweight='bold')
         ax.text(58,13, 'Phonolite', fontsize=12, ha='center', va='center', fontweight='bold')
