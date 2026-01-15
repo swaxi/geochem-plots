@@ -4,11 +4,14 @@
 This script creates:
 1. Chondrite-or Primitive Mantle normalized spider diagrams (REE + trace elements)
 2. Tectonic discrimination diagrams:
+   - Na2O + K2O vs SiO2 TAS for Plutonic Rocks (Wilson 1989)   
+   - Na2O + K2O vs SiO2 TAS for Volcanic Rocks (Cox et al 1979)
    - Nb/Y vs Zr/Ti (Winchester & Floyd 1977; Pearce 1996)
    - Zr/4-2Nb-Y ternary (Meschede 1986)
    - Nb vs Y (Pearce et al. 1984)
    - Rb vs (Y+Nb) (Pearce et al. 1984)
    - Ti vs Zr (Pearce & Cann 1973)
+
 
 ## Usage:
     1. Open QGIS and load your vector point layer with geochemical data
