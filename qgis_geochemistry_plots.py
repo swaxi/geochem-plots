@@ -145,6 +145,7 @@ OXIDE_TO_ELEMENT_PPM = {
     'P2O5': 4364,    # P2O5 wt% * 4364 = P ppm
     'Fe2O3': 6994,   # Fe2O3 wt% * 6994 = Fe ppm
     'FeO': 7773,     # FeO wt% * 7773 = Fe ppm
+    'SiO2': 4674,    # SiO2 wt% * 4674 = Si ppm
 }
 
 
@@ -172,10 +173,13 @@ def get_element_value(feature, layer, element, convert_to_ppm=True):
                 # P2O5 -> P
                 elif 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
                     value = value * 4364
-                # K2O -> K  
+                """# K2O -> K  
                 elif 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
                     value = value * 8301
-                    
+                elif 'NA2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
+                    value = value * 7419                    
+                elif 'SI2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
+                    value = value * 4674"""                 
             return value
         except (ValueError, TypeError):
             return None
@@ -630,8 +634,8 @@ class PearceCann1973_ZrTi:
     @classmethod
     def calculate_coordinates(cls, feature, layer):
         zr = get_element_value(feature, layer, 'Zr')
-        ti = get_element_value(feature, layer, 'Ti')  # Auto-converts TiO2_pct to Ti ppm
-        
+        ti = get_element_value(feature, layer, 'TiO2')  # Auto-converts TiO2_pct to Ti ppm
+
         if zr is not None and ti is not None and zr > 0 and ti > 0:
             return zr, ti
         return None, None
@@ -690,14 +694,200 @@ class PearceCann1973_ZrTi:
             ]
             ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)
 
+# =============================================================================
+# DISCRIMINATION DIAGRAM 6: Na2O + K2O vs SiO2 Cox et al. (1979) adapted by Wilson (1989) for plutonic rocks)
+# =============================================================================
+
+class Wilson1989_TAS:
+    """Na2O + K2O vs SiO2 Cox et al. (1979) adapted by Wilson (1989) for plutonic rocks"""
+    
+    name = "Na2O + K2O vs SiO2"
+    reference = "Wilson (1989) Plutonic Rocks"
+
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        na = get_element_value(feature, layer, 'Na2O')
+        k = get_element_value(feature, layer, 'K2O')
+        si = get_element_value(feature, layer, 'SiO2')
+
+        if na is not None and k is not None and si is not None and na > 0 and k > 0 and si > 0:
+            return si, (na + k)
+        return None, None
+
+    @classmethod
+    def draw_fields(cls, ax):
+        """Draw Wilson 1989 Na2O + K2O vs SiO2 field boundaries.
+        
+        """
+        
+        # === fields ===
+        # Outer loop
+        ax.plot([35.3, 40.0, 48.2, 51.2, 61.5, 68.8, 73.8, 74.8, 74.8, 73.9, 69.6, 62.5, 54.6, 51.3, 43.7, 40.7, 38.7, 35.3], 
+                [6.3, 9.5, 15.0, 16.8, 14.1, 11.8, 9.7, 8.9, 7.9, 7.1, 5.5, 3.5, 1.7, 1.6, 1.9, 3.2, 4.2, 6.3], 'b-', linewidth=1.5)
+        # Alkaline boundary Loop
+        ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7 ], 
+                [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4 ], 'g--', linewidth=1.5)
+        # Ijolite
+        ax.plot([38.7, 43.0,44.9,50.8], [4.2, 8.4, 9.6,13.4], 'b-', linewidth=1.5)
+        
+        # Left of Gabbro
+        ax.plot([40.7, 44.0, 47.5, 49.3, 54.2], [3.2, 5.9, 8.6, 9.3, 11.3], 'b-', linewidth=1.5)
+        
+        # top right
+        ax.plot([48.2, 50.8, 54.2, 57.2, 61.1, 64.5, 66.3, 69.6], [15.0, 13.4, 11.3, 11.4, 10.0, 8.8, 8.0, 5.5], 'b-', linewidth=1.5)
+        
+        # right of Gabbro
+        ax.plot([51.3, 51.4, 51.5, 52.3, 56.0, 61.1], [1.6, 5.2, 5.7, 7.2, 9.1, 10.0], 'b-', linewidth=1.5)
+        
+        # internal lines
+        ax.plot([62.5, 62.4, 63.3, 64.5, 68.8], [3.5, 6.9, 7.7, 8.8, 11.8], 'b-', linewidth=1.5)
+        ax.plot([44.0, 51.5, 53.1, 54.4, 62.4], [5.9, 5.7, 5.7, 5.7, 6.9], 'b-', linewidth=1.5)
+        ax.plot([49.3, 55.3, 56.0, 61.1], [9.3, 9.2, 9.1, 10.0], 'b-', linewidth=1.5)
+        ax.plot([45.6, 52.3], [7.1, 7.2], 'b-', linewidth=1.5)
+        ax.plot([51.3, 51.4, 51.5], [1.6, 5.2, 5.7], 'b-', linewidth=1.5)
+        ax.plot([44.9, 47.5], [9.6, 8.6], 'b-', linewidth=1.5)
+        ax.plot([54.6, 54.4], [1.7, 5.7], 'b-', linewidth=1.5)
+        ax.plot([40.0, 43.0], [9.5, 8.4], 'b-', linewidth=1.5)
+        ax.plot([62.5, 62.4], [3.5, 6.9], 'b-', linewidth=1.5)
+        ax.plot([57.2, 61.5], [11.4, 14.1], 'b-', linewidth=1.5)
+        
+        # === FIELD LABELS ===
+        ax.text(38.5, 7.0, 'Ijolite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(55.8, 13.9, 'Nepheline-syenite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(63.0, 11.7, 'Syenite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(68.8, 9.8, 'Alkaline\nGranite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(70.6, 7.3, 'Granite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(65.9, 5.5, 'Granodiorite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(57.6, 4.5, 'Diorite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(47.8, 2.5, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(44.4, 4.1, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(47.8, 6.3, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(54.1, 8.1, 'Syenodiorite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(55.5, 10.2, 'Syenite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20,color='g')
+        ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20,color='g')
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True):
+        cls.draw_fields(ax)
+        
+        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
+            if x is not None and y is not None:
+                ax.scatter(x, y, marker=markers[i % len(markers)],
+                          s=80, c=[colors[i % 10]], edgecolors='black',
+                          linewidths=0.5, zorder=10)
+        
+        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
+        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        ax.set_xlim(30, 80)
+        ax.set_ylim(0, 17)
+        
+        """if show_legend:
+            legend_elements = [
+                Line2D([0], [0], color='w', marker='', label='IAT = Island arc tholeiites'),
+                Line2D([0], [0], color='w', marker='', label='MORB = Mid-ocean ridge basalts'),
+                Line2D([0], [0], color='w', marker='', label='CAB = Calc-alkaline basalts'),
+            ]
+            ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)"""
+        
+# =============================================================================
+# DISCRIMINATION DIAGRAM 6: Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks)
+# =============================================================================
+
+class Cox1979_TAS:
+    """Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks"""
+    
+    name = "Na2O + K2O vs SiO2"
+    reference = "Cox et al. (1979) Volcanic Rocks"
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        na = get_element_value(feature, layer, 'Na2O')
+        k = get_element_value(feature, layer, 'K2O')
+        si = get_element_value(feature, layer, 'SiO2')
+
+        if na is not None and k is not None and si is not None and na > 0 and k > 0 and si > 0:
+            return si, (na + k)
+        return None, None
+
+    @classmethod
+    def draw_fields(cls, ax):
+        """Draw Cox et al. 1979 Na2O + K2O vs SiO2 field boundaries.
+        
+        """
+        
+        # === fields ===
+        ax.plot([41,41], [1,3], 'b-', linewidth=1.5)
+        ax.plot([41,41,45], [3,7,9.4], 'b--', linewidth=1.5)
+        ax.plot([45,48.4,52.5], [9.4,11.5,14], 'b-', linewidth=1.5)
+        ax.plot([45,45,45,49.4,53,57.6,60], [1,3,5,7.3,9.3,11.7,12.5], 'b-', linewidth=1.5)
+        ax.plot([45,52,57,63,69], [5,5,5.9,7,8], 'b-', linewidth=1.5)
+        ax.plot([52,52,49.4,45], [1,5,7.3,9.4], 'b-', linewidth=1.5)
+        ax.plot([57,57,53,48.4], [1,5.9,9.3,11.5], 'b-', linewidth=1.5)
+        ax.plot([63,63,57.6,51], [1,7,11.7,14.8], 'b-', linewidth=1.5)
+        ax.plot([76.5,69,69], [1,8,13], 'b-', linewidth=1.5)
+        ax.plot([45,52], [5,5], 'b-', linewidth=1.5)
+        ax.plot([41,45], [3,3], 'b-', linewidth=1.5)
+
+        
+        # === FIELD LABELS ===
+        ax.text(43,13, 'Foidite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(43,2, 'Picro-\nbasalt', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(48,3, 'Basalt', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(54.8,3.5, 'Basaltic\nAndesite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(60, 4, 'Andesite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(67, 4.5, 'Dacite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(73,8, 'Rhyolite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(45,7.5, 'Tephrite\n(ol <10%)', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(43,5.7, 'Basanite\n(ol>10%)', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(48.8,5.5, 'Trachy-\nbasalt', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(52.7, 7.5, 'Basaltic\ntrachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(58, 8, 'Trachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(65, 10, 'Trachyte\n(q<20%)\n\nTrachydacite\n(q<20%)', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(48,9.5, 'Phono-\ntephrite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(53,12, 'Tephri-\nphonolite', fontsize=12, ha='center', va='center', fontweight='bold')
+        ax.text(58,13, 'Phonolite', fontsize=12, ha='center', va='center', fontweight='bold')
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True):
+        cls.draw_fields(ax)
+        
+        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
+            if x is not None and y is not None:
+                ax.scatter(x, y, marker=markers[i % len(markers)],
+                          s=80, c=[colors[i % 10]], edgecolors='black',
+                          linewidths=0.5, zorder=10)
+        
+        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
+        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        ax.set_xlim(40, 80)
+        ax.set_ylim(0, 17)
+        
+        """if show_legend:
+            legend_elements = [
+                Line2D([0], [0], color='w', marker='', label='IAT = Island arc tholeiites'),
+                Line2D([0], [0], color='w', marker='', label='MORB = Mid-ocean ridge basalts'),
+                Line2D([0], [0], color='w', marker='', label='CAB = Calc-alkaline basalts'),
+            ]
+            ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)"""
 
 # Diagram registry
 DISCRIMINATION_DIAGRAMS = {
+    'Na2O + K2O vs SiO2 Plutonic (Wilson 1989)': Wilson1989_TAS,
+    'Na2O + K2O vs SiO2 Volcanic (Cox et al 1979)': Cox1979_TAS,
     'Zr/Ti vs Nb/Y (Pearce 1996)': Pearce1996_NbY_ZrTi,
     'Zr/4-Nb×2-Y Ternary (Meschede 1986)': Meschede1986_Ternary,
     'Nb vs Y (Pearce et al. 1984)': Pearce1984_YNb,
     'Rb vs (Y+Nb) (Pearce et al. 1984)': Pearce1984_YNbRb,
-    'Ti vs Zr (Pearce & Cann 1973)': PearceCann1973_ZrTi,
+    'Ti vs Zr (Pearce & Cann 1973)': PearceCann1973_ZrTi
+
 }
 
 
