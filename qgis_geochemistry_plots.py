@@ -20,7 +20,7 @@ Usage:
 
 import os
 import sys
-from qgis.core import QgsProject, QgsVectorLayer
+from qgis.core import QgsProject, QgsVectorLayer, NULL
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
@@ -727,7 +727,9 @@ class GeochemistryDialog(QDialog):
         layer_row = QHBoxLayout()
         layer_row.addWidget(QLabel("Vector Layer:"))
         self.layer_combo = QComboBox()
+        # Use both signals: currentIndexChanged for programmatic changes, activated for user clicks
         self.layer_combo.currentIndexChanged.connect(self.on_layer_changed)
+        self.layer_combo.activated.connect(self.on_layer_changed)
         layer_row.addWidget(self.layer_combo)
         layer_layout.addLayout(layer_row)
 
@@ -831,29 +833,22 @@ class GeochemistryDialog(QDialog):
         layout.addLayout(button_layout)
 
     def load_layers(self):
+        # Block signals while populating to avoid premature triggers
+        self.layer_combo.blockSignals(True)
         self.layer_combo.clear()
         layers = QgsProject.instance().mapLayers().values()
         for layer in layers:
             if isinstance(layer, QgsVectorLayer):
                 self.layer_combo.addItem(layer.name(), layer.id())
+        self.layer_combo.blockSignals(False)
+        
         if self.layer_combo.count() > 0:
+            self.layer_combo.setCurrentIndex(0)
             self.on_layer_changed(0)
-
-    def on_layer_changed_old(self, index):
-        if index < 0:
-            return
-        layer_id = self.layer_combo.currentData()
-        layer = QgsProject.instance().mapLayer(layer_id)
-        if layer is None:
-            return
-        self.id_field_combo.clear()
-        for field in layer.fields():
-            self.id_field_combo.addItem(field.name())
-        self.update_feature_list(layer)
-
 
     def on_layer_changed(self, index):
         if index < 0:
+            print("[DEBUG] Index < 0, returning")
             return
         
         # Get layer_id using itemData instead of currentData
@@ -864,9 +859,46 @@ class GeochemistryDialog(QDialog):
         layer = QgsProject.instance().mapLayer(layer_id)
         if layer is None:
             return
+        
         self.id_field_combo.clear()
-        for field in layer.fields():
-            self.id_field_combo.addItem(field.name())
+        field_names = [field.name() for field in layer.fields()]
+        for field_name in field_names:
+            self.id_field_combo.addItem(field_name)
+        
+        # Try to auto-select a good ID field (look for common sample ID field names)
+        preferred_names = ['sample_id', 'sampleid', 'sample', 'name', 'id', 'sample_name', 
+                          'samplename', 'label', 'station', 'site', 'sample_no', 'samp_id',
+                          'hole_id', 'holeid', 'drillhole', 'core_id', 'spec_id', 'specimen']
+        best_index = 0
+        
+        # First, look for preferred field names
+        for pref in preferred_names:
+            for i, fn in enumerate(field_names):
+                if fn.lower() == pref.lower():
+                    best_index = i
+                    break
+            else:
+                continue
+            break
+        
+        # If no preferred name found, try to find a STRING field with unique, non-null values
+        if best_index == 0 and len(field_names) > 0:
+            from PyQt5.QtCore import QVariant
+            for i, field in enumerate(layer.fields()):
+                # Only consider string/text fields for sample IDs
+                if field.type() not in (QVariant.String, QVariant.Char):
+                    continue
+                # Check if this field has a non-null, non-empty value in the first feature
+                for feature in layer.getFeatures():
+                    value = feature[field.name()]
+                    if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
+                        best_index = i
+                        break
+                    break  # Only check first feature
+                if best_index != 0:
+                    break
+        
+        self.id_field_combo.setCurrentIndex(best_index)
         self.update_feature_list(layer)
         
         
@@ -884,10 +916,18 @@ class GeochemistryDialog(QDialog):
         selected_ids = layer.selectedFeatureIds()
         
         for feature in layer.getFeatures():
+            label = None
+            # Try to get label from id_field, but check for NULL/empty values
             if id_field and id_field in [f.name() for f in layer.fields()]:
-                label = str(feature[id_field])
-            else:
+                value = feature[id_field]
+                # Check if value is valid (not NULL, None, or empty string)
+                if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
+                    label = str(value)
+            
+            # Fallback to feature ID if no valid label found
+            if label is None:
                 label = f"Feature {feature.id()}"
+                
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, feature.id())
             self.feature_list.addItem(item)
@@ -1086,11 +1126,21 @@ class GeochemistryDialog(QDialog):
 # ENTRY POINT
 # =============================================================================
 
-
+# Import iface at module level if available
+try:
+    from qgis.utils import iface
+    IFACE_AVAILABLE = True
+except ImportError:
+    IFACE_AVAILABLE = False
+    iface = None
 
 def run_dialog():
     if not MATPLOTLIB_AVAILABLE:
         print("ERROR: matplotlib is not installed.")
+        return
+    
+    if not IFACE_AVAILABLE or iface is None:
+        print("ERROR: QGIS iface not available. Run this from QGIS Python Console.")
         return
     
     # Make matplotlib non-blocking
@@ -1099,19 +1149,17 @@ def run_dialog():
     dialog = GeochemistryDialog(iface.mainWindow())
     dialog.show()
     
-    # Use QTimer to defer the refresh until after the dialog is fully shown
-    from qgis.PyQt.QtCore import QTimer
-    
-    def refresh_dialog():
-        if dialog.layer_combo.count() > 0:
-            dialog.layer_combo.setCurrentIndex(0)
-            dialog.layer_combo.currentIndexChanged.emit(0)
-    
-    QTimer.singleShot(100, refresh_dialog)
+    # Store dialog reference to prevent garbage collection
+    global _geochem_dialog
+    _geochem_dialog = dialog
 
-if __name__ == '__console__' or __name__ == '__main__':
-    try:
-        from qgis.utils import iface
+# Always try to run when script is executed
+try:
+    if IFACE_AVAILABLE:
         run_dialog()
-    except ImportError:
+    else:
         print("This script must be run from within QGIS.")
+except Exception as e:
+    print(f"Error running dialog: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
