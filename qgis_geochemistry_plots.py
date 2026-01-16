@@ -9,6 +9,7 @@ This script creates:
    - Nb vs Y (Pearce et al. 1984)
    - Rb vs (Y+Nb) (Pearce et al. 1984)
    - Ti vs Zr (Pearce & Cann 1973)
+   - TAS plots
 
 Usage:
     1. Open QGIS and load your vector point layer with geochemical data
@@ -38,6 +39,48 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
     print("WARNING: matplotlib not available. Install using: pip install matplotlib")
+
+
+# =============================================================================
+# CATEGORICAL COLOUR MAPPING UTILITIES
+# =============================================================================
+
+CATEGORY_MARKERS = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*', 'P', 'X', 'd', '8', 'H']
+
+def create_categorical_color_map(sample_names):
+    """Create a colour and marker map based on unique category values in sample_names.
+    
+    Returns:
+        category_colors: dict mapping category name to RGBA colour
+        sample_colors: list of RGBA colours in same order as sample_names
+        unique_categories: list of unique category names (for legend)
+        category_markers: dict mapping category name to marker style
+        sample_markers: list of marker styles in same order as sample_names
+    """
+    unique_categories = list(dict.fromkeys(sample_names))  # Preserve order, remove duplicates
+    n_categories = len(unique_categories)
+    
+    # Use tab10 for up to 10 categories, tab20 for up to 20, then cycle
+    if n_categories <= 10:
+        cmap = plt.cm.tab10
+        colors = [cmap(i / 10) for i in range(n_categories)]
+    elif n_categories <= 20:
+        cmap = plt.cm.tab20
+        colors = [cmap(i / 20) for i in range(n_categories)]
+    else:
+        # For more than 20 categories, use a continuous colormap
+        cmap = plt.cm.turbo
+        colors = [cmap(i / n_categories) for i in range(n_categories)]
+    
+    # Assign colours and markers per category
+    category_colors = {cat: colors[i] for i, cat in enumerate(unique_categories)}
+    category_markers = {cat: CATEGORY_MARKERS[i % len(CATEGORY_MARKERS)] for i, cat in enumerate(unique_categories)}
+    
+    # Map to sample order
+    sample_colors = [category_colors[name] for name in sample_names]
+    sample_markers = [category_markers[name] for name in sample_names]
+    
+    return category_colors, sample_colors, unique_categories, category_markers, sample_markers
 
 
 # =============================================================================
@@ -328,25 +371,42 @@ class Pearce1996_NbY_ZrTi:
         ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
         ax.set_ylim(0.001, 1)
+        
+        # Add legend for categories if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='best', fontsize=8, framealpha=0.9)
 
 
 # =============================================================================
@@ -424,21 +484,38 @@ class Meschede1986_Ternary:
         ternary_text(ax, 35, 55, 10, 'D', fontsize=11, ha='center', va='center', fontweight='bold')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         plot_ternary_axes(ax, labels=['Zr/4', 'Y', 'Nb×2'])
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, (coords, name) in enumerate(zip(data, sample_names)):
             if coords[0] is not None and coords[1] is not None and coords[2] is not None:
                 x, y = ternary_to_cartesian(*coords)
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
         
         if show_legend:
             legend_text = "AI, AII = WP alkali basalts\nB = P-type MORB\nC = VAB\nD = N-type MORB"
@@ -505,34 +582,49 @@ class Pearce1984_YNb:
         ax.text(200, 7, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('Y (ppm)', fontsize=12)
         ax.set_ylabel('Nb (ppm)', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 1000)
         ax.set_ylim(1, 2000)
         
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+        
+        # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
-            legend_elements = [
-                Line2D([0], [0], color='w', marker='', label='VAG = Volcanic arc granites'),
-                Line2D([0], [0], color='w', marker='', label='syn-COLG = Syn-collision granites'),
-                Line2D([0], [0], color='w', marker='', label='WPG = Within-plate granites'),
-                Line2D([0], [0], color='w', marker='', label='ORG = Ocean ridge granites'),
-            ]
-            ax.legend(handles=legend_elements, loc='lower right', fontsize=8, framealpha=0.9)
+            legend_text = "VAG = Volcanic arc granites\nsyn-COLG = Syn-collision granites\nWPG = Within-plate granites\nORG = Ocean ridge granites"
+            ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
+                   verticalalignment='bottom', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 
 # =============================================================================
@@ -591,34 +683,49 @@ class Pearce1984_YNbRb:
         ax.text(400, 20, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('Y + Nb (ppm)', fontsize=12)
         ax.set_ylabel('Rb (ppm)', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 10000)
         ax.set_ylim(1, 10000)
         
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+        
+        # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
-            legend_elements = [
-                Line2D([0], [0], color='w', marker='', label='VAG = Volcanic arc granites'),
-                Line2D([0], [0], color='w', marker='', label='Syn-COLG = Syn-collision granites'),
-                Line2D([0], [0], color='w', marker='', label='WPG = Within-plate granites'),
-                Line2D([0], [0], color='w', marker='', label='ORG = Ocean ridge granites'),
-            ]
-            ax.legend(handles=legend_elements, loc='lower right', fontsize=8, framealpha=0.9)
+            legend_text = "VAG = Volcanic arc granites\nSyn-COLG = Syn-collision granites\nWPG = Within-plate granites\nORG = Ocean ridge granites"
+            ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
+                   verticalalignment='bottom', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 
 # =============================================================================
@@ -668,31 +775,46 @@ class PearceCann1973_ZrTi:
         ax.text(93, 3500, 'CAB', fontsize=12, ha='center', va='center', fontweight='bold')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0, 110)
         ax.set_ylim(0, 9000)
         
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='lower right', fontsize=8, framealpha=0.9)
+        
+        # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
-            legend_elements = [
-                Line2D([0], [0], color='w', marker='', label='IAT = Island arc tholeiites'),
-                Line2D([0], [0], color='w', marker='', label='MORB = Mid-ocean ridge basalts'),
-                Line2D([0], [0], color='w', marker='', label='CAB = Calc-alkaline basalts'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)
+            legend_text = "IAT = Island arc tholeiites\nMORB = Mid-ocean ridge basalts\nCAB = Calc-alkaline basalts"
+            ax.text(0.02, 0.98, legend_text, transform=ax.transAxes, fontsize=8,
+                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 # =============================================================================
 # DISCRIMINATION DIAGRAM 6: Na2O + K2O vs SiO2 Cox et al. (1979) adapted by Wilson (1989) for plutonic rocks)
@@ -768,34 +890,43 @@ class Wilson1989_TAS:
         ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20,color='g')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('SiO2 (wt%)', fontsize=12)
         ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(30, 80)
         ax.set_ylim(0, 17)
         
-        """if show_legend:
-            legend_elements = [
-                Line2D([0], [0], color='w', marker='', label='IAT = Island arc tholeiites'),
-                Line2D([0], [0], color='w', marker='', label='MORB = Mid-ocean ridge basalts'),
-                Line2D([0], [0], color='w', marker='', label='CAB = Calc-alkaline basalts'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)"""
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
         
 # =============================================================================
-# DISCRIMINATION DIAGRAM 6: Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks)
+# DISCRIMINATION DIAGRAM 7: Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks)
 # =============================================================================
 
 class Cox1979_TAS:
@@ -852,31 +983,40 @@ class Cox1979_TAS:
         ax.text(58,13, 'Phonolite', fontsize=12, ha='center', va='center', fontweight='bold')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         cls.draw_fields(ax)
         
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        # Fallback markers if not provided
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Use provided colours or fall back to default
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
         
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
-                ax.scatter(x, y, marker=markers[i % len(markers)],
-                          s=80, c=[colors[i % 10]], edgecolors='black',
-                          linewidths=0.5, zorder=10)
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker,
+                          s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
         
         ax.set_xlabel('SiO2 (wt%)', fontsize=12)
         ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
-        ax.set_title(f'{cls.name}\n{cls.reference}', fontsize=11)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(40, 80)
         ax.set_ylim(0, 17)
         
-        """if show_legend:
-            legend_elements = [
-                Line2D([0], [0], color='w', marker='', label='IAT = Island arc tholeiites'),
-                Line2D([0], [0], color='w', marker='', label='MORB = Mid-ocean ridge basalts'),
-                Line2D([0], [0], color='w', marker='', label='CAB = Calc-alkaline basalts'),
-            ]
-            ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.9)"""
+        # Add category legend if enabled
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
 
 # Diagram registry
 DISCRIMINATION_DIAGRAMS = {
@@ -985,7 +1125,10 @@ class GeochemistryDialog(QDialog):
         discrim_opts = QHBoxLayout()
         self.discrim_legend = QCheckBox("Show Field Legend")
         self.discrim_legend.setChecked(True)
+        self.discrim_category_legend = QCheckBox("Show Category Legend")
+        self.discrim_category_legend.setChecked(True)
         discrim_opts.addWidget(self.discrim_legend)
+        discrim_opts.addWidget(self.discrim_category_legend)
         discrim_layout.addLayout(discrim_opts)
         discrim_layout.addStretch()
 
@@ -1099,16 +1242,28 @@ class GeochemistryDialog(QDialog):
             self.update_feature_list(layer)
 
     def update_feature_list(self, layer):
+        # Disable updates during population for much better performance
+        self.feature_list.setUpdatesEnabled(False)
         self.feature_list.clear()
         id_field = self.id_field_combo.currentText()
         
         # Get the currently selected feature IDs in QGIS
-        selected_ids = layer.selectedFeatureIds()
+        selected_ids = set(layer.selectedFeatureIds())  # Use set for O(1) lookup
+        
+        # Pre-check if id_field is valid
+        field_names = [f.name() for f in layer.fields()]
+        use_id_field = id_field and id_field in field_names
+        
+        # Collect all items first, then add in batch
+        items_to_add = []
+        items_to_select = []
         
         for feature in layer.getFeatures():
             label = None
+            fid = feature.id()
+            
             # Try to get label from id_field, but check for NULL/empty values
-            if id_field and id_field in [f.name() for f in layer.fields()]:
+            if use_id_field:
                 value = feature[id_field]
                 # Check if value is valid (not NULL, None, or empty string)
                 if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
@@ -1116,15 +1271,26 @@ class GeochemistryDialog(QDialog):
             
             # Fallback to feature ID if no valid label found
             if label is None:
-                label = f"Feature {feature.id()}"
+                label = f"Feature {fid}"
                 
             item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, feature.id())
-            self.feature_list.addItem(item)
+            item.setData(Qt.UserRole, fid)
+            items_to_add.append(item)
             
-            # Pre-select if this feature is selected in QGIS
-            if feature.id() in selected_ids:
-                item.setSelected(True)
+            # Track items to select
+            if fid in selected_ids:
+                items_to_select.append(item)
+        
+        # Add all items at once
+        for item in items_to_add:
+            self.feature_list.addItem(item)
+        
+        # Select items after adding (more efficient than during)
+        for item in items_to_select:
+            item.setSelected(True)
+        
+        # Re-enable updates and trigger a single repaint
+        self.feature_list.setUpdatesEnabled(True)
 
     def select_all_features(self):
         for i in range(self.feature_list.count()):
@@ -1205,24 +1371,39 @@ class GeochemistryDialog(QDialog):
                 field_name = find_element_field(layer, element)
                 if field_name:
                     try:
-                        raw_value = float(feature[field_name])
-                        if element in norm_values and norm_values[element] > 0:
-                            value = raw_value / norm_values[element]
+                        raw_value = feature[field_name]
+                        # Skip NULL, None, zero, and negative values
+                        if raw_value is None or raw_value == NULL:
+                            pass  # value stays np.nan
+                        else:
+                            raw_value = float(raw_value)
+                            # Only plot positive values (skip zero and negative)
+                            if raw_value > 0 and element in norm_values and norm_values[element] > 0:
+                                value = raw_value / norm_values[element]
                     except (ValueError, TypeError):
                         pass
                 normalized_values.append(value)
             plot_data.append(normalized_values)
 
         fig, ax = plt.subplots(figsize=(12, 8))
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(plot_data), 10)))
         x_positions = np.arange(len(element_order))
+        
+        # Create categorical colour and marker map based on sample names
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
 
+        # Track which categories have been plotted (for legend)
+        plotted_categories = set()
+        
         for i, (values, name) in enumerate(zip(plot_data, sample_names)):
-            marker = markers[i % len(markers)] if self.spider_markers.isChecked() else None
-            color = colors[i % 10]
+            marker = sample_markers[i] if self.spider_markers.isChecked() else None
+            color = sample_colors[i]
+            
+            # Only add label for first occurrence of each category (for clean legend)
+            label = name if name not in plotted_categories else None
+            plotted_categories.add(name)
+            
             ax.plot(x_positions, values, marker=marker, markersize=8, linewidth=1.5,
-                   label=name, color=color, markerfacecolor='white' if marker else None,
+                   label=label, color=color, markerfacecolor='white' if marker else None,
                    markeredgecolor=color, markeredgewidth=1.5)
 
         ax.set_yscale('log')
@@ -1241,7 +1422,8 @@ class GeochemistryDialog(QDialog):
         if self.spider_legend.isChecked():
             ax.legend(loc='best', fontsize=9)
 
-        ax.set_title(f'Multi-Element Spider Diagram\nNormalized to {norm_name}', fontsize=14)
+        n_samples = len(plot_data)
+        ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalized to {norm_name}', fontsize=14)
         plt.tight_layout()
         plt.show()
         self.current_fig = fig
@@ -1295,8 +1477,16 @@ class GeochemistryDialog(QDialog):
         print(f"\nValid samples: {valid_count}/{len(data)}")
         print("="*60 + "\n")
 
+        # Create categorical colour and marker map based on sample names
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
+
         fig, ax = plt.subplots(figsize=(10, 8))
-        diagram_class.plot(ax, data, sample_names, show_legend=self.discrim_legend.isChecked())
+        diagram_class.plot(ax, data, sample_names, 
+                          show_legend=self.discrim_legend.isChecked(),
+                          show_category_legend=self.discrim_category_legend.isChecked(),
+                          sample_colors=sample_colors, category_colors=category_colors,
+                          sample_markers=sample_markers, category_markers=category_markers,
+                          n_samples=valid_count)
         plt.tight_layout()
         plt.show()
         self.current_fig = fig
