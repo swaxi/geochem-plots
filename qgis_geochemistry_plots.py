@@ -1245,55 +1245,59 @@ class GeochemistryDialog(QDialog):
             self.update_feature_list(layer)
 
     def update_feature_list(self, layer):
-        # Disable updates during population for much better performance
-        self.feature_list.setUpdatesEnabled(False)
-        self.feature_list.clear()
-        id_field = self.id_field_combo.currentText()
-        
-        # Get the currently selected feature IDs in QGIS
-        selected_ids = set(layer.selectedFeatureIds())  # Use set for O(1) lookup
-        
-        # Pre-check if id_field is valid
-        field_names = [f.name() for f in layer.fields()]
-        use_id_field = id_field and id_field in field_names
-        
-        # Collect all items first, then add in batch
-        items_to_add = []
-        items_to_select = []
-        
-        for feature in layer.getFeatures():
-            label = None
-            fid = feature.id()
+            # Disable updates during population for much better performance
+            self.feature_list.setUpdatesEnabled(False)
+            self.feature_list.clear()
+            id_field = self.id_field_combo.currentText()
             
-            # Try to get label from id_field, but check for NULL/empty values
-            if use_id_field:
-                value = feature[id_field]
-                # Check if value is valid (not NULL, None, or empty string)
-                if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
-                    label = str(value)
+            # Get the currently selected feature IDs in QGIS
+            selected_ids = set(layer.selectedFeatureIds())  # Use set for O(1) lookup
             
-            # Fallback to feature ID if no valid label found
-            if label is None:
-                label = f"Feature {fid}"
+            # Pre-check if id_field is valid
+            field_names = [f.name() for f in layer.fields()]
+            use_id_field = id_field and id_field in field_names
+            
+            # Collect all items first, then add in batch
+            items_to_add = []
+            
+            for feature in layer.getFeatures():
+                label = None
+                fid = feature.id()
                 
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, fid)
-            items_to_add.append(item)
+                # Try to get label from id_field, but check for NULL/empty values
+                if use_id_field:
+                    value = feature[id_field]
+                    # Check if value is valid (not NULL, None, or empty string)
+                    if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
+                        label = str(value)
+                
+                # Fallback to feature ID if no valid label found
+                if label is None:
+                    label = f"Feature {fid}"
+                
+                items_to_add.append((label, fid))
             
-            # Track items to select
-            if fid in selected_ids:
-                items_to_select.append(item)
-        
-        # Add all items at once
-        for item in items_to_add:
-            self.feature_list.addItem(item)
-        
-        # Select items after adding (more efficient than during)
-        for item in items_to_select:
-            item.setSelected(True)
-        
-        # Re-enable updates and trigger a single repaint
-        self.feature_list.setUpdatesEnabled(True)
+            # Sort items alphabetically by label (case-insensitive)
+            items_to_add.sort(key=lambda x: x[0].lower())
+            
+            # Add all items and track which to select
+            items_to_select = []
+            for label, fid in items_to_add:
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, fid)
+                self.feature_list.addItem(item)
+                
+                # Track items to select based on QGIS selection
+                if fid in selected_ids:
+                    items_to_select.append(item)
+            
+            # Select items after adding (more efficient than during)
+            for item in items_to_select:
+                item.setSelected(True)
+            
+            # Re-enable updates and trigger a single repaint
+            self.feature_list.setUpdatesEnabled(True)
+            
 
     def select_all_features(self):
         for i in range(self.feature_list.count()):
