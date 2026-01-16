@@ -17,6 +17,9 @@ Usage:
     3. Open the Python Console (Plugins > Python Console)
     4. Load this script and run it
     5. A dialog will appear to select your layer and configure plots
+
+    Developer: Mark Jessell for UWA EART3343 Lab exercises
+    Date: Jan 2026
 """
 
 import os

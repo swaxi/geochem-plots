@@ -23,3 +23,7 @@ This script creates:
     5. A dialog will appear to select your layer and configure plots
 
 ![pics](Montage.png)  
+
+## Developer: 
+Mark Jessell for UWA EART3343 Lab exercises
+Date: Jan 2026
