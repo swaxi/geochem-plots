@@ -12,6 +12,7 @@ This script creates:
    - Rb vs (Y+Nb) (Pearce et al. 1984)
    - Ti vs Zr (Pearce & Cann 1973)
 
+![dialog](dialog.png)  
 
 ## Usage:
     1. Open QGIS and load your vector point layer with geochemical data
