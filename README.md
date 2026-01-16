@@ -16,6 +16,7 @@ This script creates:
 ## Usage:
     1. Open QGIS and load your vector point layer with geochemical data
     2. Select some or all of the points (can be updated in dialog)
+       If you select different points in the QGIS layer, you will need to click on the refresh Refresh from QGIS button.
     3. Open the Python Console (Plugins > Python Console)
     4. Load this script and run it
     5. A dialog will appear to select your layer and configure plots

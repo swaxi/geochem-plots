@@ -1147,8 +1147,11 @@ class GeochemistryDialog(QDialog):
         select_all_btn.clicked.connect(self.select_all_features)
         deselect_all_btn = QPushButton("Deselect All")
         deselect_all_btn.clicked.connect(self.deselect_all_features)
+        refresh_btn = QPushButton("Refresh from QGIS")
+        refresh_btn.clicked.connect(self.refresh_selection)
         btn_row.addWidget(select_all_btn)
         btn_row.addWidget(deselect_all_btn)
+        btn_row.addWidget(refresh_btn)
         sample_layout.addLayout(btn_row)
         layout.addWidget(sample_group)
 
@@ -1299,6 +1302,16 @@ class GeochemistryDialog(QDialog):
     def deselect_all_features(self):
         for i in range(self.feature_list.count()):
             self.feature_list.item(i).setSelected(False)
+
+    def refresh_selection(self):
+        """Refresh the feature list to reflect current QGIS layer selection."""
+        layer_id = self.layer_combo.currentData()
+        if layer_id is None:
+            return
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            return
+        self.update_feature_list(layer)
 
     def get_element_order(self):
         index = self.order_combo.currentIndex()
