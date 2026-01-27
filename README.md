@@ -61,7 +61,7 @@ Spider diagrams use Sun & McDonough (1989) normalization values:
 
 ## Tips
 
-- Select specific features before running to plot only those points, and if update your selection in the map, select the "Refresh from QGIS" button
+- Select specific features in GIS layer before running script to plot only those points, and if update your selection in the map, select the "Refresh from QGIS" button first
 - Use the "Plotting Category" field to group samples by rock type, location, etc.
 - Category legends appear below plots
 - Save plots as PNG, PDF, or SVG using the Save button
