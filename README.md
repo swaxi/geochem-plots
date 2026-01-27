@@ -21,7 +21,7 @@ A Python script for creating geochemical plots directly within QGIS, designed fo
 
 ## Installation
 
-1. Save `qgis_geochemistry_plots.py` to a convenient location
+1. Save <a href="https://github.com/swaxi/geochem-plots/blob/main/qgis_geochemistry_plots.py">qgis_geochemistry_plots.py</a> to a convenient location
 2. Open QGIS and load your vector point layer containing geochemical data
 
 ## Usage
