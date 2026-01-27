@@ -25,7 +25,9 @@ A Python script for creating geochemical plots directly within QGIS, designed fo
 2. Open QGIS and load your vector point layer containing geochemical data
 
 ## Usage
-
+   
+<a href="GEOCHEM_PLOTS.gif">Video of Example Usage</a>
+   
 1. Open the QGIS Python Console: **Plugins → Python Console**
 2. Click the **Show Editor** button (script icon)
 3. Open the script file or paste the code
@@ -61,10 +63,11 @@ Spider diagrams use Sun & McDonough (1989) normalization values:
 
 ## Tips
 
-- Select specific features in GIS layer before running script to plot only those points, and if update your selection in the map, select the "Refresh from QGIS" button first
+- Select specific features in chosen GIS vector layer before running script to plot only those points, and if update your selection in the map, select the "Refresh from QGIS" button first
 - Use the "Plotting Category" field to group samples by rock type, location, etc.
 - Category legends appear below plots
 - Save plots as PNG, PDF, or SVG using the Save button
+
 
 ## Authors
 
