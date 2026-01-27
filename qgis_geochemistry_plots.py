@@ -1418,9 +1418,7 @@ class GeochemistryDialog(QDialog):
                             # Convert oxide wt% to element ppm if needed
                             field_upper = field_name.upper()
                             if element == 'K' and 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'K2O'):
-                                print ("raw value before",raw_value)
                                 raw_value = raw_value * 8301  # K2O wt% to K ppm
-                                print ("raw value after",raw_value)
                             elif element == 'P' and 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'P2O5'):
                                 raw_value = raw_value * 4364  # P2O5 wt% to P ppm
                             elif element == 'Ti' and 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'TIO2'):
