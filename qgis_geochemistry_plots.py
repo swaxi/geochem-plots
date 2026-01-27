@@ -93,19 +93,19 @@ def create_categorical_color_map(sample_names):
 CHONDRITE_VALUES = {
     'Ba': 2.41, 'Rb': 2.32, 'Cs': 0.188, 'Sr': 7.26, 'K': 545, 'K2O': 0.0545,
     'Th': 0.029, 'U': 0.0074, 'Nb': 0.246, 'Ta': 0.014, 'Zr': 3.87, 'Hf': 0.1066,
-    'Ti': 436, 'TiO2': 0.0728, 'P': 1220, 'P2O5': 0.28,
+    'Ti': 445, 'TiO2': 0.0728, 'P': 1220, 'P2O5': 0.28,
     'La': 0.237, 'Ce': 0.612, 'Pr': 0.095, 'Nd': 0.467, 'Sm': 0.153, 'Eu': 0.058,
     'Gd': 0.2055, 'Tb': 0.0374, 'Dy': 0.254, 'Ho': 0.0566, 'Er': 0.1655,
     'Tm': 0.0255, 'Yb': 0.170, 'Lu': 0.0254, 'Y': 1.57, 'Sc': 5.92, 'Pb': 2.47,
 }
 
 PRIMITIVE_MANTLE_VALUES = {
-    'Ba': 6.6, 'Rb': 0.6, 'Cs': 0.021, 'Sr': 19.9, 'K': 240,
+    'Ba': 6.6, 'Rb': 0.6, 'Cs': 0.021, 'Sr': 19.9, 'K': 250,
     'Th': 0.0795, 'U': 0.0203, 'Nb': 0.658, 'Ta': 0.037,
     'La': 0.648, 'Ce': 1.675, 'Pr': 0.254, 'Nd': 1.25, 'Sm': 0.406,
     'Eu': 0.154, 'Gd': 0.544, 'Tb': 0.099, 'Dy': 0.674, 'Ho': 0.149,
     'Er': 0.438, 'Tm': 0.068, 'Yb': 0.441, 'Lu': 0.0675, 'Y': 4.3,
-    'Zr': 10.5, 'Hf': 0.283, 'Ti': 1205, 'P': 90, 'Pb': 0.15, 'Sc': 16.2,
+    'Zr': 10.5, 'Hf': 0.283, 'Ti': 1300, 'P': 95, 'Pb': 0.15, 'Sc': 16.2,
 }
 
 EXTENDED_SPIDER_ORDER = [
@@ -219,13 +219,9 @@ def get_element_value(feature, layer, element, convert_to_ppm=True):
                 # P2O5 -> P
                 elif 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
                     value = value * 4364
-                """# K2O -> K  
-                elif 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
-                    value = value * 8301
-                elif 'NA2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
-                    value = value * 7419                    
-                elif 'SI2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
-                    value = value * 4674"""                 
+                # Note: K2O and Na2O conversions intentionally NOT included here
+                # as discrimination diagrams (TAS plots) need oxide wt% values directly.
+                # Spider diagrams handle their own conversions separately.                 
             return value
         except (ValueError, TypeError):
             return None
@@ -409,7 +405,10 @@ class Pearce1996_NbY_ZrTi:
         
         # Add legend for categories if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='best', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
 
 # =============================================================================
@@ -518,7 +517,10 @@ class Meschede1986_Ternary:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
         if show_legend:
             legend_text = "AI, AII = WP alkali basalts\nB = P-type MORB\nC = VAB\nD = N-type MORB"
@@ -620,7 +622,10 @@ class Pearce1984_YNb:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
         # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
@@ -721,7 +726,10 @@ class Pearce1984_YNbRb:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
         # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
@@ -811,7 +819,10 @@ class PearceCann1973_ZrTi:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='lower right', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
         # Add field legend as text box (so it doesn't conflict with category legend)
         if show_legend:
@@ -926,7 +937,10 @@ class Wilson1989_TAS:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
 # =============================================================================
 # DISCRIMINATION DIAGRAM 7: Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks)
@@ -1019,7 +1033,10 @@ class Cox1979_TAS:
         
         # Add category legend if enabled
         if show_category_legend and category_colors and len(category_colors) > 0:
-            ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
 # Diagram registry
 DISCRIMINATION_DIAGRAMS = {
@@ -1067,7 +1084,7 @@ class GeochemistryDialog(QDialog):
         layer_layout.addLayout(layer_row)
 
         id_row = QHBoxLayout()
-        id_row.addWidget(QLabel("Sample ID Field:"))
+        id_row.addWidget(QLabel("Plotting Category:"))
         self.id_field_combo = QComboBox()
         self.id_field_combo.currentIndexChanged.connect(self.on_id_field_changed)
         id_row.addWidget(self.id_field_combo)
@@ -1152,9 +1169,9 @@ class GeochemistryDialog(QDialog):
         deselect_all_btn.clicked.connect(self.deselect_all_features)
         refresh_btn = QPushButton("Refresh from QGIS")
         refresh_btn.clicked.connect(self.refresh_selection)
+        btn_row.addWidget(refresh_btn)
         btn_row.addWidget(select_all_btn)
         btn_row.addWidget(deselect_all_btn)
-        btn_row.addWidget(refresh_btn)
         sample_layout.addLayout(btn_row)
         layout.addWidget(sample_group)
 
@@ -1397,6 +1414,18 @@ class GeochemistryDialog(QDialog):
                             pass  # value stays np.nan
                         else:
                             raw_value = float(raw_value)
+                            
+                            # Convert oxide wt% to element ppm if needed
+                            field_upper = field_name.upper()
+                            if element == 'K' and 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'K2O'):
+                                print ("raw value before",raw_value)
+                                raw_value = raw_value * 8301  # K2O wt% to K ppm
+                                print ("raw value after",raw_value)
+                            elif element == 'P' and 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'P2O5'):
+                                raw_value = raw_value * 4364  # P2O5 wt% to P ppm
+                            elif element == 'Ti' and 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'TIO2'):
+                                raw_value = raw_value * 5995  # TiO2 wt% to Ti ppm
+                            
                             # Only plot positive values (skip zero and negative)
                             if raw_value > 0 and element in norm_values and norm_values[element] > 0:
                                 value = raw_value / norm_values[element]
@@ -1439,12 +1468,18 @@ class GeochemistryDialog(QDialog):
         ax.grid(True, which='major', axis='y', linestyle='-', alpha=0.3)
         ax.grid(True, which='minor', axis='y', linestyle=':', alpha=0.2)
 
-        if self.spider_legend.isChecked():
-            ax.legend(loc='best', fontsize=9)
-
         n_samples = len(plot_data)
         ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalized to {norm_name}', fontsize=14)
+
+        if self.spider_legend.isChecked():
+            # Calculate number of columns based on number of categories (aim for ~4-6 items per column)
+            n_categories = len(unique_categories)
+            ncol = max(1, min(6, (n_categories + 3) // 4))  # 4 items per column, max 6 columns
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=9,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        
         plt.tight_layout()
+        fig.subplots_adjust(bottom=0.25)  # Make room for legend below
         plt.show()
         self.current_fig = fig
 
@@ -1508,6 +1543,7 @@ class GeochemistryDialog(QDialog):
                           sample_markers=sample_markers, category_markers=category_markers,
                           n_samples=valid_count)
         plt.tight_layout()
+        fig.subplots_adjust(bottom=0.2)  # Make room for legend below
         plt.show()
         self.current_fig = fig
 
