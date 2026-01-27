@@ -1115,7 +1115,7 @@ class GeochemistryDialog(QDialog):
         order_row = QHBoxLayout()
         order_row.addWidget(QLabel("Preset:"))
         self.order_combo = QComboBox()
-        self.order_combo.addItems([ "REE Only (La-Lu)", "Extended Spider (Ba-Yb)", "Extended Alternative"])
+        self.order_combo.addItems([ "REE Only (La-Lu)", "Extended Spider (Ba-Yb)", "Extended Alternative (Cs-Lu)"])
         order_row.addWidget(self.order_combo)
         order_layout.addLayout(order_row)
         spider_layout.addWidget(order_group)
