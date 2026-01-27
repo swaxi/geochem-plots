@@ -46,8 +46,7 @@ Your vector layer should contain attribute fields for geochemical elements. The 
 | Element | Recognized Field Names |
 |---------|----------------------|
 | Trace elements | `Nb`, `Nb_ppm`, `NB_PPM`, etc. |
-| Major oxides | `TiO2_pct`, `K2O_pct`, `SiO2_pct`, etc. |
-| REE | `La`, `Ce`, `Nd`, `Sm`, `Eu`, etc. |
+| Major oxides | `TiO2_pct`, `K2O_pct`, `SiO2_pct`, `SiO2_wt`, `SiO2_wt_pct` etc. |
 
 **Note**: For spider diagrams, oxide values (K2O, P2O5, TiO2) are automatically converted to element ppm.
 
