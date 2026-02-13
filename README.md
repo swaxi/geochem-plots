@@ -1,6 +1,7 @@
 # Geochemistry Plotting Tools - QGIS Plugin
 
-A comprehensive geochemistry plotting tool for QGIS that creates spider diagrams, discrimination diagrams, and custom XY plots for geochemical data.
+A comprehensive geochemistry plotting tool for QGIS that creates spider diagrams, discrimination diagrams, and custom XY plots for geochemical data. Developed for UWA EART3343 Lab exercises
+
 
 ## Features
 
@@ -49,9 +50,8 @@ Your layer should have fields containing geochemical data. The plugin will autom
 
 ## Author
 
-Mark Jessell - University of Western Australia 
-Claude AI 
-Developed for UWA EART3343 Lab exercises
+Mark Jessell - University of Western Australia    
+Claude AI    
 
 ## License
 
