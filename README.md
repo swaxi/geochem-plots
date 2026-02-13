@@ -39,7 +39,7 @@ A simple geochemistry plotting tool for QGIS that creates spider diagrams, discr
 3. A dockable panel will appear on the right side
 4. Select your layer and the field to use for sample categories
 5. Choose the plot type (Spider, Discrimination, or Custom XY)
-6. Select samples to be plotted:
+6. Select samples to be plotted using one of these methods:
 - From the **Samples** list OR 
 - From the GIS layer using the **Select Features** tool (click on **Refresh** button if you change layer selections) OR
 - Click on the **All** button to select all features in a layer (you can use layer filters to narrow what will be plotted)
