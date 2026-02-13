@@ -36,7 +36,8 @@ A Python script for creating geochemical plots directly within QGIS, designed fo
    - Select your data layer
    - Choose a plotting category field (for legend grouping)
    - Configure spider diagram options (normalization, element order, markers)
-   - Select discrimination diagram type
+   - OR Select discrimination diagram type
+   - OR Select user-defined XY plot (with optional ratios, normalisation and log scales)
    - Generate and save plots
 
 ![dialog](dialog.png)  
