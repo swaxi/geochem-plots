@@ -22,7 +22,6 @@ A comprehensive geochemistry plotting tool for QGIS that creates spider diagrams
 - Mg# calculation (100×Mg/(Mg+Fe) using molar values)
 - REE normalization options (Chondrite or Primitive Mantle)
 - Linear or logarithmic axis scales
-- 4:3 aspect ratio plots
 
 ## Installation
 
@@ -50,9 +49,13 @@ Your layer should have fields containing geochemical data. The plugin will autom
 
 ## Author
 
-Mark Jessell - University of Western Australia  
+Mark Jessell - University of Western Australia 
+Claude AI 
 Developed for UWA EART3343 Lab exercises
 
 ## License
 
 This plugin is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+
+![Example Plots](Montage.png) 
