@@ -1,77 +1,58 @@
-# QGIS Geochemistry Plotting Tools
+# Geochemistry Plotting Tools - QGIS Plugin
 
-A Python script for creating geochemical plots directly within QGIS, designed for UWA EART3343 Lab exercises.
+A comprehensive geochemistry plotting tool for QGIS that creates spider diagrams, discrimination diagrams, and custom XY plots for geochemical data.
 
 ## Features
 
-- **Spider Diagrams**: Chondrite or Primitive Mantle normalized multi-element plots (REE + trace elements)
-- **Discrimination Diagrams**:
-  - Nb/Y vs Zr/Ti (Winchester & Floyd 1977; Pearce 1996)
-  - Zr/4-Nb×2-Y ternary (Meschede 1986)
-  - Nb vs Y (Pearce et al. 1984)
-  - Rb vs (Y+Nb) (Pearce et al. 1984)
-  - Ti vs Zr (Pearce & Cann 1973)
-  - TAS plots for plutonic (Wilson 1989) and volcanic (Cox et al. 1979) rocks
-- **User-defined XY or XY ratio plots**
+### Spider Diagrams
+- REE only (La-Lu) or extended trace element patterns
+- Normalization to CI Chondrite or Primitive Mantle (Sun & McDonough 1989)
+- Automatic oxide to element conversion (e.g., TiO2 → Ti)
 
-## Requirements
+### Discrimination Diagrams
+- Zr/Ti vs Nb/Y (Winchester & Floyd 1977; Pearce 1996)
+- Zr/4-Nb×2-Y Ternary (Meschede 1986)
+- Nb vs Y (Pearce et al. 1984)
+- Rb vs (Y+Nb) (Pearce et al. 1984)
+- Ti vs Zr (Pearce & Cann 1973)
+- TAS diagrams for plutonic (Wilson 1989) and volcanic (Cox et al. 1979) rocks
 
-- QGIS 3.x with Python console
-- matplotlib (if it complains you dont have this type into the python colnsole in qgis: `!pip install matplotlib`)
-- numpy (if it complains you dont have this type into the python colnsole in qgis: `!pip install numpy`)
+### Custom XY Plots
+- User-defined element/oxide ratios on both axes
+- Mg# calculation (100×Mg/(Mg+Fe) using molar values)
+- REE normalization options (Chondrite or Primitive Mantle)
+- Linear or logarithmic axis scales
+- 4:3 aspect ratio plots
 
 ## Installation
 
-1. Save <a href="https://github.com/swaxi/geochem-plots/blob/main/qgis_geochemistry_plots.py">qgis_geochemistry_plots.py</a> to a convenient location (follow link and select Download Raw File button)
-2. Open QGIS and load your vector point layer containing geochemical data
+### Method 1: Install from ZIP
+1. Download `geochem_plotting_plugin.zip`
+2. In QGIS, go to **Plugins → Manage and Install Plugins → Install from ZIP**
+3. Select the downloaded ZIP file and click **Install Plugin**
 
 ## Usage
-   
-<a href="GEOCHEM_PLOTS.gif">Video of Example Usage</a>
-   
-1. Open the QGIS Python Console: **Plugins → Python Console**
-2. Click the **Show Editor** button (script icon)
-3. Open the script file or paste the code
-4. Click **Run Script**
-5. A dialog will appear allowing you to:
-   - Select your data layer
-   - Choose a plotting category field (for legend grouping)
-   - Configure spider diagram options (normalization, element order, markers)
-   - OR Select discrimination diagram type
-   - OR Select user-defined XY plot (with optional ratios, normalisation and log scales)
-   - Generate and save plots
 
-![dialog](dialog.png)  
+1. Load a vector point layer with geochemical data
+2. Click the **Geochemistry Plotting Tools** button in the toolbar (or menu)
+3. A dockable panel will appear on the right side
+4. Select your layer and the field to use for sample categories
+5. Choose the plot type (Spider, Discrimination, or Custom XY)
+6. Select samples from the list
+7. Click **Generate Plot**
 
 ## Data Requirements
 
-Your vector layer should contain attribute fields for geochemical elements. The script automatically matches common field naming conventions:
+Your layer should have fields containing geochemical data. The plugin will automatically find fields matching common naming conventions:
+- Element names: `La`, `Ce`, `Nb`, `Zr`, etc.
+- With suffixes: `La_ppm`, `Zr_PPM`, `Nb (ppm)`, etc.
+- Oxides: `SiO2_pct`, `TiO2_wt`, `K2O`, etc.
 
-| Element | Recognized Field Names |
-|---------|----------------------|
-| Trace elements | `Nb`, `Nb_ppm`, `NB_PPM`, etc. |
-| Major oxides | `TiO2_pct`, `K2O_pct`, `SiO2_pct`, `SiO2_wt`, `SiO2_wt_pct` etc. |
+## Author
 
-**Note**: For spider diagrams, oxide values (K2O, P2O5, TiO2) are automatically converted to element ppm.
+Mark Jessell - University of Western Australia  
+Developed for UWA EART3343 Lab exercises
 
-## Normalization Values
+## License
 
-Spider diagrams use Sun & McDonough (1989) normalization values:
-- CI Chondrite
-- Primitive Mantle
-
-
-![pics](Montage.png)  
-
-## Tips
-
-- Select specific features in chosen GIS vector layer before running script to plot only those points, and if update your selection in the map, select the "Refresh from QGIS" button first
-- Use the "Plotting Category" field to group samples by rock type, location, etc.
-- Category legends appear below plots
-- Save plots as PNG, PDF, or SVG using the Save button
-
-
-## Authors
-
-- Mark Jessell, UWA – January 2026
-- Claude AI – January 2026
+This plugin is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.

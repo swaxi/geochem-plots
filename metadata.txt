@@ -1,0 +1,30 @@
+[general]
+name=Geochemistry Plotting Tools
+qgisMinimumVersion=3.0
+description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
+version=1.0.0
+author=Mark Jessell (UWA EART3343)
+email=mark.jessell@uwa.edu.au
+
+about=A comprehensive geochemistry plotting tool for QGIS that creates:
+    - Chondrite or Primitive Mantle normalized spider diagrams (REE + trace elements)
+    - Tectonic discrimination diagrams (Pearce, Meschede, Wilson, Cox et al.)
+    - Custom XY plots with user-defined element/oxide ratios
+    
+    Developed for UWA EART3343 Lab exercises.
+
+tracker=https://github.com/Loop3D/geochem_plotting_plugin/issues
+repository=https://github.com/Loop3D/geochem_plotting_plugin
+
+changelog=1.0.0 - Initial release
+    - Spider diagrams with multiple normalization options
+    - 7 discrimination diagrams
+    - Custom XY plotting with REE normalization
+
+tags=geochemistry,plotting,spider diagram,REE,discrimination,petrology,geology
+
+homepage=https://github.com/Loop3D/geochem_plotting_plugin
+category=Analysis
+icon=icon.svg
+experimental=False
+deprecated=False
