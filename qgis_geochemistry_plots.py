@@ -10,6 +10,7 @@ This script creates:
    - Rb vs (Y+Nb) (Pearce et al. 1984)
    - Ti vs Zr (Pearce & Cann 1973)
    - TAS plots
+3. Custom XY plots with user-defined element/oxide ratios
 
 Usage:
     1. Open QGIS and load your vector point layer with geochemical data
@@ -28,7 +29,8 @@ from qgis.core import QgsProject, QgsVectorLayer, NULL
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
-    QFileDialog, QMessageBox, QGroupBox, QTabWidget, QWidget
+    QFileDialog, QMessageBox, QGroupBox, QTabWidget, QWidget,
+    QGridLayout, QRadioButton, QButtonGroup, QFrame
 )
 from qgis.PyQt.QtCore import Qt
 
@@ -122,6 +124,24 @@ EXTENDED_ORDER_ALT = [
     'Pr', 'Sr', 'Nd', 'Sm', 'Zr', 'Hf', 'Eu', 'Ti', 'Gd', 'Tb',
     'Dy', 'Y', 'Ho', 'Er', 'Tm', 'Yb', 'Lu'
 ]
+
+# =============================================================================
+# CUSTOM XY PLOT ELEMENT/OXIDE DEFINITIONS
+# =============================================================================
+
+# Elements that can be normalized to chondrite/primitive mantle (REE)
+REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu']
+
+# Available elements/oxides for custom XY plots (including special calculated values)
+CUSTOM_XY_ELEMENTS = [
+    '1 (none)',  # For simple element plots without ratio
+    'Co', 'Cr', 'Gd', 'K2O', 'La', 'Lu', 'Mg#', 'MgO', 'Na2O', 'Nb',
+    'SiO2', 'Sm', 'Sr', 'Th', 'Ti', 'TiO2', 'V', 'Y', 'Yb', 'Zr'
+]
+
+# Molecular weights for Mg# calculation
+MW_MGO = 40.304  # MgO molecular weight
+MW_FEO = 71.844  # FeO molecular weight
 
 
 # =============================================================================
@@ -239,6 +259,90 @@ def get_available_elements(layer, element_list):
         else:
             not_found.append(element)
     return found, not_found
+
+
+def get_custom_element_value(feature, layer, element_name, normalize=False, norm_values=None):
+    """Get element/oxide value for custom XY plots.
+    
+    Handles special cases like Mg# calculation and REE normalization.
+    Returns the raw value (no ppm conversion for oxides - keeps wt%).
+    """
+    if element_name == '1 (none)':
+        return 1.0
+    
+    # Special case: Mg# = 100 * Mg / (Mg + Fe) where Mg and Fe are molar
+    if element_name == 'Mg#':
+        mgo_field = find_element_field(layer, 'MgO')
+        feo_field = find_element_field(layer, 'FeO')
+        
+        # Also try FeOT or Fe2O3T for total iron as FeO
+        if feo_field is None:
+            feo_field = find_element_field(layer, 'FeOT')
+        if feo_field is None:
+            # Try Fe2O3 and convert to FeO equivalent
+            fe2o3_field = find_element_field(layer, 'Fe2O3')
+            if fe2o3_field:
+                try:
+                    fe2o3_val = float(feature[fe2o3_field])
+                    if fe2o3_val is None or fe2o3_val == NULL:
+                        return None
+                    # Convert Fe2O3 to FeO: FeO = Fe2O3 * 0.8998
+                    feo_val = fe2o3_val * 0.8998
+                except (ValueError, TypeError):
+                    return None
+            else:
+                return None
+        else:
+            try:
+                feo_val = float(feature[feo_field])
+                if feo_val is None or feo_val == NULL:
+                    return None
+            except (ValueError, TypeError):
+                return None
+        
+        if mgo_field is None:
+            return None
+            
+        try:
+            mgo_val = float(feature[mgo_field])
+            if mgo_val is None or mgo_val == NULL:
+                return None
+            
+            # Calculate molar Mg and Fe
+            # Mg (molar) = MgO (wt%) / MW_MgO
+            # Fe (molar) = 0.9 * FeO (wt%) / MW_FeO
+            mg_molar = mgo_val / MW_MGO
+            fe_molar = 0.9 * feo_val / MW_FEO
+            
+            if (mg_molar + fe_molar) <= 0:
+                return None
+            
+            mg_number = 100 * mg_molar / (mg_molar + fe_molar)
+            return mg_number
+        except (ValueError, TypeError, ZeroDivisionError):
+            return None
+    
+    # For oxides (end with O, O2, 2O, 2O3, 2O5), get value directly without conversion
+    is_oxide = any(element_name.endswith(suffix) for suffix in ['O', 'O2', '2O', '2O3', '2O5'])
+    
+    field_name = find_element_field(layer, element_name)
+    if field_name is None:
+        return None
+    
+    try:
+        value = float(feature[field_name])
+        if value is None or value == NULL:
+            return None
+        
+        # Apply normalization for REE if requested
+        if normalize and norm_values and element_name in norm_values:
+            norm_val = norm_values.get(element_name)
+            if norm_val and norm_val > 0:
+                value = value / norm_val
+        
+        return value
+    except (ValueError, TypeError):
+        return None
 
 
 # =============================================================================
@@ -1061,8 +1165,8 @@ class GeochemistryDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Geochemistry Plotting Tools")
-        self.setMinimumWidth(650)
-        self.setMinimumHeight(600)
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(700)
         self.current_fig = None
         self.setup_ui()
         self.load_layers()
@@ -1153,6 +1257,93 @@ class GeochemistryDialog(QDialog):
         discrim_layout.addStretch()
 
         self.tab_widget.addTab(discrim_tab, "Discrimination Diagrams")
+        
+        # Tab 3: Custom XY Plot
+        custom_xy_tab = QWidget()
+        custom_xy_layout = QVBoxLayout(custom_xy_tab)
+
+        # Y-axis configuration
+        y_group = QGroupBox("Y-Axis: Numerator / Denominator")
+        y_grid = QGridLayout(y_group)
+        
+        y_grid.addWidget(QLabel("Numerator:"), 0, 0)
+        self.y_num_combo = QComboBox()
+        self.y_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])  # Exclude "1 (none)" for numerator
+        y_grid.addWidget(self.y_num_combo, 0, 1)
+        
+        y_grid.addWidget(QLabel("Denominator:"), 0, 2)
+        self.y_denom_combo = QComboBox()
+        self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)  # Include "1 (none)" for simple plot
+        y_grid.addWidget(self.y_denom_combo, 0, 3)
+        
+        custom_xy_layout.addWidget(y_group)
+                
+        # X-axis configuration
+        x_group = QGroupBox("X-Axis: Numerator / Denominator")
+        x_grid = QGridLayout(x_group)
+        
+        x_grid.addWidget(QLabel("Numerator:"), 0, 0)
+        self.x_num_combo = QComboBox()
+        self.x_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])  # Exclude "1 (none)" for numerator
+        x_grid.addWidget(self.x_num_combo, 0, 1)
+        
+        x_grid.addWidget(QLabel("Denominator:"), 0, 2)
+        self.x_denom_combo = QComboBox()
+        self.x_denom_combo.addItems(CUSTOM_XY_ELEMENTS)  # Include "1 (none)" for simple plot
+        x_grid.addWidget(self.x_denom_combo, 0, 3)
+        
+        custom_xy_layout.addWidget(x_group)
+        
+        # REE Normalization options
+        ree_norm_group = QGroupBox("REE Normalization (for La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Ho, Er, Tm, Yb, Lu)")
+        ree_norm_layout = QVBoxLayout(ree_norm_group)
+        
+        self.ree_norm_group = QButtonGroup(self)
+        self.ree_norm_none = QRadioButton("No normalization (raw ppm values)")
+        self.ree_norm_none.setChecked(True)
+        self.ree_norm_chondrite = QRadioButton("CI Chondrite normalized (Sun & McDonough 1989)")
+        self.ree_norm_pm = QRadioButton("Primitive Mantle normalized (Sun & McDonough 1989)")
+        
+        self.ree_norm_group.addButton(self.ree_norm_none, 0)
+        self.ree_norm_group.addButton(self.ree_norm_chondrite, 1)
+        self.ree_norm_group.addButton(self.ree_norm_pm, 2)
+        
+        ree_norm_layout.addWidget(self.ree_norm_none)
+        ree_norm_layout.addWidget(self.ree_norm_chondrite)
+        ree_norm_layout.addWidget(self.ree_norm_pm)
+        
+        custom_xy_layout.addWidget(ree_norm_group)
+        
+        # Axis scale options
+        scale_group = QGroupBox("Axis Scales")
+        scale_layout = QHBoxLayout(scale_group)
+        
+        scale_layout.addWidget(QLabel("X-axis:"))
+        self.x_scale_combo = QComboBox()
+        self.x_scale_combo.addItems(["Linear", "Logarithmic"])
+        scale_layout.addWidget(self.x_scale_combo)
+        
+        scale_layout.addWidget(QLabel("Y-axis:"))
+        self.y_scale_combo = QComboBox()
+        self.y_scale_combo.addItems(["Linear", "Logarithmic"])
+        scale_layout.addWidget(self.y_scale_combo)
+        
+        custom_xy_layout.addWidget(scale_group)
+        
+        # Plot options
+        custom_opts = QHBoxLayout()
+        self.custom_legend = QCheckBox("Show Category Legend")
+        self.custom_legend.setChecked(True)
+        self.custom_markers = QCheckBox("Show Markers")
+        self.custom_markers.setChecked(True)
+        custom_opts.addWidget(self.custom_legend)
+        custom_opts.addWidget(self.custom_markers)
+        custom_xy_layout.addLayout(custom_opts)
+        
+        custom_xy_layout.addStretch()
+        
+        self.tab_widget.addTab(custom_xy_tab, "Custom XY Plot")
+        
         layout.addWidget(self.tab_widget)
 
         # Sample selection
@@ -1380,8 +1571,10 @@ class GeochemistryDialog(QDialog):
 
         if self.tab_widget.currentIndex() == 0:
             self.generate_spider_diagram(layer, features, sample_names)
-        else:
+        elif self.tab_widget.currentIndex() == 1:
             self.generate_discrimination_diagram(layer, features, sample_names)
+        elif self.tab_widget.currentIndex() == 2:
+            self.generate_custom_xy_plot(layer, features, sample_names)
 
     def generate_spider_diagram(self, layer, features, sample_names):
         element_order = self.get_element_order()
@@ -1533,7 +1726,7 @@ class GeochemistryDialog(QDialog):
         # Create categorical colour and marker map based on sample names
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
 
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(9, 12))
         diagram_class.plot(ax, data, sample_names, 
                           show_legend=self.discrim_legend.isChecked(),
                           show_category_legend=self.discrim_category_legend.isChecked(),
@@ -1542,6 +1735,197 @@ class GeochemistryDialog(QDialog):
                           n_samples=valid_count)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)  # Make room for legend below
+        plt.show()
+        self.current_fig = fig
+
+    def generate_custom_xy_plot(self, layer, features, sample_names):
+        """Generate a custom XY plot with user-defined element ratios."""
+        
+        # Get axis configurations
+        x_num = self.x_num_combo.currentText()
+        x_denom = self.x_denom_combo.currentText()
+        y_num = self.y_num_combo.currentText()
+        y_denom = self.y_denom_combo.currentText()
+        
+        # Get normalization setting
+        ree_norm_id = self.ree_norm_group.checkedId()
+        norm_values = None
+        norm_name = ""
+        if ree_norm_id == 1:
+            norm_values = CHONDRITE_VALUES
+            norm_name = "CI Chondrite"
+        elif ree_norm_id == 2:
+            norm_values = PRIMITIVE_MANTLE_VALUES
+            norm_name = "Primitive Mantle"
+        
+        # Build axis labels
+        def build_label(num, denom, norm_values):
+            """Build axis label for numerator/denominator pair."""
+            # Check if either element is an REE and normalization is enabled
+            num_is_ree = num in REE_ELEMENTS
+            denom_is_ree = denom in REE_ELEMENTS if denom != '1 (none)' else False
+            
+            norm_suffix = ""
+            if norm_values:
+                if num_is_ree or denom_is_ree:
+                    norm_suffix = "ₙ"  # Subscript n for normalized
+            
+            # Get units
+            def get_unit(elem):
+                if elem == '1 (none)':
+                    return ''
+                elif elem == 'Mg#':
+                    return ''
+                elif any(elem.endswith(ox) for ox in ['O', 'O2', '2O', '2O3', '2O5']):
+                    return ' (wt%)'
+                else:
+                    return ' (ppm)'
+            
+            if denom == '1 (none)':
+                unit = get_unit(num)
+                if norm_suffix and num_is_ree:
+                    return f"{num}{norm_suffix}{unit}"
+                return f"{num}{unit}"
+            else:
+                # For ratios, don't show units
+                num_str = f"{num}{norm_suffix}" if norm_suffix and num_is_ree else num
+                denom_str = f"{denom}{norm_suffix}" if norm_suffix and denom_is_ree else denom
+                return f"{num_str} / {denom_str}"
+        
+        x_label = build_label(x_num, x_denom, norm_values)
+        y_label = build_label(y_num, y_denom, norm_values)
+        
+        # Show field mapping
+        print("\n" + "="*60)
+        print("CUSTOM XY PLOT - FIELD MAPPING")
+        print("="*60)
+        print(f"X-axis: {x_label}")
+        print(f"Y-axis: {y_label}")
+        if norm_values:
+            print(f"REE Normalization: {norm_name}")
+        print()
+        
+        # Check required elements
+        elements_needed = set()
+        for elem in [x_num, x_denom, y_num, y_denom]:
+            if elem != '1 (none)':
+                if elem == 'Mg#':
+                    elements_needed.add('MgO')
+                    elements_needed.add('FeO')
+                else:
+                    elements_needed.add(elem)
+        
+        print("Field mapping:")
+        for elem in sorted(elements_needed):
+            field = find_element_field(layer, elem)
+            if field:
+                print(f"  {elem:8} -> {field}")
+            else:
+                print(f"  {elem:8} -> NOT FOUND!")
+        print()
+        
+        # Calculate data points
+        x_data = []
+        y_data = []
+        valid_count = 0
+        
+        for feature in features:
+            # Calculate X value
+            x_num_val = get_custom_element_value(feature, layer, x_num, 
+                                                  normalize=(norm_values is not None and x_num in REE_ELEMENTS),
+                                                  norm_values=norm_values)
+            x_denom_val = get_custom_element_value(feature, layer, x_denom,
+                                                    normalize=(norm_values is not None and x_denom in REE_ELEMENTS),
+                                                    norm_values=norm_values)
+            
+            # Calculate Y value
+            y_num_val = get_custom_element_value(feature, layer, y_num,
+                                                  normalize=(norm_values is not None and y_num in REE_ELEMENTS),
+                                                  norm_values=norm_values)
+            y_denom_val = get_custom_element_value(feature, layer, y_denom,
+                                                    normalize=(norm_values is not None and y_denom in REE_ELEMENTS),
+                                                    norm_values=norm_values)
+            
+            # Calculate ratios (skip negative values)
+            x_val = None
+            y_val = None
+
+            if (x_num_val is not None and x_denom_val is not None and 
+                x_num_val > 0 and x_denom_val > 0):
+                x_val = x_num_val / x_denom_val
+
+            if (y_num_val is not None and y_denom_val is not None and 
+                y_num_val > 0 and y_denom_val > 0):
+                y_val = y_num_val / y_denom_val
+            
+            x_data.append(x_val)
+            y_data.append(y_val)
+            
+            if x_val is not None and y_val is not None:
+                valid_count += 1
+        
+        print(f"Valid samples: {valid_count}/{len(features)}")
+        print("="*60 + "\n")
+        
+        if valid_count == 0:
+            QMessageBox.warning(self, "Warning", "No valid data points to plot. Check that the required elements are available in your data.")
+            return
+        
+        # Create categorical colour and marker map
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
+        
+        # Create plot
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Set axis scales
+        if self.x_scale_combo.currentIndex() == 1:
+            ax.set_xscale('log')
+        if self.y_scale_combo.currentIndex() == 1:
+            ax.set_yscale('log')
+        
+        # Fallback markers
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        # Track plotted categories for legend
+        plotted_categories = set()
+        
+        for i, (x, y, name) in enumerate(zip(x_data, y_data, sample_names)):
+            if x is not None and y is not None:
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                
+                label = None
+                if self.custom_legend.isChecked() and name not in plotted_categories:
+                    label = name
+                    plotted_categories.add(name)
+                
+                if self.custom_markers.isChecked():
+                    ax.scatter(x, y, marker=marker, s=80, c=[color], 
+                              edgecolors='black', linewidths=0.5, zorder=10, label=label)
+                else:
+                    ax.scatter(x, y, s=80, c=[color], 
+                              edgecolors='black', linewidths=0.5, zorder=10, label=label)
+        
+        ax.set_xlabel(x_label, fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+        
+        # Build title
+        title = f"{y_label} vs {x_label} (n={valid_count})"
+        if norm_values:
+            title += f"\nREE normalized to {norm_name}"
+        ax.set_title(title, fontsize=14)
+        
+        ax.grid(True, alpha=0.3)
+        
+        # Add legend
+        if self.custom_legend.isChecked() and len(unique_categories) > 0:
+            n_categories = len(unique_categories)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        
+        plt.tight_layout()
+        fig.subplots_adjust(bottom=0.2)
         plt.show()
         self.current_fig = fig
 
