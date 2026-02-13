@@ -12,6 +12,7 @@ A Python script for creating geochemical plots directly within QGIS, designed fo
   - Rb vs (Y+Nb) (Pearce et al. 1984)
   - Ti vs Zr (Pearce & Cann 1973)
   - TAS plots for plutonic (Wilson 1989) and volcanic (Cox et al. 1979) rocks
+- **User-defined XY or XY ratio plots**
 
 ## Requirements
 
