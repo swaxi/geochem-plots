@@ -16,8 +16,19 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 try:
     import matplotlib
-    matplotlib.use('Agg')
+    try:
+        from qgis.PyQt.QtCore import QT_VERSION_STR
+        qt_major = int(QT_VERSION_STR.split('.')[0])
+        
+        if qt_major >= 6:
+            matplotlib.use('QtAgg')  # Unified backend for Qt6+
+        else:
+            matplotlib.use('Qt5Agg')
+    except Exception:
+        matplotlib.use('Qt5Agg')  # Fallback    
+    
     import matplotlib.pyplot as plt
+
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
