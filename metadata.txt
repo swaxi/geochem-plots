@@ -15,8 +15,8 @@ about=A simple geochemistry plotting tool for QGIS that creates:
     
     Developed for UWA EART3343 Lab exercises.
 
-tracker=https://github.com/Loop3D/geochem_plotting_plugin/issues
-repository=https://github.com/Loop3D/geochem_plotting_plugin
+tracker=https://github.com/swaxi/geochem-plots/issues
+repository=https://github.com/swaxi/geochem-plots
 
 changelog=0.0.1 - Initial release
     - Spider diagrams with multiple normalization options
@@ -25,7 +25,7 @@ changelog=0.0.1 - Initial release
 
 tags=geochemistry,plotting,spider diagram,REE,discrimination,petrology,geology
 
-homepage=https://github.com/Loop3D/geochem_plotting_plugin
+homepage=https://github.com/swaxi/geochem-plots
 category=Analysis
 icon=icon.svg
 experimental=False
