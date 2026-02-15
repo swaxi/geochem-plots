@@ -18,7 +18,7 @@ about=A simple geochemistry plotting tool for QGIS that creates:
 tracker=https://github.com/Loop3D/geochem_plotting_plugin/issues
 repository=https://github.com/Loop3D/geochem_plotting_plugin
 
-changelog=1.0.0 - Initial release
+changelog=0.0.1 - Initial release
     - Spider diagrams with multiple normalization options
     - 7 discrimination diagrams
     - Custom XY plotting with REE normalization
