@@ -16,7 +16,7 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 try:
     import matplotlib
-    matplotlib.use('Qt5Agg')
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
