@@ -8,7 +8,6 @@ Developer: Mark Jessell for UWA EART3343 Lab exercises
 Date: Jan 2026
 """
 
-
 def classFactory(iface):
     """Load the GeochemPlottingPlugin class.
     

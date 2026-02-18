@@ -18,7 +18,9 @@ about=A simple geochemistry plotting tool for QGIS that creates:
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=0.0.1 - Initial release
+changelog=0.0.2   
+    - dock widget within tabbed set if other docked plugins open   
+    0.0.1 - Initial release
     - Spider diagrams with multiple normalization options
     - 7 discrimination diagrams
     - Custom XY plotting with REE normalization

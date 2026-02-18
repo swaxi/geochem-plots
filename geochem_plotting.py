@@ -9,7 +9,42 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QAction, QDockWidget
 from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsApplication
+from qgis.PyQt.QtWidgets import  QMessageBox
 
+# Qt5/Qt6 Compatibility Layer
+try:
+    # Try Qt6 style first
+    _test = Qt.DockWidgetArea.RightDockWidgetArea
+    # Qt6 detected
+    QT6 = True
+
+    # Qt6 style enums are already available
+    RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
+    LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
+    TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
+    BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+
+    # QMessageBox buttons
+    QMessageBox_Ok = QMessageBox.StandardButton.Ok
+    QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+    QMessageBox_Yes = QMessageBox.StandardButton.Yes
+    QMessageBox_No = QMessageBox.StandardButton.No
+
+except AttributeError:
+    # Qt5 detected
+    QT6 = False
+
+    # Qt5 style enums
+    RightDockWidgetArea = Qt.RightDockWidgetArea
+    LeftDockWidgetArea = Qt.LeftDockWidgetArea
+    TopDockWidgetArea = Qt.TopDockWidgetArea
+    BottomDockWidgetArea = Qt.BottomDockWidgetArea
+
+    # QMessageBox buttons
+    QMessageBox_Ok = QMessageBox.Ok
+    QMessageBox_Cancel = QMessageBox.Cancel
+    QMessageBox_Yes = QMessageBox.Yes
+    QMessageBox_No = QMessageBox.No
 from .geochem_dock import GeochemistryDockWidget
 
 
@@ -126,6 +161,21 @@ class GeochemPlottingPlugin:
             
             # Add dock widget to QGIS interface
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
+            right_docks = [
+                d
+                for d in self.iface.mainWindow().findChildren(QDockWidget)
+                if self.iface.mainWindow().dockWidgetArea(d) == RightDockWidgetArea
+            ]
+            # If there are other dock widgets, tab this one with the first one found
+            if right_docks:
+                for dock in right_docks:
+                    if dock != self.dock_widget:
+                        self.iface.mainWindow().tabifyDockWidget(dock, self.dock_widget)
+                        # Optionally, bring your plugin tab to the front
+                        self.dock_widget.raise_()
+                        break
+            # Raise the docked widget above others
+            self.dock_widget.show()
         
         # Show the dock widget
         self.dock_widget.show()
