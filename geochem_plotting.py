@@ -160,7 +160,7 @@ class GeochemPlottingPlugin:
                 self.dock_widget.closingPlugin.connect(self.onClosePlugin)
             
             # Add dock widget to QGIS interface
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
+            self.iface.addDockWidget(RightDockWidgetArea, self.dock_widget)
             right_docks = [
                 d
                 for d in self.iface.mainWindow().findChildren(QDockWidget)

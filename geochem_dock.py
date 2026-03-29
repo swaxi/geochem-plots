@@ -37,6 +37,48 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+# Qt5/Qt6 Compatibility Layer
+try:
+    # Try Qt6 style first
+    _test = Qt.DockWidgetArea.RightDockWidgetArea
+    # Qt6 detected
+    QT6 = True
+
+    # Qt6 style enums are already available
+    RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
+    LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
+    TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
+    BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+
+    # QMessageBox buttons
+    QMessageBox_Ok = QMessageBox.StandardButton.Ok
+    QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+    QMessageBox_Yes = QMessageBox.StandardButton.Yes
+    QMessageBox_No = QMessageBox.StandardButton.No
+
+    QListWidget_MultiSelection = QListWidget.SelectionMode.MultiSelection
+    Qt_ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    Qt_ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+except AttributeError:
+    # Qt5 detected
+    QT6 = False
+
+    # Qt5 style enums
+    RightDockWidgetArea = Qt.RightDockWidgetArea
+    LeftDockWidgetArea = Qt.LeftDockWidgetArea
+    TopDockWidgetArea = Qt.TopDockWidgetArea
+    BottomDockWidgetArea = Qt.BottomDockWidgetArea
+
+    # QMessageBox buttons
+    QMessageBox_Ok = QMessageBox.Ok
+    QMessageBox_Cancel = QMessageBox.Cancel
+    QMessageBox_Yes = QMessageBox.Yes
+    QMessageBox_No = QMessageBox.No
+
+    QListWidget_MultiSelection = QListWidget.MultiSelection
+    Qt_ScrollBarAlwaysOff = Qt.ScrollBarAlwaysOff
+    Qt_ScrollBarAsNeeded = Qt.ScrollBarAsNeeded
 
 # =============================================================================
 # CATEGORICAL COLOUR MAPPING UTILITIES
@@ -883,7 +925,7 @@ class GeochemistryDockWidget(QDockWidget):
         super().__init__("Geochemistry Plotting Tools", parent)
         self.iface = iface
         self.current_fig = None
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
         
@@ -1062,7 +1104,7 @@ class GeochemistryDockWidget(QDockWidget):
         sample_layout.setSpacing(3)
         
         self.feature_list = QListWidget()
-        self.feature_list.setSelectionMode(QListWidget.MultiSelection)
+        self.feature_list.setSelectionMode(QListWidget_MultiSelection)
         self.feature_list.setMaximumHeight(150)
         sample_layout.addWidget(self.feature_list)
 
@@ -1094,8 +1136,7 @@ class GeochemistryDockWidget(QDockWidget):
         scroll_area = QScrollArea()
         scroll_area.setWidget(main_widget)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
+        scroll_area.setHorizontalScrollBarPolicy(Qt_ScrollBarAlwaysOff)        
         self.setWidget(scroll_area)
         self.setMinimumWidth(320)
 
