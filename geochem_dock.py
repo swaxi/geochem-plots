@@ -59,6 +59,7 @@ try:
     QListWidget_MultiSelection = QListWidget.SelectionMode.MultiSelection
     Qt_ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     Qt_ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    Qt_UserRole = Qt.ItemDataRole.UserRole
 
 except AttributeError:
     # Qt5 detected
@@ -79,6 +80,8 @@ except AttributeError:
     QListWidget_MultiSelection = QListWidget.MultiSelection
     Qt_ScrollBarAlwaysOff = Qt.ScrollBarAlwaysOff
     Qt_ScrollBarAsNeeded = Qt.ScrollBarAsNeeded
+    Qt_UserRole = Qt.UserRole
+
 
 # =============================================================================
 # CATEGORICAL COLOUR MAPPING UTILITIES
@@ -1235,7 +1238,7 @@ class GeochemistryDockWidget(QDockWidget):
         items_to_select = []
         for label, fid in items_to_add:
             item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, fid)
+            item.setData(Qt_UserRole, fid)
             self.feature_list.addItem(item)
             
             if fid in selected_ids:
@@ -1301,7 +1304,7 @@ class GeochemistryDockWidget(QDockWidget):
         features = []
         sample_names = []
         for item in selected_items:
-            fid = item.data(Qt.UserRole)
+            fid = item.data(Qt_UserRole)
             feature = layer.getFeature(fid)
             features.append(feature)
             if id_field:
