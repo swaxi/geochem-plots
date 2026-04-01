@@ -535,19 +535,17 @@ class Winchester_Floyd1977_NbY_ZrTi:
                 [0.148, 0.160, 0.175, 0.196, 0.224, 0.261, 0.298, 0.359, 0.433, 0.522, 0.630, 0.760, 1.365, 3.022, 1.365, 0.167, 0.137, 0.113, 0.095, 0.136, 0.704, 0.136, 0.085, 0.119, 0.085, 0.078, 0.069, 0.027, 0.026, 0.026, 0.026, 0.027, 0.061, 0.027, 0.026, 0.026, 0.026, 0.027, 0.019, 0.017, 0.015, 0.014, 0.013, 0.013, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.013, 0.013, 0.014, 0.015, 0.013, 0.011, 0.009, 0.008, 0.007, 0.006, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.006, 0.007, 0.008, 0.009, 0.011, 0.013, 0.015, 0.017, 0.019, 0.002, 0.019, 0.020, 0.021, 0.022, 0.023, 0.024, 0.024, 0.024, 0.023, 0.021, 0.020, 0.018, 0.016, 0.004, 0.016, 0.020, 0.024, 0.031, 0.038, 0.039, 0.038, 0.095] 
                 , 'k-', linewidth=1.0)
 
-        ax.text(0.1, 0.007, 'Basalt', fontsize=9, ha='center', va='center')
-        ax.text(0.1, 0.07, 'Andesite', fontsize=9, ha='center', va='center', style='italic')
-        ax.text(0.1, 0.02, 'Basaltic andesite', fontsize=9, ha='center', va='center', style='italic')
-        ax.text(0.3, 0.2, 'Rhyolite\nDacite', fontsize=9, ha='center', va='center')
+        ax.text(0.1, 0.007, 'Andesite, Basalt', fontsize=9, ha='center', va='center')
+        ax.text(0.1, 0.07, 'Rhyodacite\nDacite', fontsize=9, ha='center', va='center', style='italic')
+        ax.text(0.1, 0.02, 'Andesite', fontsize=9, ha='center', va='center', style='italic')
+        ax.text(0.3, 0.2, 'Rhyolite', fontsize=9, ha='center', va='center')
         ax.text(3.5, 0.1, 'Trachyte', fontsize=9, ha='center', va='center')
         ax.text(1.6, 0.04, 'Trachy-\nandesite', fontsize=9, ha='center', va='center')
         ax.text(1.3, 0.007, 'Alkali\nBasalt', fontsize=9, ha='center', va='center')
-        ax.text(0.8, 0.4, 'Alkali\nRhyolite', fontsize=9, ha='center', va='center')
+        ax.text(0.8, 0.4, 'Comendite', fontsize=9, ha='center', va='center')
         ax.text(5.0, 0.4, 'Phonolite', fontsize=9, ha='center', va='center')
-        ax.text(5.3, 0.007, 'Foidite', fontsize=9, ha='center', va='center')
-        ax.text(0.12, 0.0015, 'subalkaline', fontsize=8, ha='center', va='top')
-        ax.text(1.8, 0.0015, 'alkaline', fontsize=8, ha='center', va='top')
-        ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
+        ax.text(5.3, 0.007, 'Basanite', fontsize=9, ha='center', va='center')
+        ax.text(0.1, 0.003, 'Sub-alkaline\nBasalt', fontsize=9, ha='center', va='top')
 
     @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
