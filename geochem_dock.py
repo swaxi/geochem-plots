@@ -164,8 +164,68 @@ MW_FEO = 71.844
 # =============================================================================
 # FIELD NAME MATCHING UTILITIES
 # =============================================================================
+import re
 
 def find_element_field(layer, element):
+    """Find the field name in a layer that corresponds to a given element."""
+    field_names = [f.name() for f in layer.fields()]
+    element_upper = element.upper()
+    
+    patterns = [
+        element, element.upper(), element.lower(), element.capitalize(),
+        f"{element}_ppm", f"{element.upper()}_ppm", f"{element.lower()}_ppm",
+        f"{element}_PPM", f"{element.upper()}_PPM", f"{element.lower()}_PPM",
+        f"{element}_ppb", f"{element.upper()}_ppb", f"{element}_PPB",
+        f"{element}_pct", f"{element.upper()}_pct", f"{element}_PCT",
+        f"{element}_wt", f"{element}_WT", f"{element}_wtpct", f"{element}_wt_pct",
+        f"{element}(ppm)", f"{element} (ppm)", f"{element}(PPM)", f"{element}_[ppm]",
+    ]
+    
+    oxide_forms = {
+        'Ti': ['TiO2_pct', 'TiO2_PCT', 'TiO2_wt', 'TiO2', 'tio2_pct', 'TIO2_PCT'],
+        'Fe': ['Fe2O3_pct', 'Fe2O3T_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeOT_pct', 'FeO_PCT'],
+        'Mn': ['MnO_pct', 'MnO_PCT', 'MnO_wt', 'MnO'],
+        'Mg': ['MgO_pct', 'MgO_PCT', 'MgO_wt', 'MgO'],
+        'Ca': ['CaO_pct', 'CaO_PCT', 'CaO_wt', 'CaO'],
+        'Na': ['Na2O_pct', 'Na2O_PCT', 'Na2O_wt', 'Na2O'],
+        'K': ['K2O_pct', 'K2O_PCT', 'K2O_wt', 'K2O'],
+        'P': ['P2O5_pct', 'P2O5_PCT', 'P2O5_wt', 'P2O5'],
+        'Si': ['SiO2_pct', 'SiO2_PCT', 'SiO2_wt', 'SiO2'],
+        'Al': ['Al2O3_pct', 'Al2O3_PCT', 'Al2O3_wt', 'Al2O3'],
+    }
+    
+    if element in oxide_forms:
+        patterns.extend(oxide_forms[element])
+
+    # 1. Exact pattern match
+    for pattern in patterns:
+        if pattern in field_names:
+            return pattern
+
+    # 2. Symbol_Fullname style match (e.g. Cl_Chlorine, K_Potassium, CA_Calcium)
+    symbol_name_regex = re.compile(
+        rf"^{re.escape(element)}_[A-Za-z]+$|"
+        rf"^{re.escape(element.upper())}_[A-Za-z]+$|"
+        rf"^{re.escape(element.lower())}_[A-Za-z]+$",
+        re.IGNORECASE
+    )
+    for field_name in field_names:
+        if symbol_name_regex.match(field_name):
+            return field_name
+
+    # 3. Fallback: uppercase prefix match with known suffixes
+    for field_name in field_names:
+        field_upper = field_name.upper()
+        if field_upper.startswith(element_upper):
+            remainder = field_upper[len(element_upper):]
+            if remainder in ['', '_PPM', '_PPB', '_PCT', '_WT', '_WTPCT',
+                           '_WT_PCT', '(PPM)', ' (PPM)', '_[PPM]', '_WT%', 'PPM', 'PPB',
+                           'O2_PCT', 'O_PCT', '2O3_PCT', '2O_PCT', '2O5_PCT']:
+                return field_name
+
+    return None
+
+def find_element_field_old(layer, element):
     """Find the field name in a layer that corresponds to a given element."""
     field_names = [f.name() for f in layer.fields()]
     element_upper = element.upper()
@@ -378,7 +438,7 @@ class Pearce1996_NbY_ZrTi:
     """Nb/Y vs Zr/Ti diagram (Winchester & Floyd 1977; Pearce 1996)."""
     
     name = "Zr/Ti vs Nb/Y"
-    reference = "Winchester & Floyd (1977); Pearce (1996)"
+    reference = "Pearce (1996)"
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -413,6 +473,80 @@ class Pearce1996_NbY_ZrTi:
         ax.text(5.0, 0.02, 'Foidite', fontsize=10, ha='center', va='center')
         ax.text(0.12, 0.0015, 'subalkaline', fontsize=9, ha='center', va='top')
         ax.text(1.8, 0.0015, 'alkaline', fontsize=9, ha='center', va='top')
+        ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        cls.draw_fields(ax)
+        
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        
+        plotted_categories = set()
+        
+        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
+            if x is not None and y is not None:
+                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
+                plotted_categories.add(name)
+                
+                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
+                          linewidths=0.5, zorder=10, label=label)
+        
+        ax.set_xlabel('Nb/Y', fontsize=12)
+        ax.set_ylabel('Zr/Ti', fontsize=12)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_xlim(0.01, 10)
+        ax.set_ylim(0.001, 1)
+        
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+
+
+class Winchester_Floyd1977_NbY_ZrTi:
+    """Nb/Y vs Zr/Ti diagram (Winchester & Floyd 1977)."""
+    
+    name = "Zr/Ti vs Nb/Y"
+    reference = "Winchester & Floyd (1977)"
+
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        zr = get_element_value(feature, layer, 'Zr')
+        ti = get_element_value(feature, layer, 'Ti')
+        nb = get_element_value(feature, layer, 'Nb')
+        y = get_element_value(feature, layer, 'Y')
+        
+        if all(v is not None and v > 0 for v in [zr, ti, nb, y]):
+            return nb/y, zr/ti
+        return None, None
+
+    @classmethod
+    def draw_fields(cls, ax):
+        ax.plot([9.675, 7.980, 6.590, 5.440, 4.490, 3.710, 3.250, 2.790, 2.446, 2.215, 2.073, 1.979, 1.760, 1.510, 1.760, 1.451, 1.400, 1.318, 1.220, 0.950, 0.317, 0.951, 0.687, 0.195, 0.680, 0.665, 0.652, 0.652, 0.542, 0.450, 0.374, 0.311, 0.021, 0.311, 0.374, 0.450, 0.542, 0.652, 0.652, 0.568, 0.494, 0.405, 0.332, 0.273, 0.239, 0.150, 0.095, 0.060, 0.095, 0.150, 0.239, 0.273, 0.332, 0.405, 0.494, 0.412, 0.344, 0.287, 0.264, 0.234, 0.211, 0.190, 0.181, 0.172, 0.029, 0.172, 0.181, 0.190, 0.211, 0.234, 0.264, 0.287, 0.344, 0.412, 0.494, 0.568, 0.652, 0.652, 0.652, 0.735, 0.827, 0.932, 1.050, 1.182, 1.332, 1.520, 1.735, 1.980, 2.260, 2.579, 2.944, 2.867, 2.944, 3.637, 4.319, 4.962, 5.516, 10.000, 5.516, 1.222] ,
+                [0.148, 0.160, 0.175, 0.196, 0.224, 0.261, 0.298, 0.359, 0.433, 0.522, 0.630, 0.760, 1.365, 3.022, 1.365, 0.167, 0.137, 0.113, 0.095, 0.136, 0.704, 0.136, 0.085, 0.119, 0.085, 0.078, 0.069, 0.027, 0.026, 0.026, 0.026, 0.027, 0.061, 0.027, 0.026, 0.026, 0.026, 0.027, 0.019, 0.017, 0.015, 0.014, 0.013, 0.013, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.013, 0.013, 0.014, 0.015, 0.013, 0.011, 0.009, 0.008, 0.007, 0.006, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.006, 0.007, 0.008, 0.009, 0.011, 0.013, 0.015, 0.017, 0.019, 0.002, 0.019, 0.020, 0.021, 0.022, 0.023, 0.024, 0.024, 0.024, 0.023, 0.021, 0.020, 0.018, 0.016, 0.004, 0.016, 0.020, 0.024, 0.031, 0.038, 0.039, 0.038, 0.095] 
+                , 'k-', linewidth=1.0)
+
+        ax.text(0.1, 0.007, 'Basalt', fontsize=9, ha='center', va='center')
+        ax.text(0.1, 0.07, 'Andesite', fontsize=9, ha='center', va='center', style='italic')
+        ax.text(0.1, 0.02, 'Basaltic andesite', fontsize=9, ha='center', va='center', style='italic')
+        ax.text(0.3, 0.2, 'Rhyolite\nDacite', fontsize=9, ha='center', va='center')
+        ax.text(3.5, 0.1, 'Trachyte', fontsize=9, ha='center', va='center')
+        ax.text(1.6, 0.04, 'Trachy-\nandesite', fontsize=9, ha='center', va='center')
+        ax.text(1.3, 0.007, 'Alkali\nBasalt', fontsize=9, ha='center', va='center')
+        ax.text(0.8, 0.4, 'Alkali\nRhyolite', fontsize=9, ha='center', va='center')
+        ax.text(5.0, 0.4, 'Phonolite', fontsize=9, ha='center', va='center')
+        ax.text(5.3, 0.007, 'Foidite', fontsize=9, ha='center', va='center')
+        ax.text(0.12, 0.0015, 'subalkaline', fontsize=8, ha='center', va='top')
+        ax.text(1.8, 0.0015, 'alkaline', fontsize=8, ha='center', va='top')
         ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
 
     @classmethod
@@ -908,6 +1042,7 @@ DISCRIMINATION_DIAGRAMS = {
     'Na2O + K2O vs SiO2 Plutonic (Wilson 1989)': Wilson1989_TAS,
     'Na2O + K2O vs SiO2 Volcanic (Cox et al 1979)': Cox1979_TAS,
     'Zr/Ti vs Nb/Y (Pearce 1996)': Pearce1996_NbY_ZrTi,
+    'Zr/Ti vs Nb/Y (Winchester & Floyd 1977)': Winchester_Floyd1977_NbY_ZrTi,
     'Zr/4-Nb×2-Y Ternary (Meschede 1986)': Meschede1986_Ternary,
     'Nb vs Y (Pearce et al. 1984)': Pearce1984_YNb,
     'Rb vs (Y+Nb) (Pearce et al. 1984)': Pearce1984_YNbRb,
@@ -1023,7 +1158,7 @@ class GeochemistryDockWidget(QDockWidget):
         discrim_layout.addLayout(discrim_opts)
         discrim_layout.addStretch()
 
-        self.tab_widget.addTab(discrim_tab, "Discrimination")
+        self.tab_widget.addTab(discrim_tab, "Discrimination/Classification")
 
         # Tab 3: Custom XY Plot
         custom_xy_tab = QWidget()
@@ -1057,6 +1192,12 @@ class GeochemistryDockWidget(QDockWidget):
         self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
         y_grid.addWidget(self.y_denom_combo, 0, 3)
         custom_xy_layout.addWidget(y_group)
+
+        # Show all numeric fields checkbox
+        self.custom_show_all_fields = QCheckBox("Show all numeric fields")
+        self.custom_show_all_fields.setChecked(False)
+        self.custom_show_all_fields.toggled.connect(self.refresh_custom_xy_combos)
+        custom_xy_layout.addWidget(self.custom_show_all_fields)
 
         # REE Normalization
         ree_group = QGroupBox("REE Normalization")
@@ -1166,6 +1307,45 @@ class GeochemistryDockWidget(QDockWidget):
             self.on_layer_changed(self.layer_combo.currentIndex())
 
     def on_layer_changed(self, index):
+        """Handle layer selection change."""
+        if index < 0:
+            return
+        
+        layer_id = self.layer_combo.itemData(index)
+        if layer_id is None:
+            return
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            return
+        
+        self.id_field_combo.clear()
+        field_names = [field.name() for field in layer.fields()]
+        for field_name in field_names:
+            self.id_field_combo.addItem(field_name)
+        
+        # Auto-select ID field
+        preferred_names = ['sample_id', 'sampleid', 'sample', 'name', 'id', 'sample_name', 
+                        'samplename', 'label', 'station', 'site', 'sample_no', 'samp_id',
+                        'hole_id', 'holeid', 'drillhole', 'core_id', 'spec_id', 'specimen']
+        best_index = 0
+        
+        for pref in preferred_names:
+            for i, fn in enumerate(field_names):
+                if fn.lower() == pref.lower():
+                    best_index = i
+                    break
+            else:
+                continue
+            break
+        
+        self.id_field_combo.setCurrentIndex(best_index)
+        self.update_feature_list(layer)
+        
+        # Refresh custom XY dropdowns if showing all numeric fields
+        self.refresh_custom_xy_combos()
+
+        
+    def on_layer_changed_old(self, index):
         """Handle layer selection change."""
         if index < 0:
             return
@@ -1593,3 +1773,69 @@ class GeochemistryDockWidget(QDockWidget):
         if file_path:
             self.current_fig.savefig(file_path, dpi=300, bbox_inches='tight')
             QMessageBox.information(self, "Success", f"Plot saved to:\n{file_path}")
+
+    def get_numeric_field_names(self):
+        """Get numeric field names from the current layer."""
+        from qgis.core import QgsField
+        try:
+            from qgis.PyQt.QtCore import QVariant
+        except ImportError:
+            import sip
+            from PyQt5.QtCore import QVariant
+
+        layer_id = self.layer_combo.currentData()
+        if layer_id is None:
+            return []
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            return []
+
+        numeric_types = {QVariant.Int, QVariant.LongLong, QVariant.Double,
+                        QVariant.UInt, QVariant.ULongLong}
+        return [f.name() for f in layer.fields() if f.type() in numeric_types]
+    
+
+    def refresh_custom_xy_combos(self):
+        """Refresh custom XY combo boxes based on the show-all-fields checkbox."""
+        if self.custom_show_all_fields.isChecked():
+            field_names = self.get_numeric_field_names()
+            none_option = ['1 (none)']
+            num_items = field_names          # numerator: no '1 (none)'
+            denom_items = none_option + field_names  # denominator: '1 (none)' at top
+
+            for combo in [self.x_num_combo, self.y_num_combo]:
+                prev = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItems(num_items)
+                idx = combo.findText(prev)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                combo.blockSignals(False)
+
+            for combo in [self.x_denom_combo, self.y_denom_combo]:
+                prev = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItems(denom_items)
+                idx = combo.findText(prev)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                combo.blockSignals(False)
+        else:
+            # Restore predefined lists
+            for combo in [self.x_num_combo, self.y_num_combo]:
+                prev = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItems(CUSTOM_XY_ELEMENTS[1:])
+                idx = combo.findText(prev)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                combo.blockSignals(False)
+
+            for combo in [self.x_denom_combo, self.y_denom_combo]:
+                prev = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItems(CUSTOM_XY_ELEMENTS)
+                idx = combo.findText(prev)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                combo.blockSignals(False)

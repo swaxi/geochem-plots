@@ -3,7 +3,7 @@ name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
-version=0.0.2
+version=0.0.3
 author=Mark Jessell
 email=mark.jessell@uwa.edu.au
 
@@ -17,7 +17,10 @@ about=A simple geochemistry plotting tool for QGIS that creates:
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=0.0.2 Fix QT6 issues for QGIS 4
+changelog=0.0.3 Add Winchester & Floyd 1977 plot
+    - Allow any numeric field for Custom xy plots
+    - Allow field names with Na_Sodium naming convention
+    0.0.2 Fix QT6 issues for QGIS 4
     0.0.1 - Initial release
     - Spider diagrams with multiple normalization options
     - 7 discrimination diagrams
