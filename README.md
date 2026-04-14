@@ -65,5 +65,11 @@ This plugin is free software; you can redistribute it and/or modify it under the
 ## Example Plots
 ![Example Plots](Montage.png) 
 
+## Alternatives
+- ioGAS way more complete commercial system https://www.imdex.com/software/iogas
+- Geoplotters way more complete Open Source excel templates https://www.geoplotters.com/
+- GeoChemical Data toolkit (GCDkit) way more complete Open Source R program https://www.gcdkit.org/
+- igrock tools way more complete online tool https://www.science.smith.edu/~jbrady/petrology/igrocks-tools/igtools-list.php
+
 ## Logo
 Thanks to https://pixabay.com/vectors/bottles-blue-green-transparent-34333/
