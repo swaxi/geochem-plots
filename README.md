@@ -64,3 +64,6 @@ This plugin is free software; you can redistribute it and/or modify it under the
 
 ## Example Plots
 ![Example Plots](Montage.png) 
+
+## Logo
+Thanks to https://pixabay.com/vectors/bottles-blue-green-transparent-34333/
