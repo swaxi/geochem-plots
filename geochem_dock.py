@@ -32,6 +32,8 @@ try:
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
+    from matplotlib.widgets import LassoSelector
+    from matplotlib.path import Path
     import numpy as np
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
@@ -1533,20 +1535,22 @@ class GeochemistryDockWidget(QDockWidget):
 
         fig, ax = plt.subplots(figsize=(12, 8))
         x_positions = np.arange(len(element_order))
-        
+
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
 
         plotted_categories = set()
-        
-        for i, (values, name) in enumerate(zip(plot_data, sample_names)):
+        line_to_fid = {}
+
+        for i, (values, name, feature) in enumerate(zip(plot_data, sample_names, features)):
             marker = sample_markers[i] if self.spider_markers.isChecked() else None
             color = sample_colors[i]
             label = name if name not in plotted_categories else None
             plotted_categories.add(name)
-            
-            ax.plot(x_positions, values, marker=marker, markersize=8, linewidth=1.5,
+
+            lines = ax.plot(x_positions, values, marker=marker, markersize=8, linewidth=1.5,
                    label=label, color=color, markerfacecolor='white' if marker else None,
                    markeredgecolor=color, markeredgewidth=1.5)
+            line_to_fid[lines[0]] = feature.id()
 
         ax.set_yscale('log')
         ax.set_xlim(-0.5, len(element_order) - 0.5)
@@ -1569,10 +1573,11 @@ class GeochemistryDockWidget(QDockWidget):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=9,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        
+
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
         plt.show()
+        self._attach_spider_selection(fig, line_to_fid, layer.id())
         self.current_fig = fig
 
     def generate_discrimination_diagram(self, layer, features, sample_names):
@@ -1587,10 +1592,27 @@ class GeochemistryDockWidget(QDockWidget):
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
 
+        # Build pts_data and fid_list for selection (handles both binary and ternary)
+        pts_data = []
+        fid_list = []
+        for coords, feature in zip(data, features):
+            if coords[0] is None:
+                continue
+            if len(coords) == 3:
+                if coords[2] is None:
+                    continue
+                x, y = ternary_to_cartesian(*coords)
+            else:
+                if coords[1] is None:
+                    continue
+                x, y = coords[0], coords[1]
+            pts_data.append((x, y))
+            fid_list.append(feature.id())
+
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        diagram_class.plot(ax, data, sample_names, 
+        diagram_class.plot(ax, data, sample_names,
                           show_legend=self.discrim_legend.isChecked(),
                           show_category_legend=self.discrim_category_legend.isChecked(),
                           sample_colors=sample_colors, category_colors=category_colors,
@@ -1599,6 +1621,7 @@ class GeochemistryDockWidget(QDockWidget):
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, layer.id())
         self.current_fig = fig
 
     def generate_custom_xy_plot(self, layer, features, sample_names):
@@ -1722,44 +1745,159 @@ class GeochemistryDockWidget(QDockWidget):
         
         default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
         plotted_categories = set()
-        
-        for i, (x, y, name) in enumerate(zip(x_data, y_data, sample_names)):
+        pts_data = []
+        fid_list = []
+
+        for i, (x, y, name, feature) in enumerate(zip(x_data, y_data, sample_names, features)):
             if x is not None and y is not None:
                 color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
                 marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                
+
                 label = None
                 if self.custom_legend.isChecked() and name not in plotted_categories:
                     label = name
                     plotted_categories.add(name)
-                
+
                 if self.custom_markers.isChecked():
-                    ax.scatter(x, y, marker=marker, s=80, c=[color], 
+                    ax.scatter(x, y, marker=marker, s=80, c=[color],
                               edgecolors='black', linewidths=0.5, zorder=10, label=label)
                 else:
-                    ax.scatter(x, y, s=80, c=[color], 
+                    ax.scatter(x, y, s=80, c=[color],
                               edgecolors='black', linewidths=0.5, zorder=10, label=label)
-        
+
+                pts_data.append((x, y))
+                fid_list.append(feature.id())
+
         ax.set_xlabel(x_label, fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
-        
+
         title = f"{y_label} vs {x_label} (n={valid_count})"
         if norm_values:
             title += f"\nREE normalized to {norm_name}"
         ax.set_title(title, fontsize=14)
-        
+
         ax.grid(True, alpha=0.3)
-        
+
         if self.custom_legend.isChecked() and len(unique_categories) > 0:
             n_categories = len(unique_categories)
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        
+
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, layer.id())
         self.current_fig = fig
+
+    def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, layer_id):
+        """Wire up point selection on scatter-based plots.
+
+        Left-click (no toolbar mode): select nearest point in QGIS.
+        Shift+left-click: toggle that point in the QGIS selection.
+        Left-click on empty space: clear QGIS selection.
+        Right-click drag: lasso-select multiple points.
+        """
+        if not pts_data or not fid_list:
+            return
+
+        pts_array = np.array(pts_data, dtype=float)
+
+        def on_click(event):
+            if event.button != 1:
+                return
+            try:
+                if fig.canvas.toolbar.mode != '':
+                    return
+            except AttributeError:
+                pass
+            if event.inaxes is None or event.xdata is None or event.ydata is None:
+                return
+
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+
+            try:
+                pts_disp = ax.transData.transform(pts_array)
+                click_disp = ax.transData.transform([[event.xdata, event.ydata]])[0]
+            except Exception:
+                return
+
+            dists = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
+            nearest_idx = int(np.argmin(dists))
+            key = event.key or ''
+
+            if dists[nearest_idx] > 10:
+                if 'shift' not in key.lower():
+                    layer.selectByIds([])
+                return
+
+            fid = fid_list[nearest_idx]
+            if 'shift' in key.lower():
+                current = set(layer.selectedFeatureIds())
+                current.symmetric_difference_update({fid})
+                layer.selectByIds(list(current))
+            else:
+                layer.selectByIds([fid])
+
+        def on_lasso_select(verts):
+            if not verts:
+                return
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            try:
+                pts_disp = ax.transData.transform(pts_array)
+                verts_disp = ax.transData.transform(np.array(verts))
+            except Exception:
+                return
+            lasso_path = Path(verts_disp)
+            inside = lasso_path.contains_points(pts_disp)
+            selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
+            layer.selectByIds(selected_fids)
+
+        fig.canvas.mpl_connect('button_press_event', on_click)
+        lasso = LassoSelector(ax, on_lasso_select, button=3)
+        fig._lasso_selector = lasso  # keep reference so it isn't garbage-collected
+
+    def _attach_spider_selection(self, fig, line_to_fid, layer_id):
+        """Wire up click-to-select on spider diagram lines.
+
+        Click on a line: select that sample in QGIS.
+        Shift+click: toggle that sample in the QGIS selection.
+        """
+        if not line_to_fid:
+            return
+
+        for line in line_to_fid:
+            line.set_picker(5)
+
+        def on_pick(event):
+            if not isinstance(event.artist, Line2D):
+                return
+            if event.artist not in line_to_fid:
+                return
+            try:
+                if fig.canvas.toolbar.mode != '':
+                    return
+            except AttributeError:
+                pass
+
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+
+            fid = line_to_fid[event.artist]
+            key = getattr(event.mouseevent, 'key', None) or ''
+            if 'shift' in key.lower():
+                current = set(layer.selectedFeatureIds())
+                current.symmetric_difference_update({fid})
+                layer.selectByIds(list(current))
+            else:
+                layer.selectByIds([fid])
+
+        fig.canvas.mpl_connect('pick_event', on_pick)
 
     def save_plot(self):
         """Save the current plot."""

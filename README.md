@@ -1,8 +1,13 @@
 ![icon](icon_sm.png) 
-# Geochemistry Plotting Tools - QGIS Plugin
+# Geochemistry Plotting Tools - QGIS Plugin v0.0.4
 
 A simple geochemistry plotting tool for QGIS that creates spider diagrams, discrimination diagrams, and custom XY plots for geochemical data. Developed for UWA EART3343 Lab exercises
 
+### Recent changelog
+changelog=0.0.4 Allow selection of plotted points to update map selections   
+    0.0.3 Add Winchester & Floyd 1977 plot   
+    - Allow any numeric field for Custom xy plots   
+    - Allow field names with Na_Sodium naming convention   
 
 ## Features
 
@@ -48,6 +53,32 @@ A simple geochemistry plotting tool for QGIS that creates spider diagrams, discr
 - Click on the **All** button to select all features in a layer (you can use layer filters to narrow what will be plotted)
 7. Click **Generate Plot**
 8. Click on the **None** button to clear all selections
+
+## Interactive Point Selection
+
+Clicking points on any plot selects the corresponding features on the active QGIS map layer.
+
+### Scatter plots (Discrimination diagrams & Custom XY plots)
+
+| Action | Result |
+|---|---|
+| Left-click a point | Select that feature in QGIS (replaces current selection) |
+| Shift + left-click a point | Add or remove that feature from the QGIS selection |
+| Left-click empty space | Clear the QGIS selection |
+| Right-click drag (lasso) | Select all points enclosed by the lasso |
+
+> **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
+
+### Spider diagrams
+
+| Action | Result |
+|---|---|
+| Click a sample line | Select that feature in QGIS (replaces current selection) |
+| Shift + click a sample line | Add or remove that feature from the QGIS selection |
+
+Selected features are highlighted on the map using QGIS's standard selection colour (yellow by default).
+
+
 
 ## Data Requirements
 
