@@ -18,6 +18,7 @@ tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
 changelog=0.0.4 Allow selection of plotted points to update map selections
+    - Assign field labels to points
     0.0.3 Add Winchester & Floyd 1977 plot
     - Allow any numeric field for Custom xy plots
     - Allow field names with Na_Sodium naming convention

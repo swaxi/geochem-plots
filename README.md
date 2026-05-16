@@ -5,6 +5,7 @@ A simple geochemistry plotting tool for QGIS that creates spider diagrams, discr
 
 ### Recent changelog
 changelog=0.0.4 Allow selection of plotted points to update map selections   
+    - Assign field labels to points   
     0.0.3 Add Winchester & Floyd 1977 plot   
     - Allow any numeric field for Custom xy plots   
     - Allow field names with Na_Sodium naming convention   
@@ -57,6 +58,10 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 ## Interactive Point Selection
 
 Clicking points on any plot selects the corresponding features on the active QGIS map layer.
+
+## Assign fields to points
+
+For discriminaiton/classification plots, the **Add classification field to layer** button creates a new field for the selected layer with the field name which the point falls in (or void if it is outside any defined fields).   
 
 ### Scatter plots (Discrimination diagrams & Custom XY plots)
 

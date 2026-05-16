@@ -5,14 +5,14 @@ Contains the main dockable widget with all plotting functionality.
 """
 
 import os
-from qgis.core import QgsProject, QgsVectorLayer, NULL
+from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
     QFileDialog, QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea
 )
-from qgis.PyQt.QtCore import Qt, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal
 
 try:
     import matplotlib
@@ -436,11 +436,128 @@ def ternary_text(ax, a, b, c, text, **kwargs):
 # DISCRIMINATION DIAGRAMS
 # =============================================================================
 
-class Pearce1996_NbY_ZrTi:
+class PolygonDiagramMixin:
+    """Shared classify_point and draw_fields for diagram classes that define _get_fields().
+
+    _get_fields() must return a list of dicts, each with keys:
+      'name', 'position', 'fontsize', 'ha', 'va', 'fontweight',
+      'rotation', 'color', 'x', 'y'
+    Polygons are open (first vertex != last vertex).
+    Fields named 'void' are drawn but not labelled, and classify as ''.
+    """
+
+    @classmethod
+    def classify_point(cls, x, y):
+        if x is None or y is None:
+            return None
+        for f in cls._get_fields():
+            xs = f['x'] + [f['x'][0]]
+            ys = f['y'] + [f['y'][0]]
+            if Path(list(zip(xs, ys))).contains_point((x, y)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
+
+    @classmethod
+    def draw_fields(cls, ax):
+        for f in cls._get_fields():
+            ax.plot(f['x'], f['y'], 'k-', linewidth=1.0)
+            if f['name'] != 'void':
+                pos = f['position']
+                label_text = f['name'].replace('-', '\n').replace(' ', '\n')
+                ax.text(pos[0], pos[1], label_text,
+                        fontsize=f['fontsize'], ha=f['ha'], va=f['va'],
+                        fontweight=f['fontweight'], rotation=f.get('rotation', 0),
+                        color=f.get('color', 'k'))
+
+
+class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
     """Nb/Y vs Zr/Ti diagram (Winchester & Floyd 1977; Pearce 1996)."""
-    
+
     name = "Zr/Ti vs Nb/Y"
     reference = "Pearce (1996)"
+    field_name = "Pearce96Nb"
+
+    @classmethod
+    def _get_fields(cls):
+        """Return field polygon definitions with label attributes and open polygon vertices."""
+        return [
+            {'name': 'Basalt',
+             'position': [0.1, 0.006],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.01, 0.7, 0.7, 0.01],
+             'y': [0.001, 0.001, 0.03, 0.008]},
+            {'name': 'Andesite Basaltic andesite',
+             'position': [0.1, 0.025],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.01, 0.7, 0.7, 0.01],
+             'y': [0.008, 0.03, 0.115, 0.03]},
+            {'name': 'Rhyolite-Dacite',
+             'position': [0.1, 0.15],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.01, 0.7, 0.7, 0.1, 0.01],
+             'y': [0.03, 0.115, 0.3, 1.0, 1.0]},
+            {'name': 'Trachyte',
+             'position': [1.8, 0.2],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.7, 3.5, 3.5, 0.7],
+             'y': [0.115, 0.195, 0.74, 0.3]},
+            {'name': 'Trachy-andesite',
+             'position': [1.8, 0.065],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.7, 3.5, 3.5, 0.7],
+             'y': [0.03, 0.05, 0.195, 0.115]},
+            {'name': 'Alkali basalt',
+             'position': [1.8, 0.015],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.7, 3.5, 3.5, 0.7],
+             'y': [0.001, 0.001, 0.05, 0.03]},
+            {'name': 'Alkali rhyolite',
+             'position': [0.7, 0.6],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.1, 0.7, 6.0],
+             'y': [1.0, 0.3, 1.0]},
+            {'name': 'Phonolite',
+             'position': [5.0, 0.4],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [10, 3.5, 3.5, 6, 10],
+             'y': [0.27, 0.195, 0.74, 1.0, 1.0]},
+            {'name': 'Tephri-phonolite',
+             'position': [5.0, 0.09],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [10, 3.5, 3.5, 10],
+             'y': [0.07, 0.05, 0.195, 0.27]},
+            {'name': 'Foidite',
+             'position': [5.0, 0.02],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [10, 3.5, 3.5, 10],
+             'y': [0.001, 0.001, 0.05, 0.07]},
+        ]
+
+    @classmethod
+    def classify_point(cls, x, y):
+        """Return field name for point (x=Nb/Y, y=Zr/Ti) in log space, or None if outside all fields."""
+        import math
+        if x is None or y is None or x <= 0 or y <= 0:
+            return None
+        lx, ly = math.log10(x), math.log10(y)
+        for f in cls._get_fields():
+            log_xs = [math.log10(v) for v in f['x']] + [math.log10(f['x'][0])]
+            log_ys = [math.log10(v) for v in f['y']] + [math.log10(f['y'][0])]
+            if Path(list(zip(log_xs, log_ys))).contains_point((lx, ly)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -455,24 +572,7 @@ class Pearce1996_NbY_ZrTi:
 
     @classmethod
     def draw_fields(cls, ax):
-        ax.plot([0.01, 10.0], [0.03, 0.3], 'k-', linewidth=1.0)
-        ax.plot([0.01, 10.0], [0.008, 0.08], 'k-', linewidth=1.0)
-        ax.plot([0.1, 0.7], [1.1, 0.3], 'k-', linewidth=1)
-        ax.plot([0.7, 7.5], [0.3, 1.1], 'k-', linewidth=1)
-        ax.plot([0.7, 0.7], [0.3, 0.001], 'k-', linewidth=1)
-        ax.plot([3.5, 3.5], [0.72, 0.001], 'k-', linewidth=1)
-
-        ax.text(0.1, 0.006, 'Basalt', fontsize=11, ha='center', va='center')
-        ax.text(0.1, 0.05, 'Andesite', fontsize=8, ha='center', va='center', style='italic',rotation=14)
-        ax.text(0.1, 0.025, 'Basaltic andesite', fontsize=8, ha='center', va='center', style='italic',rotation=14)
-        ax.text(0.1, 0.15, 'Rhyolite\nDacite', fontsize=10, ha='center', va='center')
-        ax.text(1.8, 0.2, 'Trachyte', fontsize=10, ha='center', va='center')
-        ax.text(1.8, 0.065, 'Trachy-\nandesite', fontsize=9, ha='center', va='center')
-        ax.text(1.8, 0.015, 'Alkali\nBasalt', fontsize=9, ha='center', va='center')
-        ax.text(0.7, 0.6, 'Alkali\nRhyolite', fontsize=9, ha='center', va='center')
-        ax.text(5.0, 0.4, 'Phonolite', fontsize=10, ha='center', va='center')
-        ax.text(5.0, 0.09, 'Tephri-\nphonolite', fontsize=9, ha='center', va='center')
-        ax.text(5.0, 0.02, 'Foidite', fontsize=10, ha='center', va='center')
+        super().draw_fields(ax)
         ax.text(0.12, 0.0015, 'subalkaline', fontsize=9, ha='center', va='top')
         ax.text(1.8, 0.0015, 'alkaline', fontsize=9, ha='center', va='top')
         ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
@@ -514,11 +614,100 @@ class Pearce1996_NbY_ZrTi:
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
 
-class Winchester_Floyd1977_NbY_ZrTi:
+class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
     """Nb/Y vs Zr/Ti diagram (Winchester & Floyd 1977)."""
-    
+
     name = "Zr/Ti vs Nb/Y"
     reference = "Winchester & Floyd (1977)"
+    field_name = "WF1977_NbY"
+
+    @classmethod
+    def _get_fields(cls):
+        """Return field polygon definitions with label attributes and open polygon vertices."""
+        return [
+            {'name': 'Andesite Basalt',
+            'position': [0.1, 0.007],
+            'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+            'rotation': 0, 'color': 'k',
+            'x': [0.029, 0.172, 0.181, 0.19, 0.211, 0.234, 0.264, 0.287, 0.344, 0.412, 0.494, 0.405, 0.332,  0.239,0.15,0.095,0.06 ], 
+            'y': [0.005, 0.005, 0.005, 0.005,0.006, 0.007, 0.008, 0.009, 0.011, 0.013, 0.015,0.014, 0.013, 0.012, 0.012,0.012,0.012]},
+            {'name': 'Rhyodacite-Dacite',
+             'position': [0.1, 0.07],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.021, 0.311, 0.374, 0.450, 0.542, 0.652, 0.652, 0.665, 0.687, 0.027],
+             'y': [0.061, 0.027, 0.026, 0.026, 0.026, 0.026, 0.069, 0.078, 0.085, 0.213]},
+            {'name': 'Andesite',
+             'position': [0.1, 0.02],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.06, 0.095, 0.150, 0.239,  0.332, 0.405, 0.494, 0.568, 0.652, 0.652, 0.652, 0.542, 0.450, 0.374, 0.311, 0.021],
+             'y': [0.012, 0.012, 0.012, 0.012,  0.013, 0.014, 0.015, 0.017, 0.019, 0.027, 0.026, 0.026, 0.026, 0.026, 0.027, 0.061]},
+            {'name': 'Rhyolite',
+             'position': [0.3, 0.2],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.027, 0.687, 0.95, 0.317],
+             'y': [0.213, 0.085, 0.136, 0.704]},
+            {'name': 'Trachyte',
+             'position': [3.5, 0.1],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [9.675, 7.980, 6.590, 5.440, 4.490, 3.710, 3.250, 2.790, 2.446, 2.215, 2.073, 1.979, 1.760, 1.451, 1.400, 1.318, 1.220, 5.516, 10.0],
+             'y': [0.148, 0.160, 0.175, 0.196, 0.224, 0.261, 0.298, 0.359, 0.433, 0.522, 0.630, 0.760, 1.365, 0.167, 0.137, 0.113, 0.095, 0.038, 0.038]},
+            {'name': 'Trachy-andesite',
+             'position': [1.6, 0.04],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.652, 0.652, 0.652, 0.665, 0.687, 0.95, 1.22, 5.516, 4.962, 4.319, 3.637, 2.944, 2.579, 2.260, 1.980, 1.735, 1.520, 1.332, 1.182, 1.050, 0.932, 0.827, 0.735, 0.652],
+             'y': [0.019, 0.027, 0.069, 0.078, 0.085, 0.136, 0.095, 0.038, 0.031, 0.024, 0.020, 0.016, 0.018, 0.020, 0.021, 0.023, 0.024, 0.024, 0.024, 0.023, 0.022, 0.021, 0.020, 0.019]},
+            {'name': 'Alkali basalt',
+             'position': [1.3, 0.007],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.652, 0.652, 0.735, 0.827, 0.932, 1.050, 1.182, 1.332, 1.520, 1.735, 1.980, 2.260, 2.579, 2.944, 2.867],
+             'y': [0.002, 0.019, 0.020, 0.021, 0.022, 0.023, 0.024, 0.024, 0.024, 0.023, 0.021, 0.020, 0.018, 0.016, 0.004]},
+            {'name': 'Comendite',
+             'position': [0.8, 0.4],
+             'fontsize': 12, 'ha': 'cente'
+             'r', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [1.510, 1.760, 1.760, 1.451, 1.400, 1.318, 1.220, 0.950, 0.317],
+             'y': [3.022, 1.365, 1.365, 0.167, 0.137, 0.113, 0.095, 0.136, 0.704]},
+            {'name': 'Phonolite',
+             'position': [5.0, 0.4],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [9.675, 7.980, 6.590, 5.440, 4.490, 3.710, 3.250, 2.790, 2.446, 2.215, 2.073, 1.979, 1.760, 1.510, 10.0],
+             'y': [0.148, 0.160, 0.175, 0.196, 0.224, 0.261, 0.298, 0.359, 0.433, 0.522, 0.630, 0.760, 1.365, 1.0, 1.0]},
+            {'name': 'Basanite',
+             'position': [5.3, 0.007],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [10.0, 5.516, 4.319, 2.944, 2.867],
+             'y': [0.038, 0.038, 0.024, 0.016, 0.004]},
+            {'name': 'Sub-alkaline basalt',
+             'position': [0.1, 0.003],
+             'fontsize': 12, 'ha': 'center', 'va': 'top', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.029, 0.172, 0.172, 0.181, 0.190, 0.211, 0.234, 0.264, 0.287, 0.344, 0.412, 0.494, 0.568, 0.652, 0.652],
+             'y': [0.001, 0.001, 0.005, 0.005, 0.005, 0.006, 0.007, 0.008, 0.009, 0.011, 0.013, 0.015, 0.017, 0.019, 0.002]},
+        ]
+
+    @classmethod
+    def classify_point(cls, x, y):
+        """Return field name for point (x=Nb/Y, y=Zr/Ti) in log space, or None if outside all fields."""
+        import math
+        if x is None or y is None or x <= 0 or y <= 0:
+            return None
+        lx, ly = math.log10(x), math.log10(y)
+        for f in cls._get_fields():
+            log_xs = [math.log10(v) for v in f['x']] + [math.log10(f['x'][0])]
+            log_ys = [math.log10(v) for v in f['y']] + [math.log10(f['y'][0])]
+            if Path(list(zip(log_xs, log_ys))).contains_point((lx, ly)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -526,28 +715,10 @@ class Winchester_Floyd1977_NbY_ZrTi:
         ti = get_element_value(feature, layer, 'Ti')
         nb = get_element_value(feature, layer, 'Nb')
         y = get_element_value(feature, layer, 'Y')
-        
+
         if all(v is not None and v > 0 for v in [zr, ti, nb, y]):
             return nb/y, zr/ti
         return None, None
-
-    @classmethod
-    def draw_fields(cls, ax):
-        ax.plot([9.675, 7.980, 6.590, 5.440, 4.490, 3.710, 3.250, 2.790, 2.446, 2.215, 2.073, 1.979, 1.760, 1.510, 1.760, 1.451, 1.400, 1.318, 1.220, 0.950, 0.317, 0.951, 0.687, 0.195, 0.680, 0.665, 0.652, 0.652, 0.542, 0.450, 0.374, 0.311, 0.021, 0.311, 0.374, 0.450, 0.542, 0.652, 0.652, 0.568, 0.494, 0.405, 0.332, 0.273, 0.239, 0.150, 0.095, 0.060, 0.095, 0.150, 0.239, 0.273, 0.332, 0.405, 0.494, 0.412, 0.344, 0.287, 0.264, 0.234, 0.211, 0.190, 0.181, 0.172, 0.029, 0.172, 0.181, 0.190, 0.211, 0.234, 0.264, 0.287, 0.344, 0.412, 0.494, 0.568, 0.652, 0.652, 0.652, 0.735, 0.827, 0.932, 1.050, 1.182, 1.332, 1.520, 1.735, 1.980, 2.260, 2.579, 2.944, 2.867, 2.944, 3.637, 4.319, 4.962, 5.516, 10.000, 5.516, 1.222] ,
-                [0.148, 0.160, 0.175, 0.196, 0.224, 0.261, 0.298, 0.359, 0.433, 0.522, 0.630, 0.760, 1.365, 3.022, 1.365, 0.167, 0.137, 0.113, 0.095, 0.136, 0.704, 0.136, 0.085, 0.119, 0.085, 0.078, 0.069, 0.027, 0.026, 0.026, 0.026, 0.027, 0.061, 0.027, 0.026, 0.026, 0.026, 0.027, 0.019, 0.017, 0.015, 0.014, 0.013, 0.013, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.012, 0.013, 0.013, 0.014, 0.015, 0.013, 0.011, 0.009, 0.008, 0.007, 0.006, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.006, 0.007, 0.008, 0.009, 0.011, 0.013, 0.015, 0.017, 0.019, 0.002, 0.019, 0.020, 0.021, 0.022, 0.023, 0.024, 0.024, 0.024, 0.023, 0.021, 0.020, 0.018, 0.016, 0.004, 0.016, 0.020, 0.024, 0.031, 0.038, 0.039, 0.038, 0.095] 
-                , 'k-', linewidth=1.0)
-
-        ax.text(0.1, 0.007, 'Andesite, Basalt', fontsize=9, ha='center', va='center')
-        ax.text(0.1, 0.07, 'Rhyodacite\nDacite', fontsize=9, ha='center', va='center', style='italic')
-        ax.text(0.1, 0.02, 'Andesite', fontsize=9, ha='center', va='center', style='italic')
-        ax.text(0.3, 0.2, 'Rhyolite', fontsize=9, ha='center', va='center')
-        ax.text(3.5, 0.1, 'Trachyte', fontsize=9, ha='center', va='center')
-        ax.text(1.6, 0.04, 'Trachy-\nandesite', fontsize=9, ha='center', va='center')
-        ax.text(1.3, 0.007, 'Alkali\nBasalt', fontsize=9, ha='center', va='center')
-        ax.text(0.8, 0.4, 'Comendite', fontsize=9, ha='center', va='center')
-        ax.text(5.0, 0.4, 'Phonolite', fontsize=9, ha='center', va='center')
-        ax.text(5.3, 0.007, 'Basanite', fontsize=9, ha='center', va='center')
-        ax.text(0.1, 0.003, 'Sub-alkaline\nBasalt', fontsize=9, ha='center', va='top')
 
     @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
@@ -586,44 +757,75 @@ class Winchester_Floyd1977_NbY_ZrTi:
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
 
-class Meschede1986_Ternary:
+class Meschede1986_Ternary(PolygonDiagramMixin):
     """Zr/4-Nb*2-Y ternary diagram (Meschede, 1986)."""
-    
+
     name = "Zr/4 - Nb×2 - Y"
     reference = "Meschede (1986)"
+    field_name = "Mesch1986"
+
+    @classmethod
+    def _get_fields(cls):
+        return [
+            {'name': 'AI',
+             'position': [0.45, 0.5],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.34, 0.41, 0.56, 0.47, 0.31, 0.34],
+             'y': [0.09, 0.42, 0.49, 0.68, 0.32, 0.09]
+            },
+            {'name': 'AII',
+             'position': [0.45, 0.35],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.34, 0.46, 0.58, 0.56, 0.41, 0.34],
+            'y': [0.09, 0.3, 0.43, 0.49, 0.42, 0.09]
+            },
+            {'name': 'B',
+             'position': [0.55, 0.3],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.69, 0.51, 0.46, 0.58, 0.69],
+             'y': [0.19, 0.2, 0.3, 0.43, 0.19]
+            },
+            {'name': 'C',
+             'position': [0.42, 0.15],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.45, 0.34, 0.46, 0.51, 0.45],
+             'y': [0.03, 0.09, 0.3, 0.2, 0.03]},
+            {'name': 'D',
+             'position': [0.6, 0.07],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.5, 0.45, 0.51, 0.69, 0.77],
+             'y': [-0.0, 0.03, 0.2, 0.19, 0.0]}
+        ]
+
+    @classmethod
+    def classify_point(cls, a, b, c):
+        if a is None or b is None or c is None:
+            return None
+        if a + b + c <= 0:
+            return None
+        x, y = ternary_to_cartesian(a, b, c)
+        for f in cls._get_fields():
+            xs = f['x'] + [f['x'][0]]
+            ys = f['y'] + [f['y'][0]]
+            if Path(list(zip(xs, ys))).contains_point((x, y)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
         zr = get_element_value(feature, layer, 'Zr')
         nb = get_element_value(feature, layer, 'Nb')
         y = get_element_value(feature, layer, 'Y')
-        
+
         if all(v is not None and v >= 0 for v in [zr, nb, y]):
             return zr/4, y, nb*2
         return None, None, None
-
-    @classmethod
-    def draw_fields(cls, ax):
-        outer = [
-            (50, 50, 0), (60, 29, 11), (50, 13, 37), (13, 8, 79), (23, 77, 0),
-        ]
-        
-        for i in range(len(outer) - 1):
-            draw_ternary_line(ax, outer[i], outer[i+1], color='k', linewidth=1.5, linestyle='-')
-        
-        draw_ternary_line(ax, (60, 29, 11), (34, 17, 49), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (34, 17, 49), (17, 27, 56), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (60, 29, 11), (38, 28, 34), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (38, 28, 34), (18, 33, 49), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (37, 29, 34), (37, 40, 23), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (21, 57, 22), (37, 40, 23), color='k', linewidth=1, linestyle='--')
-        draw_ternary_line(ax, (52, 43, 4), (37, 40, 23), color='k', linewidth=1, linestyle='--')
-        
-        ternary_text(ax, 30, 15, 55, 'AI', fontsize=11, ha='center', va='center', fontweight='bold')
-        ternary_text(ax, 35, 25, 40, 'AII', fontsize=11, ha='center', va='center', fontweight='bold')
-        ternary_text(ax, 28, 37, 35, 'B', fontsize=11, ha='center', va='center', fontweight='bold')
-        ternary_text(ax, 50, 35, 15, 'C', fontsize=11, ha='center', va='center', fontweight='bold')
-        ternary_text(ax, 35, 55, 10, 'D', fontsize=11, ha='center', va='center', fontweight='bold')
 
     @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
@@ -665,9 +867,33 @@ class Meschede1986_Ternary:
 
 class Pearce1984_YNb:
     """Nb vs Y diagram for granites (Pearce et al., 1984)."""
-    
+
     name = "Nb vs Y"
     reference = "Pearce et al. (1984)"
+    field_name = "Pearce84_Y"
+
+    @classmethod
+    def classify_point(cls, x, y):
+        """Return tectonic field for point (x=Y ppm, y=Nb ppm)."""
+        import math
+        if x is None or y is None or x <= 0 or y <= 0:
+            return None
+        lx, ly = math.log10(x), math.log10(y)
+        # V-shaped boundary: left arm (1,2000)→(50,10), right arm (50,10)→(1000,100)
+        left_slope = (math.log10(10) - math.log10(2000)) / (math.log10(50) - math.log10(1))
+        right_slope = (math.log10(100) - math.log10(10)) / (math.log10(1000) - math.log10(50))
+        if x <= 50:
+            boundary_ly = math.log10(2000) + left_slope * (lx - math.log10(1))
+            if ly > boundary_ly:
+                return 'WPG'
+            else:
+                return 'VAG + syn-COLG'
+        else:
+            boundary_ly = math.log10(10) + right_slope * (lx - math.log10(50))
+            if ly > boundary_ly:
+                return 'WPG'
+            else:
+                return 'ORG'
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -734,9 +960,29 @@ class Pearce1984_YNb:
 
 class Pearce1984_YNbRb:
     """Rb vs (Y+Nb) diagram for granites (Pearce et al., 1984)."""
-    
+
     name = "Rb vs (Y+Nb)"
     reference = "Pearce et al. (1984)"
+    field_name = "Pearce84Rb"
+
+    @classmethod
+    def classify_point(cls, x, y):
+        """Return tectonic field for point (x=Y+Nb ppm, y=Rb ppm)."""
+        import math
+        if x is None or y is None or x <= 0 or y <= 0:
+            return None
+        lx, ly = math.log10(x), math.log10(y)
+        # Vertical boundary at x=50
+        # Left (x<50): line (1,80)→(50,300) separates VAG (below) from syn-COLG (above)
+        # Right (x>50): line (50,8)→(2000,400) separates ORG (below) from WPG (above)
+        if x < 50:
+            vag_slope = (math.log10(300) - math.log10(80)) / (math.log10(50) - math.log10(1))
+            vag_ly = math.log10(80) + vag_slope * (lx - math.log10(1))
+            return 'syn-COLG' if ly > vag_ly else 'VAG'
+        else:
+            wpg_slope = (math.log10(400) - math.log10(8)) / (math.log10(2000) - math.log10(50))
+            wpg_ly = math.log10(8) + wpg_slope * (lx - math.log10(50))
+            return 'WPG' if ly > wpg_ly else 'ORG'
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -803,77 +1049,222 @@ class Pearce1984_YNbRb:
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 
-class PearceCann1973_ZrTi:
+class PearceCann1973_ZrTi(PolygonDiagramMixin):
     """Ti vs Zr diagram (Pearce & Cann, 1973)."""
-    
+
     name = "Ti vs Zr"
     reference = "Pearce & Cann (1973)"
+    field_name = "PC1973ZrTi"
+
+    @classmethod
+    def _get_fields(cls):
+        return [
+            {'name': 'MORB',
+             'position': [87, 7500],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [110, 87.59, 69.57, 83.68, 109.68],
+             'y': [9000, 9000, 7628.23, 6244.66, 8131.34]},
+            {'name': 'CAB',
+             'position': [93, 3500],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [109.68, 83.68, 79.91, 79.77, 109.96],
+             'y': [8131.34, 6244.66, 5923.22, 1856.36, 1493.0]},
+            {'name': 'MORB+IAT+CAB',
+             'position': [60, 5500],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [83.68, 79.91, 43.71, 35.89, 47.76, 69.57],
+             'y': [6244.66, 5923.22, 3044.28, 3812.93, 5923.22, 7628.23]},
+            {'name': 'IAT',
+             'position': [22, 2700],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [79.91, 79.77, 4.16, 18.28, 59.08, 69.57, 47.76, 35.89, 43.71, 79.91, 83.68],
+             'y': [5923.22, 1856.36, 1618.78, 4330.02, 8634.46, 7628.23, 5923.22, 3812.93, 3044.28, 5923.22, 6244.66]},
+        ]
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
         zr = get_element_value(feature, layer, 'Zr')
         ti = get_element_value(feature, layer, 'TiO2')
-
         if zr is not None and ti is not None and zr > 0 and ti > 0:
             return zr, ti
         return None, None
 
     @classmethod
-    def draw_fields(cls, ax):
-        ax.plot([100, 80, 4, 19, 59, 84], [1600, 1800, 1600, 4400, 8600, 6200], 'b-', linewidth=1.5)
-        ax.plot([100, 84, 80, 44, 36, 48, 88], [7400, 6200, 5900, 3000, 3800, 5900, 9000], 'b-', linewidth=1.5)
-        ax.plot([80, 80], [1800, 5900], 'b-', linewidth=1.5)
-        
-        ax.text(22, 2700, 'IAT', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(60, 5500, 'MORB + IAT\n+ CAB', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(87, 7500, 'MORB', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(93, 3500, 'CAB', fontsize=12, ha='center', va='center', fontweight='bold')
-
-    @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         cls.draw_fields(ax)
-        
+
         default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
+
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
+
         plotted_categories = set()
-        
+
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
                 color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
                 marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
                 label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
                 plotted_categories.add(name)
-                
+
                 ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
                           linewidths=0.5, zorder=10, label=label)
-        
+
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0, 110)
         ax.set_ylim(0, 9000)
-        
+
         if show_category_legend and category_colors and len(category_colors) > 0:
             n_categories = len(category_colors)
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        
+
         if show_legend:
             legend_text = "IAT = Island arc tholeiites\nMORB = Mid-ocean ridge basalts\nCAB = Calc-alkaline basalts"
             ax.text(0.02, 0.98, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 
-class Wilson1989_TAS:
+class Wilson1989_TAS(PolygonDiagramMixin):
     """Na2O + K2O vs SiO2 Cox et al. (1979) adapted by Wilson (1989) for plutonic rocks"""
-    
+
     name = "Na2O + K2O vs SiO2"
     reference = "Wilson (1989) Plutonic Rocks"
+    field_name = "Wilsn89TAS"
+    
+    @classmethod
+    def _get_fields(cls):
+        """Return field polygon definitions as a list of dicts with label attributes and open polygon vertices."""
+        return [
+            {
+                'name': 'Ijolite',
+                'position': [39.0, 7.0],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [40.02, 42.91, 38.68, 35.29, 35.29,40.02],
+                'y': [9.52, 8.41, 4.22, 6.29, 6.72, 9.52]
+            },
+            {
+                'name': 'void',
+                'position': [45.5, 11.6],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [48.21, 50.78, 44.93, 42.91, 40.02, 48.21],
+                'y': [15.0, 13.4, 9.63, 8.41, 9.52, 15.0]
+            },
+            {
+                'name': 'Nepheline-Syenite',
+                'position': [54.6, 14.0],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [48.21, 51.16, 51.83, 61.44, 57.23, 54.14, 50.78],
+                'y': [15.0, 16.8, 16.81, 14.11, 11.42, 11.32, 13.4]
+            },
+            {
+                'name': 'void',
+                'position': [49.6, 10.9],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [50.78, 54.14, 49.24, 47.54, 44.93],
+                'y': [13.4, 11.32, 9.32, 8.61, 9.63]
+            },
+            {
+                'name': 'void',
+                'position': [43.0, 6.6],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [44.93, 47.54, 45.56, 43.99, 40.71, 38.68, 42.91, 44.93, 47.54],
+                'y': [9.63, 8.61, 7.15, 5.94, 3.25, 4.22, 8.41, 9.63, 8.61]
+            },
+            {
+                'name': 'Gabbro',
+                'position': [46.8, 3.8],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [40.71, 43.99, 51.52, 51.39, 51.33, 43.67, 40.71],
+                'y': [3.25, 5.94, 5.71, 5.16, 1.66, 1.95, 3.25]
+            },
+            {
+                'name': 'Gabbro',
+                'position': [48.5, 6.5],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [43.99, 45.56, 52.3, 51.52],
+                'y': [5.94, 7.15, 7.21, 5.71]
+            },
+            {
+                'name': 'Syenodiorite',
+                'position': [50.6, 8.2],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [49.24, 55.95, 52.3, 45.56, 47.54],
+                'y': [9.32, 9.16, 7.21, 7.15, 8.61]
+            },
+            {
+                'name': 'Syenite',
+                'position': [55.3, 10.2],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [49.24, 54.14, 57.23, 61.07, 55.95],
+                'y': [9.32, 11.32, 11.42, 10.06, 9.16]
+            },
+            {
+                'name': 'Syenite',
+                'position': [63.0, 11.5],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [61.44, 68.74, 64.47, 61.07, 57.23],
+                'y': [14.11, 11.8, 8.85, 10.06, 11.42]
+            },
+            {
+                'name': 'Syenodiorite',
+                'position': [58.1, 7.8],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [51.52, 52.3, 55.95, 61.07, 64.47, 62.45, 54.39],
+                'y': [5.71, 7.21, 9.16, 10.06, 8.85, 6.92, 5.69]
+            },
+            {
+                'name': 'Gabbro-Diorite',
+                'position': [52.9, 3.7],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [51.52, 54.39, 54.57, 51.33, 51.39],
+                'y': [5.71, 5.69, 1.75, 1.66, 5.16]
+            },
+            {
+                'name': 'Diorite',
+                'position': [58.4, 4.5],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [54.39, 62.45, 62.53, 54.57],
+                'y': [5.69, 6.92, 3.53, 1.75]
+            },
+            {
+                'name': 'Granodiorite',
+                'position': [65.2, 6.1],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [62.45, 64.47, 66.28, 69.58, 62.53],
+                'y': [6.92, 8.85, 8.03, 5.55, 3.53]
+            },
+            {
+                'name': 'Granite',
+                'position': [70.0, 8.7],
+                'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+                'rotation': 0, 'color': 'k',
+                'x': [64.47, 68.74, 73.72, 74.76, 74.86, 73.96, 69.58, 66.28],
+                'y': [8.85, 11.8, 9.72, 8.93, 7.92, 7.15, 5.55, 8.03]
+            },
+        ]
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
@@ -886,62 +1277,30 @@ class Wilson1989_TAS:
         return None, None
 
     @classmethod
-    def draw_fields(cls, ax):
-        ax.plot([35.3, 35.3, 40.0, 48.2, 51.2, 51.8, 61.5, 68.8, 73.8, 74.8, 74.8, 73.9, 69.6, 62.5, 54.6, 51.3, 43.7, 40.7, 38.7, 35.3], 
-                [6.3, 6.7,9.5, 15.0, 16.8, 16.8, 14.1, 11.8, 9.7, 8.9, 7.9, 7.1, 5.5, 3.5, 1.7, 1.6, 1.9, 3.2, 4.2, 6.3], 'b-', linewidth=1.5)
-        ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7], 
-                [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.5)
-        ax.plot([38.7, 43.0, 44.9, 50.8], [4.2, 8.4, 9.6, 13.4], 'b-', linewidth=1.5)
-        ax.plot([40.7, 44.0, 47.5, 49.3, 54.2], [3.2, 5.9, 8.6, 9.3, 11.3], 'b-', linewidth=1.5)
-        ax.plot([48.2, 50.8, 54.2, 57.2, 61.1, 64.5, 66.3, 69.6], [15.0, 13.4, 11.3, 11.4, 10.0, 8.8, 8.0, 5.5], 'b-', linewidth=1.5)
-        ax.plot([51.3, 51.4, 51.5, 52.3, 56.0, 61.1], [1.6, 5.2, 5.7, 7.2, 9.1, 10.0], 'b-', linewidth=1.5)
-        ax.plot([62.5, 62.4, 63.3, 64.5, 68.8], [3.5, 6.9, 7.7, 8.8, 11.8], 'b-', linewidth=1.5)
-        ax.plot([44.0, 51.5, 53.1, 54.4, 62.4], [5.9, 5.7, 5.7, 5.7, 6.9], 'b-', linewidth=1.5)
-        ax.plot([49.3, 55.3, 56.0, 61.1], [9.3, 9.2, 9.1, 10.0], 'b-', linewidth=1.5)
-        ax.plot([45.6, 52.3], [7.1, 7.2], 'b-', linewidth=1.5)
-        ax.plot([51.3, 51.4, 51.5], [1.6, 5.2, 5.7], 'b-', linewidth=1.5)
-        ax.plot([44.9, 47.5], [9.6, 8.6], 'b-', linewidth=1.5)
-        ax.plot([54.6, 54.4], [1.7, 5.7], 'b-', linewidth=1.5)
-        ax.plot([40.0, 43.0], [9.5, 8.4], 'b-', linewidth=1.5)
-        ax.plot([62.5, 62.4], [3.5, 6.9], 'b-', linewidth=1.5)
-        ax.plot([57.2, 61.5], [11.4, 14.1], 'b-', linewidth=1.5)
-        
-        ax.text(38.5, 7.0, 'Ijolite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(55.8, 13.9, 'Nepheline-syenite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(63.0, 11.7, 'Syenite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(68.8, 9.8, 'Alkaline\nGranite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(70.6, 7.3, 'Granite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(65.9, 5.5, 'Granodiorite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(57.6, 4.5, 'Diorite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(47.8, 2.5, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(44.4, 4.1, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(47.8, 6.3, 'Gabbro', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(54.1, 8.1, 'Syenodiorite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(55.5, 10.2, 'Syenite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
-        ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
-
-    @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
         cls.draw_fields(ax)
-        
+
         default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
+
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
+
         plotted_categories = set()
-        
+
         for i, ((x, y), name) in enumerate(zip(data, sample_names)):
             if x is not None and y is not None:
                 color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
                 marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
                 label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
                 plotted_categories.add(name)
-                
+
                 ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
                           linewidths=0.5, zorder=10, label=label)
-        
+
+        ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7], 
+                [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.)  
+        ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
+        ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')    
         ax.set_xlabel('SiO2 (wt%)', fontsize=12)
         ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
@@ -956,12 +1315,110 @@ class Wilson1989_TAS:
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
 
-class Cox1979_TAS:
+class Cox1979_TAS(PolygonDiagramMixin):
     """Na2O + K2O vs SiO2 Cox et al. (1979) for volcanic rocks"""
-    
+
     name = "Na2O + K2O vs SiO2"
     reference = "Cox et al. (1979) Volcanic Rocks"
-    
+    field_name = "Cox79_TAS"
+    # AKA Le Bas, 1986
+
+    @classmethod
+    def _get_fields(cls):
+        """Return field polygon definitions with label attributes and open polygon vertices."""
+        return [
+            {'name': 'Foidite',
+             'position': [43, 13],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [41.0, 52.5, 49.0],
+             'y': [7.0, 14.0, 15.5]},
+            {'name': 'Picro-basalt',
+             'position': [43, 2],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [45, 45, 41, 41],
+             'y': [0, 3, 3, 0]},
+            {'name': 'Basalt',
+             'position': [48, 3],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [52, 52, 45, 45],
+             'y': [0, 5, 5, 0]},
+            {'name': 'Basaltic Andesite',
+             'position': [54.8, 3.5],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [57, 57, 52, 52],
+             'y': [0, 5.9, 5, 0]},
+            {'name': 'Andesite',
+             'position': [60, 4],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [63, 63, 57, 57],
+             'y': [0, 7, 5.9, 0]},
+            {'name': 'Dacite',
+             'position': [67, 4.5],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [77, 69, 63, 63],
+             'y': [0, 8, 7, 0]},
+            {'name': 'Rhyolite',
+             'position': [73, 11],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [80, 80, 77, 69, 69],
+             'y': [13, 0, 0, 8, 13]},
+            {'name': 'Tephrite-Basanite',
+             'position': [43, 5.75],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [45, 45, 49.4, 45, 41, 41],
+             'y': [3, 5, 7.3, 9.4, 7, 3]},
+            {'name': 'Trachy-basalt',
+             'position': [48.8, 5.75],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [52, 49.4, 45],
+             'y': [5, 7.3, 5]},
+            {'name': 'Basaltic trachy-andesite',
+             'position': [52.7, 7],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [52, 57, 53, 49.4],
+             'y': [5, 5.9, 9.3, 7.3]},
+            {'name': 'Trachy-andesite',
+             'position': [58, 8],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [57, 63, 57.6, 53],
+             'y': [5.9, 7, 11.7, 9.3]},
+            {'name': 'Trachyte-Trachydacite',
+             'position': [65, 10],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [63, 57.6, 63, 69, 69],
+             'y': [14.56, 11.7, 7, 8, 13]},
+            {'name': 'Phono-tephrite',
+             'position': [48, 9.5],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [49.4, 53, 48.4, 45],
+             'y': [7.3, 9.3, 11.5, 9.4]},
+            {'name': 'Tephri-phonolite',
+             'position': [53, 12],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [53, 57.6, 52.5, 48.4],
+             'y': [9.3, 11.7, 14, 11.5]},
+            {'name': 'Phonolite',
+             'position': [56.5, 14],
+             'fontsize': 12, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [63, 57.6, 52.5, 49],
+             'y': [14.56, 11.7, 14, 15.5]},
+        ]
+
     @classmethod
     def calculate_coordinates(cls, feature, layer):
         na = get_element_value(feature, layer, 'Na2O')
@@ -971,37 +1428,6 @@ class Cox1979_TAS:
         if na is not None and k is not None and si is not None and na > 0 and k > 0 and si > 0:
             return si, (na + k)
         return None, None
-
-    @classmethod
-    def draw_fields(cls, ax):
-        ax.plot([41, 41], [1, 3], 'b-', linewidth=1.5)
-        ax.plot([41, 41, 45], [3, 7, 9.4], 'b--', linewidth=1.5)
-        ax.plot([45, 48.4, 52.5], [9.4, 11.5, 14], 'b-', linewidth=1.5)
-        ax.plot([45, 45, 45, 49.4, 53, 57.6, 60], [1, 3, 5, 7.3, 9.3, 11.7, 12.5], 'b-', linewidth=1.5)
-        ax.plot([45, 52, 57, 63, 69], [5, 5, 5.9, 7, 8], 'b-', linewidth=1.5)
-        ax.plot([52, 52, 49.4, 45], [1, 5, 7.3, 9.4], 'b-', linewidth=1.5)
-        ax.plot([57, 57, 53, 48.4], [1, 5.9, 9.3, 11.5], 'b-', linewidth=1.5)
-        ax.plot([63, 63, 57.6, 51], [1, 7, 11.7, 14.8], 'b-', linewidth=1.5)
-        ax.plot([76.5, 69, 69], [1, 8, 13], 'b-', linewidth=1.5)
-        ax.plot([45, 52], [5, 5], 'b-', linewidth=1.5)
-        ax.plot([41, 45], [3, 3], 'b-', linewidth=1.5)
-
-        ax.text(43, 13, 'Foidite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(43, 2, 'Picro-\nbasalt', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(48, 3, 'Basalt', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(54.8, 3.5, 'Basaltic\nAndesite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(60, 4, 'Andesite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(67, 4.5, 'Dacite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(73, 8, 'Rhyolite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(45, 7.5, 'Tephrite\n(ol <10%)', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(43, 5.7, 'Basanite\n(ol>10%)', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(48.8, 5.5, 'Trachy-\nbasalt', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(52.7, 7.5, 'Basaltic\ntrachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(58, 8, 'Trachy-\nandesite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(65, 10, 'Trachyte\n(q<20%)\n\nTrachydacite\n(q>20%)', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(48, 9.5, 'Phono-\ntephrite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(53, 12, 'Tephri-\nphonolite', fontsize=12, ha='center', va='center', fontweight='bold')
-        ax.text(58, 13, 'Phonolite', fontsize=12, ha='center', va='center', fontweight='bold')
 
     @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
@@ -1156,6 +1582,14 @@ class GeochemistryDockWidget(QDockWidget):
         discrim_opts.addWidget(self.discrim_legend)
         discrim_opts.addWidget(self.discrim_category_legend)
         discrim_layout.addLayout(discrim_opts)
+
+        classify_btn = QPushButton("Add Classification Field to Layer")
+        classify_btn.setToolTip(
+            "Adds (or updates) a text field in the layer with the classification\n"
+            "domain for every feature based on the selected diagram."
+        )
+        classify_btn.clicked.connect(self.add_classification_field)
+        discrim_layout.addWidget(classify_btn)
         discrim_layout.addStretch()
 
         self.tab_widget.addTab(discrim_tab, "Discrimination/Classification")
@@ -1580,6 +2014,61 @@ class GeochemistryDockWidget(QDockWidget):
         self._attach_spider_selection(fig, line_to_fid, layer.id())
         self.current_fig = fig
 
+    def add_classification_field(self):
+        """Add or update a classification field on the layer for the current discrimination diagram."""
+        layer_id = self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+
+        diagram_name = self.diagram_combo.currentText()
+        diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
+        field_name = diagram_class.field_name
+
+        if not layer.isEditable():
+            if not layer.startEditing():
+                QMessageBox.critical(self, "Error",
+                    f"Cannot edit layer '{layer.name()}'. Make sure it is not read-only.")
+                return
+
+        # Add the field if it doesn't exist yet
+        if layer.fields().indexOf(field_name) < 0:
+            layer.addAttribute(QgsField(field_name, QVariant.String, len=64))
+            layer.updateFields()
+
+        field_idx = layer.fields().indexOf(field_name)
+        if field_idx < 0:
+            QMessageBox.critical(self, "Error", f"Could not create field '{field_name}'.")
+            layer.rollBack()
+            return
+
+        # Classify every feature in the layer
+        n_classified = 0
+        for feature in layer.getFeatures():
+            coords = diagram_class.calculate_coordinates(feature, layer)
+            label = diagram_class.classify_point(*coords)
+            layer.changeAttributeValue(feature.id(), field_idx, label)
+            if label is not None:
+                n_classified += 1
+
+        layer.commitChanges()
+        layer.updateFields()
+
+        total = layer.featureCount()
+        QMessageBox.information(
+            self, "Classification Complete",
+            f"Field '{field_name}' written to layer '{layer.name()}'.\n"
+            f"{n_classified} of {total} features assigned a domain label.\n"
+            f"Features outside all known fields have NULL."
+        )
+
+        # Add the new field to the category dropdown if not already present, then select it
+        existing_fields = [self.id_field_combo.itemText(i) for i in range(self.id_field_combo.count())]
+        if field_name not in existing_fields:
+            self.id_field_combo.addItem(field_name)
+        self.id_field_combo.setCurrentText(field_name)
+
     def generate_discrimination_diagram(self, layer, features, sample_names):
         """Generate discrimination diagram."""
         diagram_name = self.diagram_combo.currentText()
@@ -1612,16 +2101,20 @@ class GeochemistryDockWidget(QDockWidget):
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
+        n_collections_before = len(ax.collections)
         diagram_class.plot(ax, data, sample_names,
                           show_legend=self.discrim_legend.isChecked(),
                           show_category_legend=self.discrim_category_legend.isChecked(),
                           sample_colors=sample_colors, category_colors=category_colors,
                           sample_markers=sample_markers, category_markers=category_markers,
                           n_samples=valid_count)
+        # Each ax.scatter() call in plot() adds one PathCollection; zip with fid_list order
+        new_collections = list(ax.collections[n_collections_before:])
+        fid_to_scatter = dict(zip(fid_list, new_collections))
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
-        self._attach_scatter_selection(fig, ax, pts_data, fid_list, layer.id())
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self.current_fig = fig
 
     def generate_custom_xy_plot(self, layer, features, sample_names):
@@ -1747,6 +2240,7 @@ class GeochemistryDockWidget(QDockWidget):
         plotted_categories = set()
         pts_data = []
         fid_list = []
+        fid_to_scatter = {}
 
         for i, (x, y, name, feature) in enumerate(zip(x_data, y_data, sample_names, features)):
             if x is not None and y is not None:
@@ -1759,14 +2253,15 @@ class GeochemistryDockWidget(QDockWidget):
                     plotted_categories.add(name)
 
                 if self.custom_markers.isChecked():
-                    ax.scatter(x, y, marker=marker, s=80, c=[color],
+                    sc = ax.scatter(x, y, marker=marker, s=80, c=[color],
                               edgecolors='black', linewidths=0.5, zorder=10, label=label)
                 else:
-                    ax.scatter(x, y, s=80, c=[color],
+                    sc = ax.scatter(x, y, s=80, c=[color],
                               edgecolors='black', linewidths=0.5, zorder=10, label=label)
 
                 pts_data.append((x, y))
                 fid_list.append(feature.id())
+                fid_to_scatter[feature.id()] = sc
 
         ax.set_xlabel(x_label, fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
@@ -1787,21 +2282,40 @@ class GeochemistryDockWidget(QDockWidget):
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
-        self._attach_scatter_selection(fig, ax, pts_data, fid_list, layer.id())
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self.current_fig = fig
 
-    def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, layer_id):
+    def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, fid_to_scatter, layer_id):
         """Wire up point selection on scatter-based plots.
 
         Left-click (no toolbar mode): select nearest point in QGIS.
         Shift+left-click: toggle that point in the QGIS selection.
         Left-click on empty space: clear QGIS selection.
         Right-click drag: lasso-select multiple points.
+        Selected points are highlighted with a red edge on the plot.
         """
         if not pts_data or not fid_list:
             return
 
         pts_array = np.array(pts_data, dtype=float)
+
+        def apply_selection(selected_fids):
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            layer.selectByIds(selected_fids)
+            selected_set = set(selected_fids)
+            for fid, sc in fid_to_scatter.items():
+                if fid in selected_set:
+                    sc.set_edgecolors('red')
+                    sc.set_linewidths(2.0)
+                    sc.set_zorder(15)
+                else:
+                    sc.set_edgecolors('black')
+                    sc.set_linewidths(0.5)
+                    sc.set_zorder(10)
+            fig.canvas.draw_idle()
+            self.refresh_selection()
 
         def on_click(event):
             if event.button != 1:
@@ -1830,16 +2344,16 @@ class GeochemistryDockWidget(QDockWidget):
 
             if dists[nearest_idx] > 10:
                 if 'shift' not in key.lower():
-                    layer.selectByIds([])
+                    apply_selection([])
                 return
 
             fid = fid_list[nearest_idx]
             if 'shift' in key.lower():
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
-                layer.selectByIds(list(current))
+                apply_selection(list(current))
             else:
-                layer.selectByIds([fid])
+                apply_selection([fid])
 
         def on_lasso_select(verts):
             if not verts:
@@ -1855,10 +2369,11 @@ class GeochemistryDockWidget(QDockWidget):
             lasso_path = Path(verts_disp)
             inside = lasso_path.contains_points(pts_disp)
             selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
-            layer.selectByIds(selected_fids)
+            apply_selection(selected_fids)
+            fig.canvas.draw_idle()
 
         fig.canvas.mpl_connect('button_press_event', on_click)
-        lasso = LassoSelector(ax, on_lasso_select, button=3)
+        lasso = LassoSelector(ax, on_lasso_select, button=3, useblit=False)
         fig._lasso_selector = lasso  # keep reference so it isn't garbage-collected
 
     def _attach_spider_selection(self, fig, line_to_fid, layer_id):
@@ -1866,12 +2381,33 @@ class GeochemistryDockWidget(QDockWidget):
 
         Click on a line: select that sample in QGIS.
         Shift+click: toggle that sample in the QGIS selection.
+        Selected lines are drawn bold; unselected lines are dimmed.
         """
         if not line_to_fid:
             return
 
+        fid_to_line = {fid: line for line, fid in line_to_fid.items()}
+
         for line in line_to_fid:
             line.set_picker(5)
+
+        def apply_selection(selected_fids):
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            layer.selectByIds(selected_fids)
+            selected_set = set(selected_fids)
+            for fid, line in fid_to_line.items():
+                if fid in selected_set:
+                    line.set_linewidth(3.0)
+                    line.set_alpha(1.0)
+                    line.set_zorder(10)
+                else:
+                    line.set_linewidth(1.5)
+                    line.set_alpha(0.35)
+                    line.set_zorder(5)
+            fig.canvas.draw_idle()
+            self.refresh_selection()
 
         def on_pick(event):
             if not isinstance(event.artist, Line2D):
@@ -1893,9 +2429,9 @@ class GeochemistryDockWidget(QDockWidget):
             if 'shift' in key.lower():
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
-                layer.selectByIds(list(current))
+                apply_selection(list(current))
             else:
-                layer.selectByIds([fid])
+                apply_selection([fid])
 
         fig.canvas.mpl_connect('pick_event', on_pick)
 
