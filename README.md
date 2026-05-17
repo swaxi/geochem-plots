@@ -57,14 +57,6 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 7. Click **Generate Plot**
 8. Click on the **None** button to clear all selections
 
-## Interactive Point Selection
-
-Clicking points on any plot selects the corresponding features on the active QGIS map layer.
-
-## Assign fields to points
-
-For discriminaiton/classification plots, the **Add classification field to layer** button creates a new field for the selected layer with the field name which the point falls in (or void if it is outside any defined fields).   
-
 ### Scatter plots (Discrimination diagrams & Custom XY plots)
 
 | Action | Result |
@@ -72,10 +64,27 @@ For discriminaiton/classification plots, the **Add classification field to layer
 | Left-click a point | Select that feature in QGIS (replaces current selection) |
 | Shift + left-click a point | Add or remove that feature from the QGIS selection |
 | Left-click empty space | Clear the QGIS selection |
-| Right-click drag (lasso) | Select all points enclosed by the lasso |
+| Right-click drag (lasso) | Select all points enclosed by the lasso |   
+
+
+## Interactive Point Selection
+
+Clicking points on any plot selects the corresponding features on the active QGIS map layer.  
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
+## Assign fields to points
+
+For discrimination/classification plots, the **Add classification field to layer** button creates a new field for the selected layer with the field name which the point falls in (or void if it is outside any defined fields). 
+
+## Assign labels to points
+
+For discrimination/classification and cutsom XY plots, the **Add label** dropdown menus and checkbox creates a label for selected points in a plot. 
+
+## Save/Load custom point styles   
+   
+If you have created a plot you can save the styles for each category to file and then edit the json file in a text editor. This saved file can be loaded back in and these will become the default styles for any future plot.
+   
 ### Spider diagrams
 
 | Action | Result |
