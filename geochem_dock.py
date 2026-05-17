@@ -5,6 +5,8 @@ Contains the main dockable widget with all plotting functionality.
 """
 
 import os
+import json
+import matplotlib.colors as mcolors
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
@@ -12,7 +14,7 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog, QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea
 )
-from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QSettings
 
 try:
     import matplotlib
@@ -1489,10 +1491,19 @@ class GeochemistryDockWidget(QDockWidget):
         super().__init__("Geochemistry Plotting Tools", parent)
         self.iface = iface
         self.current_fig = None
+        self.style_map = {}
+        self.style_file_path = None
+        self.last_category_colors = {}
+        self.last_category_markers = {}
         self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
-        
+
+        # Reload last-used style file
+        saved_path = QSettings('geochem_plots', 'geochem_plots').value('style_file', '')
+        if saved_path and os.path.isfile(saved_path):
+            self.load_style_from_file(saved_path)
+
         # Connect to layer registry for updates
         QgsProject.instance().layersAdded.connect(self.load_layers)
         QgsProject.instance().layersRemoved.connect(self.load_layers)
@@ -1529,7 +1540,35 @@ class GeochemistryDockWidget(QDockWidget):
         id_row.addWidget(self.id_field_combo)
         layer_layout.addLayout(id_row)
 
+        label_row = QHBoxLayout()
+        label_row.addWidget(QLabel("Add label:"))
+        self.label_field_combo = QComboBox()
+        label_row.addWidget(self.label_field_combo)
+        self.discrim_label = QCheckBox()
+        self.discrim_label.setChecked(False)
+        self.discrim_label.setToolTip("Label selected points using this field")
+        label_row.addWidget(self.discrim_label)
+        layer_layout.addLayout(label_row)
+
         main_layout.addWidget(layer_group)
+
+        # Style mapping row
+        style_row = QHBoxLayout()
+        style_row.addWidget(QLabel("Style:"))
+        self.style_file_label = QLabel("(none)")
+        self.style_file_label.setStyleSheet("color: gray; font-style: italic;")
+        style_row.addWidget(self.style_file_label, stretch=1)
+        load_style_btn = QPushButton("Load")
+        load_style_btn.setMaximumWidth(50)
+        load_style_btn.setToolTip("Load a colour/marker style JSON file")
+        load_style_btn.clicked.connect(lambda: self.load_style_from_file())
+        save_style_btn = QPushButton("Save")
+        save_style_btn.setMaximumWidth(50)
+        save_style_btn.setToolTip("Save current plot colours/markers to style file")
+        save_style_btn.clicked.connect(lambda: self.save_style_to_file())
+        style_row.addWidget(load_style_btn)
+        style_row.addWidget(save_style_btn)
+        main_layout.addLayout(style_row)
 
         # Tabs
         self.tab_widget = QTabWidget()
@@ -1582,14 +1621,6 @@ class GeochemistryDockWidget(QDockWidget):
         discrim_opts.addWidget(self.discrim_legend)
         discrim_opts.addWidget(self.discrim_category_legend)
         discrim_layout.addLayout(discrim_opts)
-
-        classify_btn = QPushButton("Add Classification Field to Layer")
-        classify_btn.setToolTip(
-            "Adds (or updates) a text field in the layer with the classification\n"
-            "domain for every feature based on the selected diagram."
-        )
-        classify_btn.clicked.connect(self.add_classification_field)
-        discrim_layout.addWidget(classify_btn)
         discrim_layout.addStretch()
 
         self.tab_widget.addTab(discrim_tab, "Discrimination/Classification")
@@ -1697,7 +1728,15 @@ class GeochemistryDockWidget(QDockWidget):
         btn_row.addWidget(select_all_btn)
         btn_row.addWidget(deselect_all_btn)
         sample_layout.addLayout(btn_row)
-        
+
+        classify_btn = QPushButton("Add Classification Field to Layer")
+        classify_btn.setToolTip(
+            "Adds (or updates) a text field in the layer with the classification\n"
+            "domain for every feature based on the selected diagram."
+        )
+        classify_btn.clicked.connect(self.add_classification_field)
+        sample_layout.addWidget(classify_btn)
+
         main_layout.addWidget(sample_group)
 
         # Action buttons
@@ -1753,12 +1792,14 @@ class GeochemistryDockWidget(QDockWidget):
             return
         
         self.id_field_combo.clear()
+        self.label_field_combo.clear()
         field_names = [field.name() for field in layer.fields()]
         for field_name in field_names:
             self.id_field_combo.addItem(field_name)
-        
+            self.label_field_combo.addItem(field_name)
+
         # Auto-select ID field
-        preferred_names = ['sample_id', 'sampleid', 'sample', 'name', 'id', 'sample_name', 
+        preferred_names = ['sample_id', 'sampleid', 'sample', 'name', 'id', 'sample_name',
                         'samplename', 'label', 'station', 'site', 'sample_no', 'samp_id',
                         'hole_id', 'holeid', 'drillhole', 'core_id', 'spec_id', 'specimen']
         best_index = 0
@@ -1971,6 +2012,7 @@ class GeochemistryDockWidget(QDockWidget):
         x_positions = np.arange(len(element_order))
 
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
 
         plotted_categories = set()
         line_to_fid = {}
@@ -2099,6 +2141,7 @@ class GeochemistryDockWidget(QDockWidget):
             fid_list.append(feature.id())
 
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
         n_collections_before = len(ax.collections)
@@ -2228,7 +2271,8 @@ class GeochemistryDockWidget(QDockWidget):
             return
         
         category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
-        
+        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
+
         fig, ax = plt.subplots(figsize=(12, 9))
         
         if self.x_scale_combo.currentIndex() == 1:
@@ -2298,6 +2342,8 @@ class GeochemistryDockWidget(QDockWidget):
             return
 
         pts_array = np.array(pts_data, dtype=float)
+        fid_to_pt = dict(zip(fid_list, pts_data))
+        current_labels = []
 
         def apply_selection(selected_fids):
             layer = QgsProject.instance().mapLayer(layer_id)
@@ -2305,6 +2351,14 @@ class GeochemistryDockWidget(QDockWidget):
                 return
             layer.selectByIds(selected_fids)
             selected_set = set(selected_fids)
+
+            for ann in current_labels:
+                try:
+                    ann.remove()
+                except Exception:
+                    pass
+            current_labels.clear()
+
             for fid, sc in fid_to_scatter.items():
                 if fid in selected_set:
                     sc.set_edgecolors('red')
@@ -2314,6 +2368,27 @@ class GeochemistryDockWidget(QDockWidget):
                     sc.set_edgecolors('black')
                     sc.set_linewidths(0.5)
                     sc.set_zorder(10)
+
+            if self.discrim_label.isChecked() and selected_fids:
+                label_field = self.label_field_combo.currentText()
+                layer_field_names = [f.name() for f in layer.fields()]
+                if label_field in layer_field_names:
+                    for fid in selected_fids:
+                        if fid not in fid_to_pt:
+                            continue
+                        x, y = fid_to_pt[fid]
+                        feature = layer.getFeature(fid)
+                        if not feature.isValid():
+                            continue
+                        val = feature[label_field]
+                        if val is not None and val != NULL:
+                            ann = ax.annotate(
+                                str(val), xy=(x, y),
+                                xytext=(6, 0), textcoords='offset points',
+                                fontsize=8, va='center'
+                            )
+                            current_labels.append(ann)
+
             fig.canvas.draw_idle()
             self.refresh_selection()
 
@@ -2434,6 +2509,72 @@ class GeochemistryDockWidget(QDockWidget):
                 apply_selection([fid])
 
         fig.canvas.mpl_connect('pick_event', on_pick)
+
+    # ------------------------------------------------------------------
+    # Style file management
+    # ------------------------------------------------------------------
+
+    def apply_style_overrides(self, category_colors, category_markers, sample_names):
+        """Override auto-generated colors/markers with any entries in style_map.
+        Returns updated (category_colors, category_markers, sample_colors, sample_markers).
+        """
+        for cat, style in self.style_map.items():
+            if cat not in category_colors:
+                continue
+            if 'color' in style:
+                try:
+                    category_colors[cat] = mcolors.to_rgba(style['color'])
+                except ValueError:
+                    pass
+            if 'marker' in style:
+                category_markers[cat] = style['marker']
+        sample_colors = [category_colors[n] for n in sample_names]
+        sample_markers = [category_markers[n] for n in sample_names]
+        self.last_category_colors = dict(category_colors)
+        self.last_category_markers = dict(category_markers)
+        return category_colors, category_markers, sample_colors, sample_markers
+
+    def load_style_from_file(self, path=None):
+        """Load colour/marker style mappings from a JSON file."""
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Style File", "", "JSON Files (*.json);;All Files (*)")
+            if not path:
+                return
+        try:
+            with open(path) as f:
+                self.style_map = json.load(f)
+            self.style_file_path = path
+            QSettings('geochem_plots', 'geochem_plots').setValue('style_file', path)
+            self.style_file_label.setText(os.path.basename(path))
+            self.style_file_label.setStyleSheet("")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not load style file:\n{e}")
+
+    def save_style_to_file(self):
+        """Merge current plot colours/markers into style_map and save to JSON."""
+        if not self.last_category_colors:
+            QMessageBox.information(self, "No plot yet",
+                "Generate a plot first so there are colours/markers to save.")
+            return
+        # Merge latest plot colors into style_map
+        for cat, color in self.last_category_colors.items():
+            self.style_map[cat] = {
+                'color': mcolors.to_hex(color),
+                'marker': self.last_category_markers.get(cat, 'o'),
+            }
+        # Ask for path if none set yet
+        if self.style_file_path is None:
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Style File", "", "JSON Files (*.json);;All Files (*)")
+            if not path:
+                return
+            self.style_file_path = path
+            QSettings('geochem_plots', 'geochem_plots').setValue('style_file', path)
+            self.style_file_label.setText(os.path.basename(path))
+            self.style_file_label.setStyleSheet("")
+        with open(self.style_file_path, 'w') as f:
+            json.dump(self.style_map, f, indent=2, sort_keys=True)
 
     def save_plot(self):
         """Save the current plot."""
