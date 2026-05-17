@@ -70,7 +70,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 
 ## Interactive Point Selection
 
-Clicking points on any plot selects the corresponding features on the active QGIS map layer.  
+Clicking points on any plot selects the corresponding features on the active QGIS map layer.  Click and drag lassos a group of points.
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
@@ -80,7 +80,7 @@ For discrimination/classification plots, the **Add classification field to layer
 
 ## Assign labels to points
 
-For discrimination/classification and cutsom XY plots, the **Add label** dropdown menus and checkbox creates a label for selected points in a plot. 
+For discrimination/classification and cutsom XY plots, the **Add label** dropdown menus and checkbox creates a label for selected points in a plot. This also defines the pop up label that will appear when you hover over a point.   
 
 ## Save/Load custom point styles   
    
