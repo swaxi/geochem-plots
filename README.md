@@ -5,7 +5,7 @@ A simple geochemistry plotting tool for QGIS that creates spider diagrams, discr
 
 ### Recent changelog
 changelog=0.0.4 Allow selection of plotted points to update map selections   
-    - Assign field labels to points 
+    - Assign field labels to points   
     - Add labels to selected points in plots     
     - Allow symbol choices to be saved to and read from file   
     0.0.3 Add Winchester & Floyd 1977 plot   
