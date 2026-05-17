@@ -2345,6 +2345,13 @@ class GeochemistryDockWidget(QDockWidget):
         fid_to_pt = dict(zip(fid_list, pts_data))
         current_labels = []
 
+        # Hover tooltip annotation (hidden until mouse is near a point)
+        hover_ann = ax.annotate(
+            '', xy=(0, 0), xytext=(10, 10), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', ec='gray', alpha=0.9),
+            fontsize=8, visible=False, zorder=20
+        )
+
         def apply_selection(selected_fids):
             layer = QgsProject.instance().mapLayer(layer_id)
             if layer is None:
@@ -2392,8 +2399,32 @@ class GeochemistryDockWidget(QDockWidget):
             fig.canvas.draw_idle()
             self.refresh_selection()
 
+        _lasso_used = [False]
+
+        def on_lasso_select(verts):
+            if not verts:
+                return
+            _lasso_used[0] = True
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            try:
+                pts_disp = ax.transData.transform(pts_array)
+                verts_disp = ax.transData.transform(np.array(verts))
+            except Exception:
+                return
+            lasso_path = Path(verts_disp)
+            inside = lasso_path.contains_points(pts_disp)
+            selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
+            apply_selection(selected_fids)
+            fig.canvas.draw_idle()
+
         def on_click(event):
             if event.button != 1:
+                return
+            # If lasso just fired on this mouse-up, skip single-point logic
+            if _lasso_used[0]:
+                _lasso_used[0] = False
                 return
             try:
                 if fig.canvas.toolbar.mode != '':
@@ -2430,25 +2461,55 @@ class GeochemistryDockWidget(QDockWidget):
             else:
                 apply_selection([fid])
 
-        def on_lasso_select(verts):
-            if not verts:
-                return
-            layer = QgsProject.instance().mapLayer(layer_id)
-            if layer is None:
+        _hover_cache = {}   # (fid, field_name) → label string
+        _last_hover_fid = [None]
+
+        def on_hover(event):
+            if event.inaxes != ax or event.xdata is None:
+                if hover_ann.get_visible():
+                    hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
+                _last_hover_fid[0] = None
                 return
             try:
                 pts_disp = ax.transData.transform(pts_array)
-                verts_disp = ax.transData.transform(np.array(verts))
+                cur_disp = ax.transData.transform([[event.xdata, event.ydata]])[0]
             except Exception:
                 return
-            lasso_path = Path(verts_disp)
-            inside = lasso_path.contains_points(pts_disp)
-            selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
-            apply_selection(selected_fids)
-            fig.canvas.draw_idle()
+            dists = np.sqrt(np.sum((pts_disp - cur_disp) ** 2, axis=1))
+            nearest_idx = int(np.argmin(dists))
+            if dists[nearest_idx] <= 10:
+                fid = fid_list[nearest_idx]
+                label_field = self.label_field_combo.currentText()
+                cache_key = (fid, label_field)
+                if cache_key not in _hover_cache:
+                    layer = QgsProject.instance().mapLayer(layer_id)
+                    val = ''
+                    if layer and label_field in [f.name() for f in layer.fields()]:
+                        feat = layer.getFeature(fid)
+                        if feat.isValid():
+                            v = feat[label_field]
+                            val = str(v) if v is not None and v != NULL else ''
+                    _hover_cache[cache_key] = val
+                label = _hover_cache[cache_key]
+                if fid != _last_hover_fid[0]:
+                    _last_hover_fid[0] = fid
+                    if label:
+                        hover_ann.set_text(label)
+                        hover_ann.xy = pts_data[nearest_idx]
+                        hover_ann.set_visible(True)
+                    else:
+                        hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
+            else:
+                if _last_hover_fid[0] is not None:
+                    _last_hover_fid[0] = None
+                    hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
 
-        fig.canvas.mpl_connect('button_press_event', on_click)
-        lasso = LassoSelector(ax, on_lasso_select, button=3, useblit=False)
+        fig.canvas.mpl_connect('button_release_event', on_click)
+        fig.canvas.mpl_connect('motion_notify_event', on_hover)
+        lasso = LassoSelector(ax, on_lasso_select, button=1, useblit=False)
         fig._lasso_selector = lasso  # keep reference so it isn't garbage-collected
 
     def _attach_spider_selection(self, fig, line_to_fid, layer_id):
@@ -2508,7 +2569,58 @@ class GeochemistryDockWidget(QDockWidget):
             else:
                 apply_selection([fid])
 
+        ax = next(iter(line_to_fid)).axes
+        hover_ann = ax.annotate(
+            '', xy=(0, 0), xytext=(10, 10), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', ec='gray', alpha=0.9),
+            fontsize=8, visible=False, zorder=20
+        )
+        _hover_cache = {}   # (fid, field_name) → label string
+        _last_hover_fid = [None]
+
+        def on_hover(event):
+            if event.inaxes != ax or event.xdata is None:
+                if hover_ann.get_visible():
+                    hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
+                _last_hover_fid[0] = None
+                return
+            hit_fid = None
+            for line, fid in line_to_fid.items():
+                contains, _ = line.contains(event)
+                if contains:
+                    hit_fid = fid
+                    break
+            if hit_fid is not None:
+                label_field = self.label_field_combo.currentText()
+                cache_key = (hit_fid, label_field)
+                if cache_key not in _hover_cache:
+                    layer = QgsProject.instance().mapLayer(layer_id)
+                    val = ''
+                    if layer and label_field in [f.name() for f in layer.fields()]:
+                        feat = layer.getFeature(hit_fid)
+                        if feat.isValid():
+                            v = feat[label_field]
+                            val = str(v) if v is not None and v != NULL else ''
+                    _hover_cache[cache_key] = val
+                label = _hover_cache[cache_key]
+                if hit_fid != _last_hover_fid[0]:
+                    _last_hover_fid[0] = hit_fid
+                    if label:
+                        hover_ann.set_text(label)
+                        hover_ann.xy = (event.xdata, event.ydata)
+                        hover_ann.set_visible(True)
+                    else:
+                        hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
+            else:
+                if _last_hover_fid[0] is not None:
+                    _last_hover_fid[0] = None
+                    hover_ann.set_visible(False)
+                    fig.canvas.draw_idle()
+
         fig.canvas.mpl_connect('pick_event', on_pick)
+        fig.canvas.mpl_connect('motion_notify_event', on_hover)
 
     # ------------------------------------------------------------------
     # Style file management

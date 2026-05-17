@@ -8,6 +8,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
     - Assign field labels to points   
     - Add labels to selected points in plots     
     - Allow symbol choices to be saved to and read from file   
+    - Add popup label when cursor near a point  
     0.0.3 Add Winchester & Floyd 1977 plot   
     - Allow any numeric field for Custom xy plots   
     - Allow field names with Na_Sodium naming convention   
@@ -64,7 +65,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 | Left-click a point | Select that feature in QGIS (replaces current selection) |
 | Shift + left-click a point | Add or remove that feature from the QGIS selection |
 | Left-click empty space | Clear the QGIS selection |
-| Right-click drag (lasso) | Select all points enclosed by the lasso |   
+| Left-click drag (lasso) | Select all points enclosed by the lasso |   
 
 
 ## Interactive Point Selection
