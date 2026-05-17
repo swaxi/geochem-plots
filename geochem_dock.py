@@ -2404,15 +2404,15 @@ class GeochemistryDockWidget(QDockWidget):
         def on_lasso_select(verts):
             if not verts:
                 return
-            _lasso_used[0] = True
-            layer = QgsProject.instance().mapLayer(layer_id)
-            if layer is None:
-                return
             try:
                 pts_disp = ax.transData.transform(pts_array)
                 verts_disp = ax.transData.transform(np.array(verts))
             except Exception:
                 return
+            # Ignore if the "lasso" didn't actually move (bare click with no drag)
+            if np.ptp(verts_disp, axis=0).max() < 5:
+                return
+            _lasso_used[0] = True
             lasso_path = Path(verts_disp)
             inside = lasso_path.contains_points(pts_disp)
             selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
