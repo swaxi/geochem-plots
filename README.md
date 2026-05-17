@@ -83,7 +83,7 @@ For discrimination/classification and cutsom XY plots, the **Add label** dropdow
 
 ## Save/Load custom point styles   
    
-If you have created a plot you can save the styles for each category to file and then edit the json file in a text editor. This saved file can be loaded back in and these will become the default styles for any future plot.
+If you have created a plot you can save the styles for each category to file and then edit the json file in a text editor. This saved file can be loaded back in and these will become the default styles for any future plot. Point colours follow standard #FF00BB style conventions and symbol type follows matplotlib conventions: https://matplotlib.org/stable/gallery/lines_bars_and_markers/marker_reference.html
    
 ### Spider diagrams
 
