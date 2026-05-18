@@ -55,6 +55,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 - From the **Samples** list in the plugin OR 
 - From the GIS layer using the **Select Features** tool, aftern selecting the layer from the **QGIS Layers** panel (click on **Refresh** button if you change layer selections) OR
 - Click on the **All** button to select all features in a layer (you can use layer filters to narrow what will be plotted)
+![Map selection](map2plot.png)
 7. Click **Generate Plot**
 8. Click on the **None** button to clear all selections
 
@@ -74,13 +75,15 @@ Clicking points on any plot selects the corresponding features on the active QGI
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
+![Plot Selection](plot2map.png)
+
 ## Assign fields to points
 
 For discrimination/classification plots, the **Add classification field to layer** button creates a new field for the selected layer with the field name which the point falls in (or void if it is outside any defined fields). 
 
 ## Assign labels to points
 
-For discrimination/classification and cutsom XY plots, the **Add label** dropdown menus and checkbox creates a label for selected points in a plot. This also defines the pop up label that will appear when you hover over a point.   
+For discrimination/classification and custom XY plots, the **Add label** dropdown menus and checkbox creates a label for selected points in a plot. This also defines the pop up label that will appear when you hover over a point.   
 
 ## Save/Load custom point styles   
    
