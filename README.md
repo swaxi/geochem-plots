@@ -50,7 +50,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 3. A dockable panel will appear on the right side
 ![Spider Plots](tab1.png)
 4. Select your layer from the **Layer Selection: Layers** drop down menu in the plugin, and the field to use for sample categories from the **Layer Selection: Category** drop down menu
-5. Choose the plot type (**Spider, Discrimination, or Custom XY**)
+5. Choose the plot type (**Spider, Discrimination, or Custom XY and Triangle Plots**)
 ![Discrimination/Classification](tab2.png)
 ![Custom XY](tab3.png)
 6. Select samples to be plotted using one of these methods:
@@ -61,7 +61,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 7. Click **Generate Plot**
 8. Click on the **None** button to clear all selections
 
-### Scatter plots (Discrimination diagrams & Custom XY plots)
+### Scatter plots (Discrimination diagram and Custom XY & Triangle plots)
 
 | Action | Result |
 |---|---|
