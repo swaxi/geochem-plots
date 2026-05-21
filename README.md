@@ -129,3 +129,6 @@ This plugin is free software; you can redistribute it and/or modify it under the
 
 ## Logo
 Thanks to https://pixabay.com/vectors/bottles-blue-green-transparent-34333/
+
+## Acknowledgements
+Thanks to Julien Perret, Quentin Masurel, Leigh Bettenay and Simon Passsey for suggestions and beta-testing.
