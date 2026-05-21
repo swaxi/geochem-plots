@@ -9,6 +9,8 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
     - Add labels to selected points in plots     
     - Allow symbol choices to be saved to and read from file   
     - Add popup label when cursor near a point  
+    - Selected points plot ontop on map layer   
+    - Custom triangle plot added   
     0.0.3 Add Winchester & Floyd 1977 plot   
     - Allow any numeric field for Custom xy plots   
     - Allow field names with Na_Sodium naming convention   
@@ -66,12 +68,12 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 | Left-click a point | Select that feature in QGIS (replaces current selection) |
 | Shift + left-click a point | Add or remove that feature from the QGIS selection |
 | Left-click empty space | Clear the QGIS selection |
-| Left-click drag (lasso) | Select all points enclosed by the lasso |   
+| Left-click drag (rectangle) | Select all points enclosed by the rectangle |   
 
 
 ## Interactive Point Selection
 
-Clicking points on any plot selects the corresponding features on the active QGIS map layer.  Click and drag lassos a group of points.
+Clicking points on any plot selects the corresponding features on the active QGIS map layer.  Click and drag rectangle for a group of points.
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 

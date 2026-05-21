@@ -34,7 +34,7 @@ try:
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
-    from matplotlib.widgets import LassoSelector
+    from matplotlib.widgets import RectangleSelector
     from matplotlib.path import Path
     import numpy as np
     MATPLOTLIB_AVAILABLE = True
@@ -227,6 +227,29 @@ def find_element_field(layer, element):
                            'O2_PCT', 'O_PCT', '2O3_PCT', '2O_PCT', '2O5_PCT']:
                 return field_name
 
+    # 4. For oxide lookups, fall back to the base element ppm field.
+    # e.g. looking for 'TiO2' but only 'Ti_Titanium' (ppm) exists.
+    # The caller (get_element_value) skips unit conversion when the returned
+    # field name doesn't contain 'TIO2'/'MNO'/'P2O5', so ppm values are used as-is.
+    oxide_to_base = {
+        'TiO2': 'Ti', 'FeO': 'Fe', 'Fe2O3': 'Fe', 'MnO': 'Mn',
+        'MgO': 'Mg', 'CaO': 'Ca', 'Na2O': 'Na', 'K2O': 'K',
+        'P2O5': 'P', 'SiO2': 'Si', 'Al2O3': 'Al',
+    }
+    if element in oxide_to_base:
+        base = oxide_to_base[element]
+        base_upper = base.upper()
+        # Symbol_Fullname style (e.g. Ti_Titanium)
+        base_fn_re = re.compile(rf"^{re.escape(base)}_[A-Za-z]+$", re.IGNORECASE)
+        for fn in field_names:
+            if base_fn_re.match(fn):
+                return fn
+        # Plain element name or _ppm suffix
+        for fn in field_names:
+            fn_upper = fn.upper()
+            if fn_upper in (base_upper, f"{base_upper}_PPM", f"{base_upper}_PPB"):
+                return fn
+
     return None
 
 def find_element_field_old(layer, element):
@@ -284,12 +307,13 @@ def get_element_value(feature, layer, element, convert_to_ppm=True):
             
             if convert_to_ppm:
                 field_upper = field_name.upper()
-                
-                if 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
+                # TiO2, MnO, P2O5 are always stored as wt% — convert even when the
+                # field has no _pct/_wt suffix (e.g. a plain 'TiO2' column).
+                if 'TIO2' in field_upper:
                     value = value * 5995
-                elif 'MNO' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
+                elif 'MNO' in field_upper:
                     value = value * 7745
-                elif 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper):
+                elif 'P2O5' in field_upper:
                     value = value * 4364
                     
             return value
@@ -438,6 +462,50 @@ def ternary_text(ax, a, b, c, text, **kwargs):
 # DISCRIMINATION DIAGRAMS
 # =============================================================================
 
+def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers,
+                     show_category_legend, category_colors):
+    """One ax.scatter() call per category group instead of one per point.
+
+    Handles both binary (x, y) and ternary (a, b, c) coordinate tuples.
+    Returns {fid: (PathCollection, local_index)} for use by apply_selection().
+    """
+    default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+    fid_iter = iter(fids)
+    cat_groups = {}
+
+    for i, (coords, name) in enumerate(zip(data, sample_names)):
+        if len(coords) == 3:
+            if any(v is None for v in coords):
+                continue
+            x, y = ternary_to_cartesian(*coords)
+        else:
+            x, y = coords[0], coords[1]
+            if x is None or y is None:
+                continue
+        fid = next(fid_iter)
+        color  = sample_colors[i]  if i < len(sample_colors)  else sample_colors[i  % len(sample_colors)]
+        marker = sample_markers[i] if sample_markers           else default_markers[i % len(default_markers)]
+        cat_key = (name, marker) if sample_markers else name
+        if cat_key not in cat_groups:
+            cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+                                   'marker': marker, 'name': name}
+        g = cat_groups[cat_key]
+        g['xs'].append(x);  g['ys'].append(y)
+        g['fids'].append(fid);  g['colors'].append(color)
+
+    plotted_names = set()
+    fid_to_scatter = {}
+    for g in cat_groups.values():
+        label = None
+        if show_category_legend and category_colors and g['name'] not in plotted_names:
+            label = g['name']
+            plotted_names.add(g['name'])
+        sc = ax.scatter(g['xs'], g['ys'], marker=g['marker'], s=80, c=g['colors'],
+                        edgecolors='black', linewidths=0.5, zorder=10, label=label)
+        for local_idx, fid in enumerate(g['fids']):
+            fid_to_scatter[fid] = (sc, local_idx)
+    return fid_to_scatter
+
 class PolygonDiagramMixin:
     """Shared classify_point and draw_fields for diagram classes that define _get_fields().
 
@@ -580,27 +648,16 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
         ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
@@ -614,6 +671,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter
 
 
 class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
@@ -723,27 +781,16 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
@@ -757,6 +804,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter
 
 
 class Meschede1986_Ternary(PolygonDiagramMixin):
@@ -830,27 +878,15 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
         return None, None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         plot_ternary_axes(ax, labels=['Zr/4', 'Y', 'Nb×2'])
         cls.draw_fields(ax)
         
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, (coords, name) in enumerate(zip(data, sample_names)):
-            if coords[0] is not None and coords[1] is not None and coords[2] is not None:
-                x, y = ternary_to_cartesian(*coords)
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
@@ -865,6 +901,7 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
             legend_text = "AI, AII = WP alkali basalts\nB = P-type MORB\nC = VAB\nD = N-type MORB"
             ax.text(0.9, 0.5, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        return fid_to_scatter
 
 
 class Pearce1984_YNb:
@@ -918,27 +955,16 @@ class Pearce1984_YNb:
         ax.text(200, 7, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         ax.set_xlabel('Y (ppm)', fontsize=12)
         ax.set_ylabel('Nb (ppm)', fontsize=12)
@@ -958,6 +984,7 @@ class Pearce1984_YNb:
             ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='bottom', horizontalalignment='right',
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        return fid_to_scatter
 
 
 class Pearce1984_YNbRb:
@@ -1009,27 +1036,16 @@ class Pearce1984_YNbRb:
         ax.text(400, 20, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
-        
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         ax.set_xlabel('Y + Nb (ppm)', fontsize=12)
         ax.set_ylabel('Rb (ppm)', fontsize=12)
@@ -1049,6 +1065,7 @@ class Pearce1984_YNbRb:
             ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='bottom', horizontalalignment='right',
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        return fid_to_scatter
 
 
 class PearceCann1973_ZrTi(PolygonDiagramMixin):
@@ -1096,25 +1113,14 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         cls.draw_fields(ax)
-
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
 
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-
-        plotted_categories = set()
-
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
 
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
@@ -1133,6 +1139,7 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
             legend_text = "IAT = Island arc tholeiites\nMORB = Mid-ocean ridge basalts\nCAB = Calc-alkaline basalts"
             ax.text(0.02, 0.98, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        return fid_to_scatter
 
 
 class Wilson1989_TAS(PolygonDiagramMixin):
@@ -1279,27 +1286,16 @@ class Wilson1989_TAS(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         cls.draw_fields(ax)
-
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
 
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
 
-        plotted_categories = set()
-
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
-
-        ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7], 
+        ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7],
                 [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.)  
         ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
         ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')    
@@ -1315,6 +1311,7 @@ class Wilson1989_TAS(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter
 
 
 class Cox1979_TAS(PolygonDiagramMixin):
@@ -1432,25 +1429,14 @@ class Cox1979_TAS(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
         cls.draw_fields(ax)
-        
-        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        
-        plotted_categories = set()
-        
-        for i, ((x, y), name) in enumerate(zip(data, sample_names)):
-            if x is not None and y is not None:
-                color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
-                marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-                label = name if (show_category_legend and category_colors and name not in plotted_categories) else None
-                plotted_categories.add(name)
-                
-                ax.scatter(x, y, marker=marker, s=80, c=[color], edgecolors='black',
-                          linewidths=0.5, zorder=10, label=label)
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
         
         ax.set_xlabel('SiO2 (wt%)', fontsize=12)
         ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
@@ -1464,6 +1450,7 @@ class Cox1979_TAS(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter
 
 
 DISCRIMINATION_DIAGRAMS = {
@@ -1704,6 +1691,48 @@ class GeochemistryDockWidget(QDockWidget):
         custom_xy_layout.addStretch()
 
         self.tab_widget.addTab(custom_xy_tab, "Custom XY")
+
+        # Tab 4: Custom Ternary Plot
+        custom_tern_tab = QWidget()
+        custom_tern_layout = QVBoxLayout(custom_tern_tab)
+        custom_tern_layout.setSpacing(5)
+
+        for apex_label, num_attr, denom_attr in [
+            ("A (top apex)",   "tern_a_num_combo", "tern_a_denom_combo"),
+            ("B (bottom-left apex)", "tern_b_num_combo", "tern_b_denom_combo"),
+            ("C (bottom-right apex)", "tern_c_num_combo", "tern_c_denom_combo"),
+        ]:
+            grp = QGroupBox(apex_label)
+            grid = QGridLayout(grp)
+            grid.setSpacing(3)
+            grid.addWidget(QLabel("Num:"), 0, 0)
+            num_combo = QComboBox()
+            num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
+            grid.addWidget(num_combo, 0, 1)
+            grid.addWidget(QLabel("Denom:"), 0, 2)
+            denom_combo = QComboBox()
+            denom_combo.addItems(CUSTOM_XY_ELEMENTS)
+            grid.addWidget(denom_combo, 0, 3)
+            setattr(self, num_attr, num_combo)
+            setattr(self, denom_attr, denom_combo)
+            custom_tern_layout.addWidget(grp)
+
+        self.tern_show_all_fields = QCheckBox("Show all numeric fields")
+        self.tern_show_all_fields.setChecked(False)
+        self.tern_show_all_fields.toggled.connect(self.refresh_custom_ternary_combos)
+        custom_tern_layout.addWidget(self.tern_show_all_fields)
+
+        tern_opts = QHBoxLayout()
+        self.tern_legend = QCheckBox("Legend")
+        self.tern_legend.setChecked(True)
+        self.tern_markers = QCheckBox("Markers")
+        self.tern_markers.setChecked(True)
+        tern_opts.addWidget(self.tern_legend)
+        tern_opts.addWidget(self.tern_markers)
+        custom_tern_layout.addLayout(tern_opts)
+        custom_tern_layout.addStretch()
+
+        self.tab_widget.addTab(custom_tern_tab, "Custom Ternary")
 
         main_layout.addWidget(self.tab_widget)
 
@@ -1975,6 +2004,8 @@ class GeochemistryDockWidget(QDockWidget):
             self.generate_discrimination_diagram(layer, features, sample_names)
         elif self.tab_widget.currentIndex() == 2:
             self.generate_custom_xy_plot(layer, features, sample_names)
+        elif self.tab_widget.currentIndex() == 3:
+            self.generate_custom_ternary_plot(layer, features, sample_names)
 
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""
@@ -2144,16 +2175,12 @@ class GeochemistryDockWidget(QDockWidget):
         category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        n_collections_before = len(ax.collections)
-        diagram_class.plot(ax, data, sample_names,
+        fid_to_scatter = diagram_class.plot(ax, data, sample_names,
                           show_legend=self.discrim_legend.isChecked(),
                           show_category_legend=self.discrim_category_legend.isChecked(),
                           sample_colors=sample_colors, category_colors=category_colors,
                           sample_markers=sample_markers, category_markers=category_markers,
-                          n_samples=valid_count)
-        # Each ax.scatter() call in plot() adds one PathCollection; zip with fid_list order
-        new_collections = list(ax.collections[n_collections_before:])
-        fid_to_scatter = dict(zip(fid_list, new_collections))
+                          n_samples=valid_count, fids=fid_list)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -2284,28 +2311,39 @@ class GeochemistryDockWidget(QDockWidget):
         plotted_categories = set()
         pts_data = []
         fid_list = []
-        fid_to_scatter = {}
+        fid_to_scatter = {}  # fid -> (PathCollection, local_index within that collection)
 
+        # Group points by category so we make one ax.scatter() call per group instead
+        # of one per point, eliminating the O(n_points) PathCollection overhead.
+        cat_groups = {}
         for i, (x, y, name, feature) in enumerate(zip(x_data, y_data, sample_names, features)):
             if x is not None and y is not None:
                 color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
                 marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
-
-                label = None
-                if self.custom_legend.isChecked() and name not in plotted_categories:
-                    label = name
-                    plotted_categories.add(name)
-
-                if self.custom_markers.isChecked():
-                    sc = ax.scatter(x, y, marker=marker, s=80, c=[color],
-                              edgecolors='black', linewidths=0.5, zorder=10, label=label)
-                else:
-                    sc = ax.scatter(x, y, s=80, c=[color],
-                              edgecolors='black', linewidths=0.5, zorder=10, label=label)
-
+                cat_key = (name, marker) if self.custom_markers.isChecked() else name
+                if cat_key not in cat_groups:
+                    cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+                                           'marker': marker, 'name': name}
+                g = cat_groups[cat_key]
+                g['xs'].append(x)
+                g['ys'].append(y)
+                g['fids'].append(feature.id())
+                g['colors'].append(color)
                 pts_data.append((x, y))
                 fid_list.append(feature.id())
-                fid_to_scatter[feature.id()] = sc
+
+        for cat_key, g in cat_groups.items():
+            label = None
+            if self.custom_legend.isChecked() and g['name'] not in plotted_categories:
+                label = g['name']
+                plotted_categories.add(g['name'])
+            scatter_kw = dict(s=80, c=g['colors'], edgecolors='black',
+                              linewidths=0.5, zorder=10, label=label)
+            if self.custom_markers.isChecked():
+                scatter_kw['marker'] = g['marker']
+            sc = ax.scatter(g['xs'], g['ys'], **scatter_kw)
+            for local_idx, fid in enumerate(g['fids']):
+                fid_to_scatter[fid] = (sc, local_idx)
 
         ax.set_xlabel(x_label, fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
@@ -2335,7 +2373,8 @@ class GeochemistryDockWidget(QDockWidget):
         Left-click (no toolbar mode): select nearest point in QGIS.
         Shift+left-click: toggle that point in the QGIS selection.
         Left-click on empty space: clear QGIS selection.
-        Right-click drag: lasso-select multiple points.
+        Left-drag: rubber-band rectangle selects all enclosed points.
+        Shift+left-drag: adds enclosed points to the current selection.
         Selected points are highlighted with a red edge on the plot.
         """
         if not pts_data or not fid_list:
@@ -2366,15 +2405,20 @@ class GeochemistryDockWidget(QDockWidget):
                     pass
             current_labels.clear()
 
-            for fid, sc in fid_to_scatter.items():
+            # Batch colour update — one set_edgecolors() call per collection, not per point.
+            coll_edge = {}
+            coll_lw   = {}
+            for fid, (sc, local_idx) in fid_to_scatter.items():
+                if sc not in coll_edge:
+                    n = len(sc.get_offsets())
+                    coll_edge[sc] = ['black'] * n
+                    coll_lw[sc]   = [0.5] * n
                 if fid in selected_set:
-                    sc.set_edgecolors('red')
-                    sc.set_linewidths(2.0)
-                    sc.set_zorder(15)
-                else:
-                    sc.set_edgecolors('black')
-                    sc.set_linewidths(0.5)
-                    sc.set_zorder(10)
+                    coll_edge[sc][local_idx] = 'red'
+                    coll_lw[sc][local_idx]   = 2.0
+            for sc in coll_edge:
+                sc.set_edgecolors(coll_edge[sc])
+                sc.set_linewidths(coll_lw[sc])
 
             if self.discrim_label.isChecked() and selected_fids:
                 label_field = self.label_field_combo.currentText()
@@ -2399,32 +2443,60 @@ class GeochemistryDockWidget(QDockWidget):
             fig.canvas.draw_idle()
             self.refresh_selection()
 
-        _lasso_used = [False]
+        # Ensure selected features always render on top of unselected ones in QGIS.
+        # Sorts by is_selected() ascending (0 = unselected first, 1 = selected last/on top).
+        _layer_init = QgsProject.instance().mapLayer(layer_id)
+        if _layer_init is not None:
+            try:
+                from qgis.core import QgsFeatureRequest
+                renderer = _layer_init.renderer()
+                if renderer is not None:
+                    order_by = QgsFeatureRequest.OrderBy([
+                        QgsFeatureRequest.OrderByClause('is_selected()', ascending=True, nullsfirst=False)
+                    ])
+                    renderer.setOrderBy(order_by)
+                    renderer.setOrderByEnabled(True)
+                    _layer_init.triggerRepaint()
+            except Exception:
+                pass
 
-        def on_lasso_select(verts):
-            if not verts:
+        _rect_used = [False]
+
+        def on_rect_select(eclick, erelease):
+            if eclick.xdata is None or erelease.xdata is None:
                 return
             try:
-                pts_disp = ax.transData.transform(pts_array)
-                verts_disp = ax.transData.transform(np.array(verts))
+                p1 = ax.transData.transform([[eclick.xdata, eclick.ydata]])[0]
+                p2 = ax.transData.transform([[erelease.xdata, erelease.ydata]])[0]
+                if np.linalg.norm(p2 - p1) < 5:
+                    return
             except Exception:
                 return
-            # Ignore if the "lasso" didn't actually move (bare click with no drag)
-            if np.ptp(verts_disp, axis=0).max() < 5:
-                return
-            _lasso_used[0] = True
-            lasso_path = Path(verts_disp)
-            inside = lasso_path.contains_points(pts_disp)
-            selected_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
-            apply_selection(selected_fids)
+            _rect_used[0] = True
+            x1 = min(eclick.xdata, erelease.xdata)
+            x2 = max(eclick.xdata, erelease.xdata)
+            y1 = min(eclick.ydata, erelease.ydata)
+            y2 = max(eclick.ydata, erelease.ydata)
+            xs = pts_array[:, 0]
+            ys = pts_array[:, 1]
+            inside = (xs >= x1) & (xs <= x2) & (ys >= y1) & (ys <= y2)
+            new_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
+            key = eclick.key or ''
+            if 'shift' in key.lower():
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if layer is not None:
+                    current = set(layer.selectedFeatureIds())
+                    current.update(new_fids)
+                    new_fids = list(current)
+            apply_selection(new_fids)
             fig.canvas.draw_idle()
 
         def on_click(event):
             if event.button != 1:
                 return
-            # If lasso just fired on this mouse-up, skip single-point logic
-            if _lasso_used[0]:
-                _lasso_used[0] = False
+            # If rectangle select just fired on this mouse-up, skip single-point logic
+            if _rect_used[0]:
+                _rect_used[0] = False
                 return
             try:
                 if fig.canvas.toolbar.mode != '':
@@ -2509,8 +2581,10 @@ class GeochemistryDockWidget(QDockWidget):
 
         fig.canvas.mpl_connect('button_release_event', on_click)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
-        lasso = LassoSelector(ax, on_lasso_select, button=1, useblit=False)
-        fig._lasso_selector = lasso  # keep reference so it isn't garbage-collected
+        rect = RectangleSelector(ax, on_rect_select, useblit=True, button=[1],
+                                 props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
+                                            alpha=0.3, linewidth=1.5))
+        fig._rect_selector = rect  # keep reference so it isn't garbage-collected
 
     def _attach_spider_selection(self, fig, line_to_fid, layer_id):
         """Wire up click-to-select on spider diagram lines.
@@ -2764,3 +2838,135 @@ class GeochemistryDockWidget(QDockWidget):
                 idx = combo.findText(prev)
                 combo.setCurrentIndex(idx if idx >= 0 else 0)
                 combo.blockSignals(False)
+
+    def refresh_custom_ternary_combos(self):
+        """Refresh ternary apex combo boxes based on the show-all-fields checkbox."""
+        num_combos   = [self.tern_a_num_combo,   self.tern_b_num_combo,   self.tern_c_num_combo]
+        denom_combos = [self.tern_a_denom_combo, self.tern_b_denom_combo, self.tern_c_denom_combo]
+        if self.tern_show_all_fields.isChecked():
+            field_names = self.get_numeric_field_names()
+            num_items   = field_names
+            denom_items = ['1 (none)'] + field_names
+        else:
+            num_items   = CUSTOM_XY_ELEMENTS[1:]
+            denom_items = CUSTOM_XY_ELEMENTS
+        for combo in num_combos:
+            prev = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(num_items)
+            idx = combo.findText(prev)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+        for combo in denom_combos:
+            prev = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(denom_items)
+            idx = combo.findText(prev)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
+    def generate_custom_ternary_plot(self, layer, features, sample_names):
+        """Generate a custom ternary (triangle) diagram."""
+        def apex_label(num, denom):
+            if denom == '1 (none)':
+                return num
+            return f"{num} / {denom}"
+
+        a_num   = self.tern_a_num_combo.currentText()
+        a_denom = self.tern_a_denom_combo.currentText()
+        b_num   = self.tern_b_num_combo.currentText()
+        b_denom = self.tern_b_denom_combo.currentText()
+        c_num   = self.tern_c_num_combo.currentText()
+        c_denom = self.tern_c_denom_combo.currentText()
+
+        a_label = apex_label(a_num, a_denom)
+        b_label = apex_label(b_num, b_denom)
+        c_label = apex_label(c_num, c_denom)
+
+        # Check that all required fields exist in the layer
+        elements_needed = set()
+        for elem in [a_num, a_denom, b_num, b_denom, c_num, c_denom]:
+            if elem != '1 (none)':
+                elements_needed.add(elem)
+        missing = [e for e in sorted(elements_needed) if find_element_field(layer, e) is None]
+        if missing:
+            QMessageBox.warning(self, "Warning",
+                f"Missing elements: {', '.join(missing)}\nPlot cannot be generated.")
+            return
+
+        # Compute raw A, B, C values per sample
+        raw_data = []
+        valid_features = []
+        valid_names = []
+        fid_list = []
+
+        for feature, name in zip(features, sample_names):
+            def val(num, denom):
+                n = get_custom_element_value(feature, layer, num)
+                if num == denom:
+                    return 1.0 if n is not None and n > 0 else None
+                if denom == '1 (none)':
+                    return n if (n is not None and n > 0) else None
+                d = get_custom_element_value(feature, layer, denom)
+                if n is None or d is None or d == 0:
+                    return None
+                return n / d
+
+            a = val(a_num, a_denom)
+            b = val(b_num, b_denom)
+            c = val(c_num, c_denom)
+
+            if a is None or b is None or c is None or (a + b + c) == 0:
+                continue
+
+            raw_data.append((a, b, c))
+            valid_features.append(feature)
+            valid_names.append(name)
+            fid_list.append(feature.id())
+
+        if not raw_data:
+            QMessageBox.warning(self, "Warning", "No valid data points to plot.")
+            return
+
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
+            create_categorical_color_map(valid_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self.apply_style_overrides(category_colors, category_markers, valid_names)
+
+        fig, ax = plt.subplots(figsize=(10, 9))
+        # labels: bottom-left = A, bottom-right = B, top = C
+        plot_ternary_axes(ax, [b_label, c_label, a_label])
+
+        # Build pts_data (cartesian) and fid_to_scatter via _scatter_grouped
+        # Pass ternary coords as 3-tuples: _scatter_grouped normalises internally
+        fid_to_scatter = _scatter_grouped(
+            ax, raw_data, fid_list, valid_names, sample_colors,
+            sample_markers if self.tern_markers.isChecked() else [],
+            show_category_legend=self.tern_legend.isChecked(),
+            category_colors=category_colors,
+        )
+
+        # Build pts_data list in the same fid order for _attach_scatter_selection
+        pts_data = []
+        ordered_fids = []
+        for (a, b, c), fid in zip(raw_data, fid_list):
+            if fid in fid_to_scatter:
+                x, y = ternary_to_cartesian(a, b, c)
+                pts_data.append((x, y))
+                ordered_fids.append(fid)
+
+        title = f"{a_label}  –  {b_label}  –  {c_label}  (n={len(raw_data)})"
+        ax.set_title(title, fontsize=11, pad=12)
+
+        if self.tern_legend.isChecked() and len(unique_categories) > 0:
+            n_cat = len(unique_categories)
+            ncol = max(1, min(6, (n_cat + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),
+                      fontsize=8, ncol=ncol, framealpha=0.9, borderaxespad=0.)
+
+        plt.tight_layout()
+        plt.show()
+        self._attach_scatter_selection(fig, ax, pts_data, ordered_fids, fid_to_scatter, layer.id())
+        self.current_fig = fig
