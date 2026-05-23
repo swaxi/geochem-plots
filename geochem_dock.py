@@ -201,6 +201,18 @@ def find_element_field(layer, element):
     if element in oxide_forms:
         patterns.extend(oxide_forms[element])
 
+    # 0. For single-character elements (Y, V, U, B, etc.), prefer Symbol_Fullname
+    #    style FIRST to avoid matching bare coordinate/metadata fields like 'y' or 'v'.
+    if len(element) == 1:
+        pre_regex = re.compile(
+            rf"^{re.escape(element)}_[A-Za-z]+$|"
+            rf"^{re.escape(element.upper())}_[A-Za-z]+$",
+            re.IGNORECASE
+        )
+        for field_name in field_names:
+            if pre_regex.match(field_name):
+                return field_name
+
     # 1. Exact pattern match
     for pattern in patterns:
         if pattern in field_names:
@@ -1453,6 +1465,218 @@ class Cox1979_TAS(PolygonDiagramMixin):
         return fid_to_scatter
 
 
+class ApatiteGroupPlot(PolygonDiagramMixin):
+    """Sr/Y vs Sum(La+Ce+Pr+Nd) apatite group classification diagram."""
+
+    name = "Σ(La+Ce+Pr+Nd) vs Sr/Y"
+    reference = "Apatite Group Classification"
+    field_name = "Ap_Class"
+
+    @classmethod
+    def _get_fields(cls):
+        return [
+            {'name': 'LM',
+             'position': [20, 100],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [0.1, 0.1, 1173.095404, 1037.528416, 987.7946432, 940.4448517,
+                   895.3647655, 852.4455867, 811.5837324, 772.6805851, 895.3647655,
+                   772.6805851, 811.5837324, 873.6416559, 963.8290236, 963.8290236,
+                   987.7946432, 1012.356168, 1012.356168, 1063.326572, 1116.863248,
+                   1173.095404, 1232.158753, 1326.376036, 1393.156803, 1575.191405,
+                   1825.296131, 1870.68214, 1825.296131, 1737.800829, 1614.358557,
+                   1463.299868, 1359.356391, 1262.796395, 1232.158753, 1202.264435,
+                   1232.158753, 1262.796395, 1294.195841, 1232.158753, 1144.634065,
+                   1063.326572, 987.7946432, 895.3647655, 811.5837324, 753.9340075,
+                   717.7942913, 683.3869271, 650.6288749, 634.8434844, 634.8434844, 0.1],
+             'y': [1000, 0.001, 0.001, 0.005096793, 0.005827974, 0.007007391,
+                   0.008712456, 0.010652514, 0.013244524, 0.016745315, 0.017603343,
+                   0.021169545, 0.027671733, 0.036780239, 0.054964518, 0.062844061,
+                   0.078125049, 0.10042962, 0.12074296, 0.150095781, 0.189735187,
+                   0.252200216, 0.335230118, 0.430899269, 0.535651622, 0.761224447,
+                   0.89975369, 1.011610511, 1.176216514, 1.462417971, 1.78814373,
+                   2.377477216, 3.214279484, 4.064058961, 5.313039324, 6.605533186,
+                   8.211716348, 9.708269375, 11.09952113, 12.6918476, 15.51871501,
+                   19.62149623, 24.80895577, 31.89899274, 42.41221058, 52.73446513,
+                   63.40643463, 81.51978588, 113.9610294, 148.9839189, 1000, 1000]},
+            {'name': 'S',
+             'position': [8000, 0.005],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [1173.095404, 1037.528416, 987.7946432, 940.4448517, 895.3647655,
+                   852.4455867, 811.5837324, 772.6805851, 895.3647655, 1089.766199,
+                   1393.156803, 1781.011266, 2221.604092, 2703.958364, 3456.739614,
+                   4641.588834, 5789.841391, 7585.77575, 10185.91388, 12705.74105,
+                   17060.82389, 20765.06684, 22908.67653, 25902.00205, 28575.90543,
+                   32309.73034, 35645.11334, 37439.7839, 39324.81305, 40302.62497,
+                   40302.62497, 39324.81305, 38370.72455, 37439.7839, 1173.095404],
+             'y': [0.001, 0.005096793, 0.005827974, 0.007007391, 0.008712456,
+                   0.010652514, 0.013244524, 0.016745315, 0.017603343, 0.019133906,
+                   0.021867116, 0.025412777, 0.02953467, 0.033756607, 0.039230098,
+                   0.047935735, 0.0557108, 0.06694622, 0.081802403, 0.076471676,
+                   0.069124422, 0.064622753, 0.055571655, 0.044690057, 0.036547747,
+                   0.027951171, 0.021738597, 0.017193906, 0.013599332, 0.010756723,
+                   0.008228418, 0.006190125, 0.004656745, 0.001, 0.001]},
+            {'name': 'HM',
+             'position': [3000, 0.07],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [1825.296131, 1575.191405, 1393.156803, 1326.376036, 1232.158753,
+                   1173.095404, 1116.863248, 1063.326572, 1012.356168, 1012.356168,
+                   987.7946432, 963.8290236, 963.8290236, 873.6416559, 811.5837324,
+                   772.6805851, 895.3647655, 1089.766199, 1393.156803, 1781.011266,
+                   2221.604092, 2703.958364, 3456.739614, 4641.588834, 5789.841391,
+                   7585.77575, 10185.91388, 9008.794217, 8165.823714, 6875.95987,
+                   5933.805863, 4996.508915, 4207.266284, 3542.691484, 2910.717118,
+                   2511.886432, 2063.795526, 1825.296131],
+             'y': [0.89975369, 0.761224447, 0.535651622, 0.430899269, 0.335230118,
+                   0.252200216, 0.189735187, 0.150095781, 0.12074296, 0.10042962,
+                   0.078125049, 0.062844061, 0.054964518, 0.036780239, 0.027671733,
+                   0.021169545, 0.017603343, 0.019133906, 0.021867116, 0.025412777,
+                   0.02953467, 0.033756607, 0.039230098, 0.047935735, 0.0557108,
+                   0.06694622, 0.081802403, 0.088966533, 0.101738671, 0.133040986,
+                   0.159993308, 0.209219043, 0.273590244, 0.351825467, 0.460093461,
+                   0.591634285, 0.773699153, 0.89975369]},
+            {'name': 'IM',
+             'position': [8000, 2],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [1294.195841, 1262.796395, 1232.158753, 1202.264435, 1232.158753,
+                   1262.796395, 1359.356391, 1463.299868, 1614.358557, 1737.800829,
+                   1825.296131, 1870.68214, 1825.296131, 2063.795526, 2511.886432,
+                   2910.717118, 3542.691484, 4207.266284, 4996.508915, 5933.805863,
+                   6875.95987, 8165.823714, 9008.794217, 10185.91388, 12705.74105,
+                   17060.82389, 20765.06684, 24062.08925, 23478.30103, 22908.67653,
+                   22352.87211, 22908.67653, 23478.30103, 24062.08925, 24660.39337,
+                   25902.00205, 26546.05562, 27882.60417, 27882.60417, 28575.90543,
+                   27882.60417, 27206.12359, 25273.57433, 23478.30103, 20765.06684,
+                   18365.38343, 15848.93192, 13677.28826, 11803.20636, 9938.785858,
+                   7774.39615, 6081.350013, 4641.588834, 3372.873087, 2391.479523,
+                   1825.296131, 1294.195841],
+             'y': [11.09952113, 9.708269375, 8.211716348, 6.605533186, 5.313039324,
+                   4.064058961, 3.214279484, 2.377477216, 1.78814373, 1.462417971,
+                   1.176216514, 1.011610511, 0.89975369, 0.773699153, 0.591634285,
+                   0.460093461, 0.351825467, 0.273590244, 0.209219043, 0.159993308,
+                   0.133040986, 0.101738671, 0.088966533, 0.081802403, 0.076471676,
+                   0.069124422, 0.064622753, 0.061439958, 0.078988017, 0.101548033,
+                   0.137277702, 0.179450322, 0.226852218, 0.268195143, 0.317072654,
+                   0.400809662, 0.48999485, 0.629859431, 0.757257592, 0.95728758,
+                   1.131850562, 1.383825127, 1.663946636, 2.06891682, 2.660301805,
+                   3.30805966, 4.183192776, 5.030651615, 6.151957596, 6.691334291,
+                   7.654000475, 8.466789994, 9.210766178, 9.854595167, 10.3687997,
+                   10.72722211, 11.09952113]},
+            {'name': 'UM',
+             'position': [20000, 40],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [634.8434844, 634.8434844, 650.6288749, 683.3869271, 717.7942913,
+                   753.9340075, 811.5837324, 895.3647655, 987.7946432, 1063.326572,
+                   1144.634065, 1232.158753, 1294.195841, 1825.296131, 2391.479523,
+                   3372.873087, 4641.588834, 6081.350013, 7774.39615, 9938.785858,
+                   12096.69322, 14017.37418, 16243.0158, 18822.0389, 22352.87211,
+                   27206.12359, 32309.73034, 37439.7839, 44463.12675, 59703.52866,
+                   74473.19739, 86297.85478, 92896.63868, 100000, 105034.8291,
+                   107646.5214, 110323.1533, 110323.1533, 110323.1533, 110323.1533,
+                   634.8434844],
+             'y': [1000, 148.9839189, 113.9610294, 81.51978588, 63.40643463,
+                   52.73446513, 42.41221058, 31.89899274, 24.80895577, 19.62149623,
+                   15.51871501, 12.6918476, 11.09952113, 10.72722211, 10.3687997,
+                   9.854595167, 9.210766178, 8.466789994, 7.654000475, 6.691334291,
+                   8.599010611, 9.995089025, 11.61782548, 13.05923015, 14.19532874,
+                   15.69013451, 17.05511081, 17.92901224, 18.8468506, 21.53713244,
+                   25.03040512, 30.59315326, 36.16540503, 44.95526955, 54.95592795,
+                   67.18431272, 92.34859725, 114.8089533, 142.7319543, 1000, 1000]},
+            {'name': 'ALK',
+             'position': [200000, 3],
+             'fontsize': 11, 'ha': 'center', 'va': 'center', 'fontweight': 'bold',
+             'rotation': 0, 'color': 'k',
+             'x': [110323.1533, 110323.1533, 110323.1533, 110323.1533, 107646.5214,
+                   105034.8291, 100000, 92896.63868, 86297.85478, 74473.19739,
+                   59703.52866, 44463.12675, 37439.7839, 32309.73034, 27206.12359,
+                   22352.87211, 18822.0389, 16243.0158, 14017.37418, 12096.69322,
+                   9938.785858, 11803.20636, 13677.28826, 15848.93192, 18365.38343,
+                   20765.06684, 23478.30103, 25273.57433, 27206.12359, 27882.60417,
+                   28575.90543, 27882.60417, 27882.60417, 26546.05562, 25902.00205,
+                   24660.39337, 24062.08925, 23478.30103, 22908.67653, 22352.87211,
+                   22908.67653, 23478.30103, 24062.08925, 20765.06684, 22908.67653,
+                   25902.00205, 28575.90543, 32309.73034, 35645.11334, 37439.7839,
+                   39324.81305, 40302.62497, 40302.62497, 39324.81305, 38370.72455,
+                   37439.7839, 1000000, 1000000, 110323.1533],
+             'y': [1000, 142.7319543, 114.8089533, 92.34859725, 67.18431272,
+                   54.95592795, 44.95526955, 36.16540503, 30.59315326, 25.03040512,
+                   21.53713244, 18.8468506, 17.92901224, 17.05511081, 15.69013451,
+                   14.19532874, 13.05923015, 11.61782548, 9.995089025, 8.599010611,
+                   6.691334291, 6.151957596, 5.030651615, 4.183192776, 3.30805966,
+                   2.660301805, 2.06891682, 1.663946636, 1.383825127, 1.131850562,
+                   0.95728758, 0.757257592, 0.629859431, 0.48999485, 0.400809662,
+                   0.317072654, 0.268195143, 0.226852218, 0.179450322, 0.137277702,
+                   0.101548033, 0.078988017, 0.061439958, 0.064622753, 0.055571655,
+                   0.044690057, 0.036547747, 0.027951171, 0.021738597, 0.017193906,
+                   0.013599332, 0.010756723, 0.008228418, 0.006190125, 0.004656745,
+                   0.001, 0.001, 1000, 1000]},
+        ]
+
+    @classmethod
+    def classify_point(cls, x, y):
+        import math
+        if x is None or y is None or x <= 0 or y <= 0:
+            return None
+        lx, ly = math.log10(x), math.log10(y)
+        for f in cls._get_fields():
+            log_xs = [math.log10(v) for v in f['x']] + [math.log10(f['x'][0])]
+            log_ys = [math.log10(v) for v in f['y']] + [math.log10(f['y'][0])]
+            if Path(list(zip(log_xs, log_ys))).contains_point((lx, ly)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
+
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        la = get_element_value(feature, layer, 'La')
+        ce = get_element_value(feature, layer, 'Ce')
+        pr = get_element_value(feature, layer, 'Pr')
+        nd = get_element_value(feature, layer, 'Nd')
+        sr = get_element_value(feature, layer, 'Sr')
+        y_elem = get_element_value(feature, layer, 'Y')
+
+        lree_vals = [v for v in [la, ce, pr, nd] if v is not None and v > 0]
+        if not lree_vals:
+            return None, None
+        sum_lree = sum(lree_vals)
+
+        if sr is None or y_elem is None or y_elem <= 0 or sr <= 0:
+            return None, None
+        return sum_lree, sr / y_elem
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True,
+             sample_colors=None, category_colors=None, sample_markers=None,
+             category_markers=None, n_samples=None, fids=None):
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        cls.draw_fields(ax)
+
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors)
+
+        ax.set_xlabel('Σ(La+Ce+Pr+Nd) (ppm)', fontsize=12)
+        ax.set_ylabel('Sr/Y', fontsize=12)
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_xlim(0.1, 1e6)
+        ax.set_ylim(0.001, 1000)
+
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter
+
+
 DISCRIMINATION_DIAGRAMS = {
     'Na2O + K2O vs SiO2 Plutonic (Wilson 1989)': Wilson1989_TAS,
     'Na2O + K2O vs SiO2 Volcanic (Cox et al 1979)': Cox1979_TAS,
@@ -1734,6 +1958,23 @@ class GeochemistryDockWidget(QDockWidget):
 
         self.tab_widget.addTab(custom_tern_tab, "Custom Ternary")
 
+        # Tab 5: Minerals (Apatite Group Classification)
+        minerals_tab = QWidget()
+        minerals_layout = QVBoxLayout(minerals_tab)
+        minerals_layout.setSpacing(5)
+
+        minerals_opts = QHBoxLayout()
+        self.minerals_legend = QCheckBox("Field Legend")
+        self.minerals_legend.setChecked(True)
+        self.minerals_category_legend = QCheckBox("Category Legend")
+        self.minerals_category_legend.setChecked(True)
+        minerals_opts.addWidget(self.minerals_legend)
+        minerals_opts.addWidget(self.minerals_category_legend)
+        minerals_layout.addLayout(minerals_opts)
+        minerals_layout.addStretch()
+
+        self.tab_widget.addTab(minerals_tab, "Minerals")
+
         main_layout.addWidget(self.tab_widget)
 
         # Sample selection
@@ -2006,6 +2247,8 @@ class GeochemistryDockWidget(QDockWidget):
             self.generate_custom_xy_plot(layer, features, sample_names)
         elif self.tab_widget.currentIndex() == 3:
             self.generate_custom_ternary_plot(layer, features, sample_names)
+        elif self.tab_widget.currentIndex() == 4:
+            self.generate_minerals_plot(layer, features, sample_names)
 
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""
@@ -2095,8 +2338,11 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.warning(self, "Warning", "Please select a valid layer.")
             return
 
-        diagram_name = self.diagram_combo.currentText()
-        diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
+        if self.tab_widget.currentIndex() == 4:
+            diagram_class = ApatiteGroupPlot
+        else:
+            diagram_name = self.diagram_combo.currentText()
+            diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
         field_name = diagram_class.field_name
 
         if not layer.isEditable():
@@ -2181,6 +2427,46 @@ class GeochemistryDockWidget(QDockWidget):
                           sample_colors=sample_colors, category_colors=category_colors,
                           sample_markers=sample_markers, category_markers=category_markers,
                           n_samples=valid_count, fids=fid_list)
+        plt.tight_layout()
+        fig.subplots_adjust(bottom=0.2)
+        plt.show()
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        self.current_fig = fig
+
+    def generate_minerals_plot(self, layer, features, sample_names):
+        """Generate apatite group classification plot (Sr/Y vs Sum LREE)."""
+        data = []
+        for feature in features:
+            coords = ApatiteGroupPlot.calculate_coordinates(feature, layer)
+            data.append(coords)
+
+        valid_count = sum(1 for coords in data if coords[0] is not None)
+        if valid_count == 0:
+            QMessageBox.warning(self, "Warning",
+                "No valid data points. Layer needs La, Ce, Pr, Nd, Sr and Y fields.")
+            return
+
+        pts_data = []
+        fid_list = []
+        for coords, feature in zip(data, features):
+            if coords[0] is None or coords[1] is None:
+                continue
+            pts_data.append((coords[0], coords[1]))
+            fid_list.append(feature.id())
+
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
+            create_categorical_color_map(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self.apply_style_overrides(category_colors, category_markers, sample_names)
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        fid_to_scatter = ApatiteGroupPlot.plot(
+            ax, data, sample_names,
+            show_legend=self.minerals_legend.isChecked(),
+            show_category_legend=self.minerals_category_legend.isChecked(),
+            sample_colors=sample_colors, category_colors=category_colors,
+            sample_markers=sample_markers, category_markers=category_markers,
+            n_samples=valid_count, fids=fid_list)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()

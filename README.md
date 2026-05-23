@@ -11,6 +11,7 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
     - Add popup label when cursor near a point  
     - Selected points plot ontop on map layer   
     - Custom triangle plot added   
+    - Add Sullivan 2020 Apatite classification   
     0.0.3 Add Winchester & Floyd 1977 plot   
     - Allow any numeric field for Custom xy plots   
     - Allow field names with Na_Sodium naming convention   
@@ -30,11 +31,14 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 - Ti vs Zr (Pearce & Cann 1973)
 - TAS diagrams for plutonic (Wilson 1989) and volcanic (Cox et al. 1979) rocks
 
-### Custom XY Plots
+### Custom XY & Triangle Plots
 - User-defined element/oxide ratios on both axes
 - Mg# calculation (100×Mg/(Mg+Fe) using molar values)
 - REE normalization options (Chondrite or Primitive Mantle)
 - Linear or logarithmic axis scales
+
+### Sullivan et al 2020 Apatite plot
+- Sullivan 2020 detrital Apatite classification   
 
 ## Installation
 
