@@ -11,7 +11,8 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
     - Add popup label when cursor near a point  
     - Selected points plot ontop on map layer   
     - Custom triangle plot added   
-    - Add Sullivan 2020 Apatite classification   
+    - Add Sullivan 2020 Apatite classification  
+    - Add density vs magnetic susceptibility plot    
     0.0.3 Add Winchester & Floyd 1977 plot   
     - Allow any numeric field for Custom xy plots   
     - Allow field names with Na_Sodium naming convention   

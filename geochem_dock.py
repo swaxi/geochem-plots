@@ -1975,6 +1975,58 @@ class GeochemistryDockWidget(QDockWidget):
 
         self.tab_widget.addTab(minerals_tab, "Minerals")
 
+        # Tab 6: Petrophysics
+        petro_tab = QWidget()
+        petro_layout = QVBoxLayout(petro_tab)
+        petro_layout.setSpacing(5)
+
+        # X Axis (Density)
+        petro_x_group = QGroupBox("X-Axis (Density)")
+        petro_x_grid = QGridLayout(petro_x_group)
+        petro_x_grid.setSpacing(3)
+        petro_x_grid.addWidget(QLabel("Field:"), 0, 0)
+        self.petro_x_field_combo = QComboBox()
+        petro_x_grid.addWidget(self.petro_x_field_combo, 0, 1, 1, 3)
+        petro_x_grid.addWidget(QLabel("Units:"), 1, 0)
+        self.petro_x_unit_combo = QComboBox()
+        self.petro_x_unit_combo.addItems([
+            "No Scaling",
+            "CGS (no scaling)",
+            "SI (÷ 1000)",
+        ])
+        petro_x_grid.addWidget(self.petro_x_unit_combo, 1, 1, 1, 3)
+        petro_layout.addWidget(petro_x_group)
+
+        # Y Axis (Magnetic Susceptibility)
+        petro_y_group = QGroupBox("Y-Axis (Magnetic Susceptibility)")
+        petro_y_grid = QGridLayout(petro_y_group)
+        petro_y_grid.setSpacing(3)
+        petro_y_grid.addWidget(QLabel("Field:"), 0, 0)
+        self.petro_y_field_combo = QComboBox()
+        petro_y_grid.addWidget(self.petro_y_field_combo, 0, 1, 1, 3)
+        petro_y_grid.addWidget(QLabel("Units:"), 1, 0)
+        self.petro_y_unit_combo = QComboBox()
+        self.petro_y_unit_combo.addItems([
+            "No Scaling",
+            "CGS (× 4π)",
+            "SI (no scaling)",
+            "SI ×10⁻³",
+        ])
+        petro_y_grid.addWidget(self.petro_y_unit_combo, 1, 1, 1, 3)
+        petro_layout.addWidget(petro_y_group)
+
+        petro_opts = QHBoxLayout()
+        self.petro_legend = QCheckBox("Legend")
+        self.petro_legend.setChecked(True)
+        self.petro_markers = QCheckBox("Markers")
+        self.petro_markers.setChecked(True)
+        petro_opts.addWidget(self.petro_legend)
+        petro_opts.addWidget(self.petro_markers)
+        petro_layout.addLayout(petro_opts)
+        petro_layout.addStretch()
+
+        self.tab_widget.addTab(petro_tab, "Petrophysics")
+
         main_layout.addWidget(self.tab_widget)
 
         # Sample selection
@@ -2088,6 +2140,7 @@ class GeochemistryDockWidget(QDockWidget):
         
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
+        self.refresh_petrophysics_combos()
 
         
     def on_layer_changed_old(self, index):
@@ -2249,6 +2302,8 @@ class GeochemistryDockWidget(QDockWidget):
             self.generate_custom_ternary_plot(layer, features, sample_names)
         elif self.tab_widget.currentIndex() == 4:
             self.generate_minerals_plot(layer, features, sample_names)
+        elif self.tab_widget.currentIndex() == 5:
+            self.generate_petrophysics_plot(layer, features, sample_names)
 
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""
@@ -2467,6 +2522,120 @@ class GeochemistryDockWidget(QDockWidget):
             sample_colors=sample_colors, category_colors=category_colors,
             sample_markers=sample_markers, category_markers=category_markers,
             n_samples=valid_count, fids=fid_list)
+        plt.tight_layout()
+        fig.subplots_adjust(bottom=0.2)
+        plt.show()
+        self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        self.current_fig = fig
+
+    def generate_petrophysics_plot(self, layer, features, sample_names):
+        """Generate petrophysics scatter plot (density vs magnetic susceptibility)."""
+        import math
+
+        x_field = self.petro_x_field_combo.currentText()
+        y_field = self.petro_y_field_combo.currentText()
+
+        if not x_field or not y_field:
+            QMessageBox.warning(self, "Warning", "Please select fields for both axes.")
+            return
+
+        # Density (X) scaling
+        x_unit_idx = self.petro_x_unit_combo.currentIndex()
+        if x_unit_idx == 2:     # SI (÷ 1000)
+            x_factor = 1.0 / 1000.0
+            x_unit_label = " (SI, kg/m³)"
+        else:                   # No Scaling or CGS — both use raw value
+            x_factor = 1.0
+            x_unit_label = " (CGS, g/cm³)" if x_unit_idx == 1 else ""
+
+        # Magnetic susceptibility (Y) scaling
+        y_unit_idx = self.petro_y_unit_combo.currentIndex()
+        if y_unit_idx == 1:     # CGS (× 4π)
+            y_factor = 4.0 * math.pi
+            y_unit_label = " (CGS)"
+        elif y_unit_idx == 3:   # SI ×10⁻³
+            y_factor = 1e-3
+            y_unit_label = " (SI ×10⁻³)"
+        else:                   # No Scaling or SI — both use raw value
+            y_factor = 1.0
+            y_unit_label = " (SI)" if y_unit_idx == 2 else ""
+
+        x_data, y_data = [], []
+        valid_count = 0
+        for feature in features:
+            try:
+                xv = feature[x_field]
+                xv = float(xv) * x_factor if xv is not None and xv != NULL else None
+            except (ValueError, TypeError):
+                xv = None
+            try:
+                yv = feature[y_field]
+                yv = float(yv) * y_factor if yv is not None and yv != NULL else None
+            except (ValueError, TypeError):
+                yv = None
+            x_data.append(xv)
+            y_data.append(yv)
+            if xv is not None and yv is not None:
+                valid_count += 1
+
+        if valid_count == 0:
+            QMessageBox.warning(self, "Warning", "No valid data points to plot.")
+            return
+
+        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
+            create_categorical_color_map(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self.apply_style_overrides(category_colors, category_markers, sample_names)
+
+        fig, ax = plt.subplots(figsize=(12, 9))
+
+        ax.set_yscale('log')
+
+        default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
+        plotted_categories = set()
+        pts_data, fid_list = [], []
+        fid_to_scatter = {}
+
+        cat_groups = {}
+        for i, (x, y, name, feature) in enumerate(zip(x_data, y_data, sample_names, features)):
+            if x is None or y is None:
+                continue
+            color = sample_colors[i] if i < len(sample_colors) else sample_colors[i % len(sample_colors)]
+            marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
+            cat_key = (name, marker) if self.petro_markers.isChecked() else name
+            if cat_key not in cat_groups:
+                cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+                                       'marker': marker, 'name': name}
+            g = cat_groups[cat_key]
+            g['xs'].append(x); g['ys'].append(y)
+            g['fids'].append(feature.id()); g['colors'].append(color)
+            pts_data.append((x, y))
+            fid_list.append(feature.id())
+
+        for g in cat_groups.values():
+            label = None
+            if self.petro_legend.isChecked() and g['name'] not in plotted_categories:
+                label = g['name']
+                plotted_categories.add(g['name'])
+            scatter_kw = dict(s=80, c=g['colors'], edgecolors='black',
+                              linewidths=0.5, zorder=10, label=label)
+            if self.petro_markers.isChecked():
+                scatter_kw['marker'] = g['marker']
+            sc = ax.scatter(g['xs'], g['ys'], **scatter_kw)
+            for local_idx, fid in enumerate(g['fids']):
+                fid_to_scatter[fid] = (sc, local_idx)
+
+        ax.set_xlabel(f"{x_field}{x_unit_label}", fontsize=12)
+        ax.set_ylabel(f"{y_field}{y_unit_label}", fontsize=12)
+        ax.set_title(f"{y_field} vs {x_field} (n={valid_count})", fontsize=14)
+        ax.grid(True, alpha=0.3)
+
+        if self.petro_legend.isChecked() and unique_categories:
+            n_categories = len(unique_categories)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
+                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -3149,6 +3318,20 @@ class GeochemistryDockWidget(QDockWidget):
             combo.blockSignals(True)
             combo.clear()
             combo.addItems(denom_items)
+            idx = combo.findText(prev)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
+    def refresh_petrophysics_combos(self):
+        """Populate petrophysics field dropdowns with all fields from the current layer."""
+        layer_id = self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(layer_id)
+        field_names = [f.name() for f in layer.fields()] if layer else []
+        for combo in [self.petro_x_field_combo, self.petro_y_field_combo]:
+            prev = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(field_names)
             idx = combo.findText(prev)
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
