@@ -41,6 +41,9 @@ changelog=0.0.4 Allow selection of plotted points to update map selections
 ### Sullivan et al 2020 Apatite plot
 - Sullivan 2020 detrital Apatite classification   
 
+### Density vs Magnetic Susceptibility plot
+- Henkel 1976 linear density vs log mag sus   
+
 ## Installation
 
 ### Method 1: Install from ZIP
