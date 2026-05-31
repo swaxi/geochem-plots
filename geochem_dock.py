@@ -248,6 +248,32 @@ OIB_SUN_MCDONOUGH_1989_VALUES = {
     'Lu': 0.300,
 }
 
+# Upper continental crust normalisation values. Major-element entries are
+# converted to ppm-equivalent elemental concentrations where required by the
+# existing spider-diagram routines (K from K2O, Ti from TiO2, P from P2O5).
+
+UPPER_CONTINENTAL_CRUST_RUDNICK_GAO_2003_VALUES = {
+    'Li': 24, 'Be': 2.1, 'B': 17, 'N': 83, 'F': 557, 'S': 621, 'Cl': 370,
+    'K': 23243, 'Sc': 14.0, 'Ti': 3837, 'V': 97, 'Cr': 92, 'Co': 17.3,
+    'Ni': 47, 'Cu': 28, 'Zn': 67, 'Ga': 17.5, 'Ge': 1.4, 'As': 4.8,
+    'Se': 0.09, 'Br': 1.6, 'Rb': 84, 'Sr': 320, 'Y': 21, 'Zr': 193,
+    'Nb': 12, 'Mo': 1.1, 'Ag': 0.053, 'Cd': 0.09, 'In': 0.056,
+    'Sn': 2.1, 'Sb': 0.4, 'I': 1.4, 'Cs': 4.9, 'Ba': 624,
+    'La': 31, 'Ce': 63, 'Pr': 7.1, 'Nd': 27, 'Sm': 4.7, 'Eu': 1.0,
+    'Gd': 4.0, 'Tb': 0.7, 'Dy': 3.9, 'Ho': 0.83, 'Er': 2.3,
+    'Tm': 0.30, 'Yb': 2.0, 'Lu': 0.31, 'Hf': 5.3, 'Ta': 0.9,
+    'W': 1.9, 'Re': 0.000198, 'Os': 0.000031, 'Ir': 0.000022,
+    'Pt': 0.0005, 'Au': 0.0015, 'Hg': 0.05, 'Tl': 0.9, 'Pb': 17,
+    'Bi': 0.16, 'Th': 10.5, 'U': 2.7, 'P': 655,
+}
+
+UPPER_CONTINENTAL_CRUST_TAYLOR_MCLENNAN_1985_VALUES = {
+    'K': 28141, 'Ti': 2998, 'P': 873, 'Rb': 112, 'Sr': 350, 'Y': 22,
+    'Zr': 190, 'Ba': 550, 'La': 30, 'Ce': 64, 'Nd': 26, 'Sm': 4.5,
+    'Eu': 0.88, 'Tb': 0.64, 'Yb': 2.2, 'Lu': 0.32, 'Hf': 5.8,
+    'Ta': 1.5, 'Pb': 17, 'Th': 10.7, 'U': 2.8,
+}
+
 # Backwards-compatible alias used by existing code paths.
 PRIMITIVE_MANTLE_VALUES = PRIMITIVE_MANTLE_MCDONOUGH_SUN_1995_VALUES
 
@@ -263,6 +289,8 @@ NORMALIZATION_OPTIONS = [
     ("E-MORB - Sun and McDonough (1989)", E_TYPE_MORB_SUN_MCDONOUGH_1989_VALUES),
     ("Depleted Mantle - Salters and Stracke (2004)", DEPLETED_MANTLE_SALTERS_STRACKE_2004_VALUES),
     ("Depleted Mantle - Workman and Hart (2005)", DEPLETED_MANTLE_WORKMAN_HART_2005_VALUES),
+    ("Upper Continental Crust - Rudnick and Gao (2003)", UPPER_CONTINENTAL_CRUST_RUDNICK_GAO_2003_VALUES),
+    ("Upper Continental Crust - Taylor and McLennan (1985)", UPPER_CONTINENTAL_CRUST_TAYLOR_MCLENNAN_1985_VALUES),
 ]
 
 EXTENDED_SPIDER_ORDER = [
