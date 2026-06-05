@@ -2032,19 +2032,16 @@ class GeochemistryDockWidget(QDockWidget):
 
         # REE Normalization
         ree_group = QGroupBox("REE Normalization")
-        ree_layout = QVBoxLayout(ree_group)
-        ree_layout.setSpacing(2)
-        self.ree_norm_group = QButtonGroup(self)
-        self.ree_norm_none = QRadioButton("None")
-        self.ree_norm_none.setChecked(True)
-        self.ree_norm_group.addButton(self.ree_norm_none, 0)
-        ree_layout.addWidget(self.ree_norm_none)
-        self.ree_norm_buttons = []
-        for norm_id, (norm_name, norm_values) in enumerate(NORMALIZATION_OPTIONS, start=1):
-            button = QRadioButton(norm_name)
-            self.ree_norm_group.addButton(button, norm_id)
-            ree_layout.addWidget(button)
-            self.ree_norm_buttons.append(button)
+        ree_layout = QHBoxLayout(ree_group)
+        ree_layout.setSpacing(5)
+        ree_layout.addWidget(QLabel("Normalization:"))
+        self.ree_norm_combo = QComboBox()
+        self.ree_norm_combo.addItem("None")
+        for norm_name, norm_values in NORMALIZATION_OPTIONS:
+            self.ree_norm_combo.addItem(norm_name)
+        self.ree_norm_combo.setCurrentIndex(0)
+        ree_layout.addWidget(self.ree_norm_combo)
+        ree_group.setMaximumHeight(70)
         custom_xy_layout.addWidget(ree_group)
 
         # Axis scales
@@ -2910,7 +2907,7 @@ class GeochemistryDockWidget(QDockWidget):
         y_num = self.y_num_combo.currentText()
         y_denom = self.y_denom_combo.currentText()
         
-        ree_norm_id = self.ree_norm_group.checkedId()
+        ree_norm_id = self.ree_norm_combo.currentIndex()
         norm_values = None
         norm_name = ""
         if ree_norm_id > 0:
