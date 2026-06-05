@@ -121,23 +121,177 @@ def create_categorical_color_map(sample_names):
 # NORMALIZATION VALUES
 # =============================================================================
 
-CHONDRITE_VALUES = {
-    'Ba': 2.41, 'Rb': 2.32, 'Cs': 0.188, 'Sr': 7.26, 'K': 545, 'K2O': 0.0545,
-    'Th': 0.029, 'U': 0.0074, 'Nb': 0.246, 'Ta': 0.014, 'Zr': 3.87, 'Hf': 0.1066,
-    'Ti': 445, 'TiO2': 0.0728, 'P': 1220, 'P2O5': 0.28,
-    'La': 0.237, 'Ce': 0.612, 'Pr': 0.095, 'Nd': 0.467, 'Sm': 0.153, 'Eu': 0.058,
-    'Gd': 0.2055, 'Tb': 0.0374, 'Dy': 0.254, 'Ho': 0.0566, 'Er': 0.1655,
-    'Tm': 0.0255, 'Yb': 0.170, 'Lu': 0.0254, 'Y': 1.57, 'Sc': 5.92, 'Pb': 2.47,
+# Chondrite normalisation values
+
+SUN_MCDONOUGH_1989_C1_CHONDRITE_VALUES = {
+    'Li': 1.57, 'F': 60.7, 'P': 1220.0, 'K': 545.0,
+    'Ti': 445.0, 'Rb': 2.32, 'Sr': 7.26, 'Y': 1.57,
+    'Zr': 3.87, 'Nb': 0.246, 'Mo': 0.92, 'Sn': 1.72,
+    'Sb': 0.16, 'Cs': 0.188, 'Ba': 2.41, 'La': 0.237,
+    'Ce': 0.612, 'Pr': 0.095, 'Nd': 0.467, 'Sm': 0.153,
+    'Eu': 0.058, 'Gd': 0.2055, 'Tb': 0.0374, 'Dy': 0.254,
+    'Ho': 0.0566, 'Er': 0.1655, 'Tm': 0.0255, 'Yb': 0.17,
+    'Lu': 0.0254, 'Hf': 0.1066, 'Ta': 0.014, 'W': 0.095,
+    'Tl': 0.14, 'Pb': 2.47, 'Th': 0.029, 'U': 0.008,
+}
+MCDONOUGH_SUN_1995_C1_CHONDRITE_VALUES = {
+    'Li': 1.5, 'Be': 0.025, 'B': 0.9, 'C': 35000.0,
+    'N': 3180.0, 'F': 60.0, 'Na': 5100.0, 'Mg': 96500.0,
+    'Al': 8600.0, 'Si': 106500.0, 'P': 1080.0, 'S': 54000.0,
+    'Cl': 680.0, 'K': 550.0, 'Ca': 9250.0, 'Sc': 5.92,
+    'Ti': 440.0, 'V': 56.0, 'Cr': 2650.0, 'Mn': 1920.0,
+    'Fe': 181000.0, 'Co': 500.0, 'Ni': 10500.0, 'Cu': 120.0,
+    'Zn': 310.0, 'Ga': 9.2, 'Ge': 31.0, 'As': 1.85,
+    'Se': 21.0, 'Br': 3.57, 'Rb': 2.3, 'Sr': 7.25,
+    'Y': 1.57, 'Zr': 3.82, 'Nb': 0.24, 'Mo': 0.9,
+    'Ru': 0.71, 'Rh': 0.13, 'Pd': 0.55, 'Ag': 0.2,
+    'Cd': 0.71, 'In': 0.08, 'Sn': 1.65, 'Sb': 0.14,
+    'Te': 2.33, 'I': 0.45, 'Cs': 0.19, 'Ba': 2.41,
+    'La': 0.237, 'Ce': 0.613, 'Pr': 0.0928, 'Nd': 0.457,
+    'Sm': 0.148, 'Eu': 0.056299999999999996, 'Gd': 0.199, 'Tb': 0.0361,
+    'Dy': 0.246, 'Ho': 0.0546, 'Er': 0.16, 'Tm': 0.0247,
+    'Yb': 0.161, 'Lu': 0.0246, 'Hf': 0.103, 'Ta': 0.0136,
+    'W': 0.093, 'Re': 0.04, 'Os': 0.49, 'Ir': 0.455,
+    'Pt': 1.01, 'Au': 0.14, 'Hg': 0.3, 'Tl': 0.14,
+    'Pb': 2.47, 'Bi': 0.11, 'Th': 0.029, 'U': 0.0074,
+}
+BOYNTON_1984_CHONDRITE_VALUES = {
+    'La': 0.31, 'Ce': 0.808, 'Pr': 0.122, 'Nd': 0.6,
+    'Sm': 0.195, 'Eu': 0.0735, 'Gd': 0.259, 'Tb': 0.0474,
+    'Dy': 0.322, 'Ho': 0.0718, 'Er': 0.21, 'Tm': 0.0324,
+    'Yb': 0.209, 'Lu': 0.0322,
+}
+NAKAMURA_1974_CHONDRITE_VALUES = {
+    'La': 0.329, 'Ce': 0.865, 'Pr': 0.112, 'Nd': 0.63,
+    'Sm': 0.203, 'Eu': 0.077, 'Gd': 0.276, 'Tb': 0.047,
+    'Dy': 0.343, 'Ho': 0.07, 'Er': 0.225, 'Tm': 0.03,
+    'Yb': 0.22, 'Lu': 0.0339,
 }
 
-PRIMITIVE_MANTLE_VALUES = {
-    'Ba': 6.6, 'Rb': 0.6, 'Cs': 0.021, 'Sr': 19.9, 'K': 250,
-    'Th': 0.0795, 'U': 0.0203, 'Nb': 0.658, 'Ta': 0.037,
-    'La': 0.648, 'Ce': 1.675, 'Pr': 0.254, 'Nd': 1.25, 'Sm': 0.406,
-    'Eu': 0.154, 'Gd': 0.544, 'Tb': 0.099, 'Dy': 0.674, 'Ho': 0.149,
-    'Er': 0.438, 'Tm': 0.068, 'Yb': 0.441, 'Lu': 0.0675, 'Y': 4.3,
-    'Zr': 10.5, 'Hf': 0.283, 'Ti': 1300, 'P': 95, 'Pb': 0.15, 'Sc': 16.2,
+# Backwards-compatible alias used by existing code paths.
+CHONDRITE_VALUES = MCDONOUGH_SUN_1995_C1_CHONDRITE_VALUES
+
+# Primitive mantle, depleted mantle and other normalisation values
+
+PRIMITIVE_MANTLE_MCDONOUGH_SUN_1995_VALUES = {
+    'Ag': 0.008, 'Al': 23500, 'As': 0.05, 'Au': 0.001, 'B': 0.3, 'Ba': 6.6, 'Be': 0.068,
+    'Bi': 0.0025, 'Br': 0.05, 'C': 120, 'Ca': 25300, 'Cd': 0.04, 'Ce': 1.675, 'Cl': 17,
+    'Co': 105, 'Cr': 2625, 'Cs': 0.021, 'Cu': 30, 'Dy': 0.674, 'Er': 0.438, 'Eu': 0.154,
+    'F': 25, 'Fe': 62600, 'Ga': 4, 'Gd': 0.544, 'Ge': 1.1, 'Hf': 0.283, 'Hg': 0.01,
+    'Ho': 0.149, 'I': 0.01, 'In': 0.011, 'Ir': 0.0032, 'K': 240, 'La': 0.648, 'Li': 1.6,
+    'Lu': 0.0675, 'Mg': 228000, 'Mn': 1045, 'Mo': 0.05, 'N': 2, 'Na': 2670, 'Nb': 0.658,
+    'Nd': 1.25, 'Ni': 1960, 'Os': 0.0034, 'P': 90, 'Pb': 0.15, 'Pd': 0.0039, 'Pr': 0.254,
+    'Pt': 0.0071, 'Rb': 0.6, 'Re': 0.00028, 'Rh': 0.0009, 'Ru': 0.005, 'S': 250, 'Sb': 0.0055,
+    'Sc': 16.2, 'Se': 0.075, 'Si': 210000, 'Sm': 0.406, 'Sn': 0.13, 'Sr': 19.9, 'Ta': 0.037,
+    'Tb': 0.099, 'Te': 0.012, 'Th': 0.0795, 'Ti': 1205, 'Tl': 0.0035, 'Tm': 0.068,
+    'U': 0.0203, 'V': 82, 'W': 0.029, 'Y': 4.3, 'Yb': 0.441, 'Zn': 55, 'Zr': 10.5,
 }
+
+DEPLETED_MANTLE_SALTERS_STRACKE_2004_VALUES = {
+    'Ag': 0.006, 'Ar': 0.00121, 'As': 0.0074, 'Au': 0.001, 'Be': 0.025, 'Bi': 0.00039,
+    'Cs': 0.00132, 'He': 0.000157, 'Hg': 0.01, 'In': 0.0122, 'Ir': 0.0029, 'La': 0.234,
+    'Li': 0.7, 'Lu': 0.063, 'Mo': 0.025, 'N': 0.04, 'Nb': 0.21, 'Nd': 0.713, 'Ni': 1960,
+    'Os': 0.00299, 'P': 40.7, 'Pb': 0.0232, 'Pd': 0.0052, 'Pr': 0.131, 'Pt': 0.0062,
+    'Rb': 0.088, 'Re': 0.000157, 'Rh': 0.001, 'Ru': 0.0057, 'S': 119, 'Sb': 0.0026,
+    'Sc': 16.3, 'Se': 0.072, 'Sm': 0.27, 'Sn': 0.1, 'Sr': 9.8, 'Ta': 0.0138, 'Tb': 0.075,
+    'Te': 0.0151, 'Th': 0.0137, 'Ti': 798, 'Tl': 0.00038, 'Tm': 0.06, 'U': 0.0047, 'V': 79,
+    'W': 0.0035, 'Y': 4.07, 'Yb': 0.401, 'Zn': 56, 'Zr': 7.94,
+}
+
+DEPLETED_MANTLE_WORKMAN_HART_2005_VALUES = {
+    'Gd': 0.358, 'Hf': 0.157, 'Ho': 0.115, 'La': 0.192, 'Lu': 0.058, 'Nb': 0.1485,
+    'Nd': 0.581, 'Pb': 0.018, 'Pr': 0.107, 'Rb': 0.05, 'Sm': 0.239, 'Sr': 7.664, 'Ta': 0.0096,
+    'Tb': 0.07, 'Th': 0.0079, 'Ti': 716.3, 'U': 0.0032, 'Y': 3.328, 'Yb': 0.365, 'Zr': 5.082,
+}
+
+PRIMITIVE_MANTLE_SUN_MCDONOUGH_1989_VALUES = {
+    'Cs': 0.032, 'Tl': 0.005, 'Rb': 0.635, 'Ba': 6.989, 'W': 0.020,
+    'Th': 0.085, 'U': 0.021, 'Nb': 0.713, 'Ta': 0.041, 'K': 250,
+    'La': 0.687, 'Ce': 1.775, 'Pb': 0.185, 'Pr': 0.276, 'Mo': 0.063,
+    'Sr': 21.1, 'P': 95, 'Nd': 1.354, 'F': 26, 'Sm': 0.444,
+    'Zr': 11.2, 'Hf': 0.309, 'Eu': 0.168, 'Sn': 0.170, 'Sb': 0.005,
+    'Ti': 1300, 'Gd': 0.596, 'Tb': 0.108, 'Dy': 0.737, 'Li': 1.60,
+    'Y': 4.55, 'Ho': 0.164, 'Er': 0.480, 'Tm': 0.074, 'Yb': 0.493,
+    'Lu': 0.074,
+}
+
+N_TYPE_MORB_SUN_MCDONOUGH_1989_VALUES = {
+    'Cs': 0.0070, 'Tl': 0.0014, 'Rb': 0.56, 'Ba': 6.30, 'W': 0.010,
+    'Th': 0.120, 'U': 0.047, 'Nb': 2.33, 'Ta': 0.132, 'K': 600,
+    'La': 2.50, 'Ce': 7.50, 'Pb': 0.30, 'Pr': 1.32, 'Mo': 0.31,
+    'Sr': 90, 'P': 510, 'Nd': 7.30, 'F': 210, 'Sm': 2.63,
+    'Zr': 74, 'Hf': 2.05, 'Eu': 1.02, 'Sn': 1.1, 'Sb': 0.01,
+    'Ti': 7600, 'Gd': 3.680, 'Tb': 0.670, 'Dy': 4.550, 'Li': 4.3,
+    'Y': 28, 'Ho': 1.01, 'Er': 2.97, 'Tm': 0.456, 'Yb': 3.05,
+    'Lu': 0.455,
+}
+
+E_TYPE_MORB_SUN_MCDONOUGH_1989_VALUES = {
+    'Cs': 0.063, 'Tl': 0.013, 'Rb': 5.04, 'Ba': 57, 'W': 0.092,
+    'Th': 0.60, 'U': 0.18, 'Nb': 8.30, 'Ta': 0.47, 'K': 2100,
+    'La': 6.30, 'Ce': 15.0, 'Pb': 0.60, 'Pr': 2.05, 'Mo': 0.47,
+    'Sr': 155, 'P': 620, 'Nd': 9.00, 'F': 250, 'Sm': 2.60,
+    'Zr': 73, 'Hf': 2.03, 'Eu': 0.91, 'Sn': 0.8, 'Sb': 0.01,
+    'Ti': 6000, 'Gd': 2.970, 'Tb': 0.530, 'Dy': 3.550, 'Li': 3.5,
+    'Y': 22, 'Ho': 0.790, 'Er': 2.31, 'Tm': 0.356, 'Yb': 2.37,
+    'Lu': 0.354,
+}
+
+OIB_SUN_MCDONOUGH_1989_VALUES = {
+    'Cs': 0.387, 'Tl': 0.077, 'Rb': 31.0, 'Ba': 350, 'W': 0.560,
+    'Th': 4.00, 'U': 1.02, 'Nb': 48.0, 'Ta': 2.70, 'K': 12000,
+    'La': 37.0, 'Ce': 80.0, 'Pb': 3.20, 'Pr': 9.70, 'Mo': 2.40,
+    'Sr': 660, 'P': 2700, 'Nd': 38.5, 'F': 1150, 'Sm': 10.0,
+    'Zr': 280, 'Hf': 7.80, 'Eu': 3.00, 'Sn': 2.7, 'Sb': 0.03,
+    'Ti': 17200, 'Gd': 7.620, 'Tb': 1.050, 'Dy': 5.600, 'Li': 5.6,
+    'Y': 29, 'Ho': 1.06, 'Er': 2.62, 'Tm': 0.350, 'Yb': 2.16,
+    'Lu': 0.300,
+}
+
+# Upper continental crust normalisation values. Major-element entries are
+# converted to ppm-equivalent elemental concentrations where required by the
+# existing spider-diagram routines (K from K2O, Ti from TiO2, P from P2O5).
+
+UPPER_CONTINENTAL_CRUST_RUDNICK_GAO_2003_VALUES = {
+    'Li': 24, 'Be': 2.1, 'B': 17, 'N': 83, 'F': 557, 'S': 621, 'Cl': 370,
+    'K': 23243, 'Sc': 14.0, 'Ti': 3837, 'V': 97, 'Cr': 92, 'Co': 17.3,
+    'Ni': 47, 'Cu': 28, 'Zn': 67, 'Ga': 17.5, 'Ge': 1.4, 'As': 4.8,
+    'Se': 0.09, 'Br': 1.6, 'Rb': 84, 'Sr': 320, 'Y': 21, 'Zr': 193,
+    'Nb': 12, 'Mo': 1.1, 'Ag': 0.053, 'Cd': 0.09, 'In': 0.056,
+    'Sn': 2.1, 'Sb': 0.4, 'I': 1.4, 'Cs': 4.9, 'Ba': 624,
+    'La': 31, 'Ce': 63, 'Pr': 7.1, 'Nd': 27, 'Sm': 4.7, 'Eu': 1.0,
+    'Gd': 4.0, 'Tb': 0.7, 'Dy': 3.9, 'Ho': 0.83, 'Er': 2.3,
+    'Tm': 0.30, 'Yb': 2.0, 'Lu': 0.31, 'Hf': 5.3, 'Ta': 0.9,
+    'W': 1.9, 'Re': 0.000198, 'Os': 0.000031, 'Ir': 0.000022,
+    'Pt': 0.0005, 'Au': 0.0015, 'Hg': 0.05, 'Tl': 0.9, 'Pb': 17,
+    'Bi': 0.16, 'Th': 10.5, 'U': 2.7, 'P': 655,
+}
+
+UPPER_CONTINENTAL_CRUST_TAYLOR_MCLENNAN_1985_VALUES = {
+    'K': 28141, 'Ti': 2998, 'P': 873, 'Rb': 112, 'Sr': 350, 'Y': 22,
+    'Zr': 190, 'Ba': 550, 'La': 30, 'Ce': 64, 'Nd': 26, 'Sm': 4.5,
+    'Eu': 0.88, 'Tb': 0.64, 'Yb': 2.2, 'Lu': 0.32, 'Hf': 5.8,
+    'Ta': 1.5, 'Pb': 17, 'Th': 10.7, 'U': 2.8,
+}
+
+# Backwards-compatible alias used by existing code paths.
+PRIMITIVE_MANTLE_VALUES = PRIMITIVE_MANTLE_MCDONOUGH_SUN_1995_VALUES
+
+NORMALIZATION_OPTIONS = [
+    ("Chondrite - Sun and McDonough (1989) (C1 chondrite)", SUN_MCDONOUGH_1989_C1_CHONDRITE_VALUES),
+    ("Chondrite - McDonough and Sun (1995) (C1 chondrite)", MCDONOUGH_SUN_1995_C1_CHONDRITE_VALUES),
+    ("Chondrite - Boynton (1984)", BOYNTON_1984_CHONDRITE_VALUES),
+    ("Chondrite - Nakamura (1974)", NAKAMURA_1974_CHONDRITE_VALUES),
+    ("Primitive Mantle - Sun and McDonough (1989)", PRIMITIVE_MANTLE_SUN_MCDONOUGH_1989_VALUES),
+    ("Primitive Mantle - McDonough and Sun (1995)", PRIMITIVE_MANTLE_MCDONOUGH_SUN_1995_VALUES),
+    ("OIB - Sun and McDonough (1989)", OIB_SUN_MCDONOUGH_1989_VALUES),
+    ("N-MORB - Sun and McDonough (1989)", N_TYPE_MORB_SUN_MCDONOUGH_1989_VALUES),
+    ("E-MORB - Sun and McDonough (1989)", E_TYPE_MORB_SUN_MCDONOUGH_1989_VALUES),
+    ("Depleted Mantle - Salters and Stracke (2004)", DEPLETED_MANTLE_SALTERS_STRACKE_2004_VALUES),
+    ("Depleted Mantle - Workman and Hart (2005)", DEPLETED_MANTLE_WORKMAN_HART_2005_VALUES),
+    ("Upper Continental Crust - Rudnick and Gao (2003)", UPPER_CONTINENTAL_CRUST_RUDNICK_GAO_2003_VALUES),
+    ("Upper Continental Crust - Taylor and McLennan (1985)", UPPER_CONTINENTAL_CRUST_TAYLOR_MCLENNAN_1985_VALUES),
+]
 
 EXTENDED_SPIDER_ORDER = [
     'Ba', 'Rb', 'Th', 'K', 'Nb', 'Ta', 'La', 'Ce', 'Sr', 'Nd',
@@ -1792,7 +1946,8 @@ class GeochemistryDockWidget(QDockWidget):
         norm_row = QHBoxLayout()
         norm_row.addWidget(QLabel("Normalize:"))
         self.norm_combo = QComboBox()
-        self.norm_combo.addItems(["CI Chondrite", "Primitive Mantle"])
+        for norm_name, norm_values in NORMALIZATION_OPTIONS:
+            self.norm_combo.addItem(norm_name, norm_values)
         norm_row.addWidget(self.norm_combo)
         spider_layout.addLayout(norm_row)
 
@@ -1877,19 +2032,16 @@ class GeochemistryDockWidget(QDockWidget):
 
         # REE Normalization
         ree_group = QGroupBox("REE Normalization")
-        ree_layout = QVBoxLayout(ree_group)
-        ree_layout.setSpacing(2)
-        self.ree_norm_group = QButtonGroup(self)
-        self.ree_norm_none = QRadioButton("None")
-        self.ree_norm_none.setChecked(True)
-        self.ree_norm_chondrite = QRadioButton("Chondrite")
-        self.ree_norm_pm = QRadioButton("Primitive Mantle")
-        self.ree_norm_group.addButton(self.ree_norm_none, 0)
-        self.ree_norm_group.addButton(self.ree_norm_chondrite, 1)
-        self.ree_norm_group.addButton(self.ree_norm_pm, 2)
-        ree_layout.addWidget(self.ree_norm_none)
-        ree_layout.addWidget(self.ree_norm_chondrite)
-        ree_layout.addWidget(self.ree_norm_pm)
+        ree_layout = QHBoxLayout(ree_group)
+        ree_layout.setSpacing(5)
+        ree_layout.addWidget(QLabel("Normalization:"))
+        self.ree_norm_combo = QComboBox()
+        self.ree_norm_combo.addItem("None")
+        for norm_name, norm_values in NORMALIZATION_OPTIONS:
+            self.ree_norm_combo.addItem(norm_name)
+        self.ree_norm_combo.setCurrentIndex(0)
+        ree_layout.addWidget(self.ree_norm_combo)
+        ree_group.setMaximumHeight(70)
         custom_xy_layout.addWidget(ree_group)
 
         # Axis scales
@@ -2079,15 +2231,71 @@ class GeochemistryDockWidget(QDockWidget):
         self.setWidget(scroll_area)
         self.setMinimumWidth(320)
 
+    def _all_possible_geochemical_variables(self):
+        """Return all geochemical variables recognised by the plotting tool."""
+        variables = set()
+
+        for _, values in NORMALIZATION_OPTIONS:
+            variables.update(values.keys())
+
+        variables.update(EXTENDED_SPIDER_ORDER)
+        variables.update(EXTENDED_ORDER_ALT)
+        variables.update(REE_ORDER)
+        variables.update(REE_ELEMENTS)
+        variables.update([v for v in CUSTOM_XY_ELEMENTS if v not in ('1 (none)', 'Mg#')])
+
+        return sorted(variables)
+
+    def _has_petrophysical_field(self, layer):
+        """Return True if the layer contains density or magnetic-susceptibility fields."""
+        density_tokens = (
+            'density', 'dens', 'bulk_density', 'dry_density', 'wet_density',
+            'rho', 'specific_gravity', 'specificgravity', 'sg'
+        )
+        magnetic_susceptibility_tokens = (
+            'magnetic_susceptibility', 'mag_susceptibility', 'mag_susc',
+            'mag_sus', 'magsus', 'susceptibility', 'kappa'
+        )
+        magnetic_susceptibility_exact = {'ms', 'magsus', 'mag_sus', 'mag_susc', 'k'}
+
+        for field in layer.fields():
+            name = field.name().strip().lower()
+            normalised = re.sub(r'[^a-z0-9]+', '_', name).strip('_')
+
+            if any(token in normalised for token in density_tokens):
+                return True
+            if any(token in normalised for token in magnetic_susceptibility_tokens):
+                return True
+            if normalised in magnetic_susceptibility_exact:
+                return True
+            if 'mag' in normalised and 'sus' in normalised:
+                return True
+
+        return False
+
+    def _is_candidate_data_layer(self, layer):
+        """Return True for layers that can plausibly feed geochemical/petrophysical plots."""
+        if not isinstance(layer, QgsVectorLayer):
+            return False
+
+        matched_variables = set()
+        for variable in self._all_possible_geochemical_variables():
+            if find_element_field(layer, variable):
+                matched_variables.add(variable)
+                if len(matched_variables) >= 2:
+                    return True
+
+        return self._has_petrophysical_field(layer)
+
     def load_layers(self):
-        """Load vector layers into the combo box."""
+        """Load vector layers containing geochemical or petrophysical data into the combo box."""
         self.layer_combo.blockSignals(True)
         current_layer_id = self.layer_combo.currentData()
         self.layer_combo.clear()
         
         layers = QgsProject.instance().mapLayers().values()
         for layer in layers:
-            if isinstance(layer, QgsVectorLayer):
+            if self._is_candidate_data_layer(layer):
                 self.layer_combo.addItem(layer.name(), layer.id())
         
         # Try to restore previous selection
@@ -2255,11 +2463,17 @@ class GeochemistryDockWidget(QDockWidget):
             return REE_ORDER
         return EXTENDED_ORDER_ALT
 
+    def get_normalization_info(self):
+        """Get selected normalisation label and values for spider diagrams."""
+        norm_values = self.norm_combo.currentData()
+        norm_name = self.norm_combo.currentText()
+        if norm_values is None:
+            norm_name, norm_values = NORMALIZATION_OPTIONS[0]
+        return norm_name, norm_values
+
     def get_normalization_values(self):
-        """Get normalization values."""
-        if self.norm_combo.currentIndex() == 0:
-            return CHONDRITE_VALUES
-        return PRIMITIVE_MANTLE_VALUES
+        """Get selected normalisation values."""
+        return self.get_normalization_info()[1]
 
     def generate_plot(self):
         """Generate the selected plot type."""
@@ -2308,34 +2522,79 @@ class GeochemistryDockWidget(QDockWidget):
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""
         element_order = self.get_element_order()
-        norm_values = self.get_normalization_values()
+        norm_name, norm_values = self.get_normalization_info()
+
+        missing_from_normalisation = [
+            element for element in element_order
+            if element not in norm_values or norm_values.get(element) is None or norm_values.get(element, 0) <= 0
+        ]
+        missing_from_dataset = []
+        no_usable_values = []
 
         plot_data = []
-        for feature in features:
+        for feature_index, feature in enumerate(features):
             normalized_values = []
             for element in element_order:
                 value = np.nan
                 field_name = find_element_field(layer, element)
-                if field_name:
-                    try:
-                        raw_value = feature[field_name]
-                        if raw_value is not None and raw_value != NULL:
-                            raw_value = float(raw_value)
-                            
-                            field_upper = field_name.upper()
-                            if element == 'K' and 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'K2O'):
-                                raw_value = raw_value * 8301
-                            elif element == 'P' and 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'P2O5'):
-                                raw_value = raw_value * 4364
-                            elif element == 'Ti' and 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'TIO2'):
-                                raw_value = raw_value * 5995
-                            
-                            if raw_value > 0 and element in norm_values and norm_values[element] > 0:
-                                value = raw_value / norm_values[element]
-                    except (ValueError, TypeError):
-                        pass
+                if not field_name:
+                    if element not in missing_from_dataset:
+                        missing_from_dataset.append(element)
+                    normalized_values.append(value)
+                    continue
+
+                try:
+                    raw_value = feature[field_name]
+                    if raw_value is not None and raw_value != NULL:
+                        raw_value = float(raw_value)
+
+                        field_upper = field_name.upper()
+                        if element == 'K' and 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'K2O'):
+                            raw_value = raw_value * 8301
+                        elif element == 'P' and 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'P2O5'):
+                            raw_value = raw_value * 4364
+                        elif element == 'Ti' and 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'TIO2'):
+                            raw_value = raw_value * 5995
+
+                        if raw_value > 0 and element in norm_values and norm_values[element] > 0:
+                            value = raw_value / norm_values[element]
+                except (ValueError, TypeError):
+                    pass
                 normalized_values.append(value)
             plot_data.append(normalized_values)
+
+        for element_index, element in enumerate(element_order):
+            if element in missing_from_dataset or element in missing_from_normalisation:
+                continue
+            if not any(np.isfinite(values[element_index]) for values in plot_data):
+                no_usable_values.append(element)
+
+        warning_sections = []
+        if missing_from_normalisation:
+            warning_sections.append(
+                "Missing from the selected normalisation ({}):\n{}".format(
+                    norm_name, ", ".join(missing_from_normalisation)
+                )
+            )
+        if missing_from_dataset:
+            warning_sections.append(
+                "Missing from the selected dataset/layer fields:\n{}".format(
+                    ", ".join(missing_from_dataset)
+                )
+            )
+        if no_usable_values:
+            warning_sections.append(
+                "Present in the dataset and the normalisation option, but with no usable positive values in the selected samples:\n{}".format(
+                    ", ".join(no_usable_values)
+                )
+            )
+
+        if warning_sections:
+            QMessageBox.warning(
+                self,
+                "Incomplete spider-diagram normalisation",
+                "Some elements cannot be plotted for the selected spider diagram.\n\n" + "\n\n".join(warning_sections)
+            )
 
         fig, ax = plt.subplots(figsize=(12, 8))
         x_positions = np.arange(len(element_order))
@@ -2363,7 +2622,6 @@ class GeochemistryDockWidget(QDockWidget):
         ax.set_xticks(x_positions)
         ax.set_xticklabels(element_order, fontsize=10)
 
-        norm_name = "CI Chondrite" if self.norm_combo.currentIndex() == 0 else "Primitive Mantle"
         ax.set_ylabel(f'Sample / {norm_name}', fontsize=12)
         ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
         ax.yaxis.set_major_locator(ticker.LogLocator(base=10.0, numticks=10))
@@ -2371,7 +2629,7 @@ class GeochemistryDockWidget(QDockWidget):
         ax.grid(True, which='minor', axis='y', linestyle=':', alpha=0.2)
 
         n_samples = len(plot_data)
-        ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalized to {norm_name}', fontsize=14)
+        ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalised to {norm_name}', fontsize=14)
 
         if self.spider_legend.isChecked():
             n_categories = len(unique_categories)
@@ -2649,15 +2907,15 @@ class GeochemistryDockWidget(QDockWidget):
         y_num = self.y_num_combo.currentText()
         y_denom = self.y_denom_combo.currentText()
         
-        ree_norm_id = self.ree_norm_group.checkedId()
+        ree_norm_id = self.ree_norm_combo.currentIndex()
         norm_values = None
         norm_name = ""
-        if ree_norm_id == 1:
-            norm_values = CHONDRITE_VALUES
-            norm_name = "CI Chondrite"
-        elif ree_norm_id == 2:
-            norm_values = PRIMITIVE_MANTLE_VALUES
-            norm_name = "Primitive Mantle"
+        if ree_norm_id > 0:
+            try:
+                norm_name, norm_values = NORMALIZATION_OPTIONS[ree_norm_id - 1]
+            except IndexError:
+                norm_values = None
+                norm_name = ""
         
         def build_label(num, denom, norm_values):
             num_is_ree = num in REE_ELEMENTS
