@@ -1,20 +1,25 @@
 ![icon](icon_sm.png) 
-# Geochemistry Plotting Tools - QGIS Plugin v0.0.5
+# Geochemistry Plotting Tools
 
-A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. Developed for UWA EART3343 Lab exercises.
+_July 2026 - version 0.0.5_
 
-### Recent changelog
-changelog=0.0.5 
-    - Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
-    - Add "no category" option to plot all points with a single symbol   
-    - Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
-    - Add Filter Layer to Selected / Clear Filter buttons to turn a plot selection into a QGIS layer filter   
-    - Fix Ti vs Zr (Pearce & Cann 1973) diagram and add automatic ppm/ppb/wt%/oxide unit conversion across all plots   
-    - Recognise many more elements and oxides in Custom XY plots   
-    - Add Data Preprocessing sub-tab to Custom XY for below-detection-limit (negative value) handling, with substitution options and a review/histogram tool   
-    - Add plot-type dropdown to the Minerals tab, ready for future classification schemes   
-    - Improve point label readability (white background) and stacking order (always drawn above points)   
-    - Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
+A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. 
+Developed for UWA EART3343 Lab exercises.
+
+
+
+# Changelog 0.0.5
+
+      * Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
+      * Add "no category" option to plot all points with a single symbol   
+      * Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
+      * Add Filter Layer to Selected / Clear Filter buttons to turn a plot selection into a QGIS layer filter   
+      * Fix Ti vs Zr (Pearce & Cann 1973) diagram and add automatic ppm/ppb/wt%/oxide unit conversion across all plots   
+      * Recognise many more elements and oxides in Custom XY plots
+      * Add Data Preprocessing sub-tab to Custom XY for below-detection-limit (negative value) handling, with substitution options and a review/histogram tool   
+      * Add plot-type dropdown to the Minerals tab, ready for future classification schemes   
+      * Improve point label readability (white background) and stacking order (always drawn above points)   
+      * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
 
 ## Installation
 
