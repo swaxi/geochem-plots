@@ -3,9 +3,9 @@ name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
-version=0.0.4
-author=Mark Jessell
-email=mark.jessell@uwa.edu.au
+version=0.0.5
+author=Mark Jessell, Julien Perret
+email=mark.jessell@uwa.edu.au, julien.perret@uwa.edu.au
 
 about=A simple geochemistry plotting tool for QGIS that creates:
     - Chondrite or Primitive Mantle normalized spider diagrams (REE + trace elements)
@@ -17,7 +17,18 @@ about=A simple geochemistry plotting tool for QGIS that creates:
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=0.0.4 Allow selection of plotted points to update map selections
+changelog=0.0.5 
+    -Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file
+    - Add "no category" option to plot all points with a single symbol
+    - Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type
+    - Add Filter Layer to Selected / Clear Filter buttons to turn a plot selection into a QGIS layer filter
+    - Fix Ti vs Zr (Pearce & Cann 1973) diagram and add automatic ppm/ppb/wt%/oxide unit conversion across all plots
+    - Recognise many more elements and oxides in Custom XY plots
+    - Add Data Preprocessing sub-tab to Custom XY for below-detection-limit (negative value) handling, with substitution options and a review/histogram tool
+    - Add plot-type dropdown to the Minerals tab, ready for future classification schemes
+    - Improve point label readability (white background) and stacking order (always drawn above points)
+    - Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment
+    0.0.4 Allow selection of plotted points to update map selections
     - Assign field labels to points
     - Add labels to selected points in plots   
     - Allow symbol choices to be saved to and read from file 
