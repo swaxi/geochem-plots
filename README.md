@@ -47,19 +47,26 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 
 1. Load a vector point layer with geochemical data
 2. Click the **Geochemistry Plotting Tools** button in the toolbar (or menu) to open the dockable panel
+
 ![Spider Plots](tab1.png)
-3. Under **Layer Selection**, choose your **Layer**, the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field
-4. Pick a plot tab - **Spider, Discrimination/Classification, Custom XY, Custom Ternary, Minerals** or **Petrophysics** (see [Tabs](#tabs) below for what each one offers)
+
+4. Under **Layer Selection**, choose your **Layer**, the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field
+5. Pick a plot tab - **Spider, Discrimination/Classification, Custom XY, Custom Ternary, Minerals** or **Petrophysics** (see [Tabs](#tabs) below for what each one offers)
+
 ![Discrimination/Classification](tab2.png)
+
 ![Custom XY](tab3.png)
-5. Select samples to plot, using any of:
+
+6. Select samples to plot, using any of:
    - The **Samples** list in the plugin (multi-select as usual)
    - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (click **Refresh** in the plugin if the list doesn't update)
    - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first)
+
 ![Map selection](map2plot.png)
-6. Click **Generate Plot**
-7. Click **Save...** to export the current plot as PNG, PDF or SVG
-8. Click **None** to clear the sample selection
+
+7. Click **Generate Plot**
+8. Click **Save...** to export the current plot as PNG, PDF or SVG
+9. Click **None** to clear the sample selection
 
 ## Tabs
 
