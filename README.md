@@ -22,11 +22,26 @@ Developed for UWA EART3343 Lab exercises.
       * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
 
 ## Installation
+### *Installing Dependencies with qpip (Recommended)*
+The **GEOL-QMAPS** relies on several Python packages that are not always included in a standard QGIS installation. To simplify dependency management, the plugin supports installation through **qpip**, the QGIS Python package manager.
 
-### Method 1: Install from ZIP
-1. Download `geochem-plots-main.zip` via the green **<> Code** menu button on this page
-2. In QGIS, go to **Plugins → Manage and Install Plugins → Install from ZIP**
-3. Select the downloaded ZIP file and click **Install Plugin**
+Before installing **Geochemistry Plotting Tools**, it is recommended to:
+1. Install the **qpip** plugin from the QGIS Plugin Manager.
+2. Allow **qpip** to install any missing dependencies automatically when prompted by the **Geochemistry Plotting Tools** plugin (or any other plugin with depedencies).
+
+Using **qpip** ensures that all Python dependencies are installed within the active QGIS environment and avoids conflicts with system-wide Python installations.
+
+> **Important:** If the **Geochemistry Plotting Tools** plugin fails to start or reports missing Python modules, first verify that qpip is installed and that all required dependencies have been successfully installed. In most cases, dependency-related issues can be resolved by reinstalling the missing packages through qpip and restarting QGIS.
+
+### *4.2. Geochemistry Plotting Tools QGIS Plugin* 
+* The current plugin version and further releases will be made avalaible in the QGIS Plugin Manager Repository.
+
+* Open the QGIS Plugin Manager.
+
+* Switch to the **`All`** tab and search for the plugin name in the search bar.
+  
+* Select the plugin and click on **Install Plugin**
+
 
 ## Quick Start
 
@@ -155,7 +170,7 @@ Your layer should have fields containing geochemical data. The plugin automatica
 
 ## Author
 
-Mark Jessell - University of Western Australia    
+Mark Jessell, Julien Perret - Centre of Exploration Targeting, School of Earth and Oceans, University of Western Australia    
 Claude AI    
 
 ## License
@@ -175,4 +190,4 @@ This plugin is free software; you can redistribute it and/or modify it under the
 Thanks to https://pixabay.com/vectors/bottles-blue-green-transparent-34333/
 
 ## Acknowledgements
-Thanks to Julien Perret, Quentin Masurel, Leigh Bettenay and Simon Passsey for suggestions and beta-testing.
+Thanks to Quentin Masurel, Leigh Bettenay and Simon Passey for suggestions and beta-testing.
