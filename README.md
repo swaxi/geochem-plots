@@ -12,8 +12,7 @@ Developed for UWA EART3343 Lab exercises.
 
       * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
       * Add per-category drawing (z-stack) order control to the interactive style panel   
-      * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel   
-      * Fix category style colour edits not updating the mean ± 2σ marker's outline and error-bar tick colours   
+      * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel     
       * Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
       * Add "no category" option to plot all points with a single symbol   
       * Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
