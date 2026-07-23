@@ -15,7 +15,7 @@ from qgis.PyQt.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
     QFileDialog, QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
-    QDialog, QFormLayout, QDoubleSpinBox, QColorDialog, QInputDialog,
+    QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
     QDialogButtonBox, QSizePolicy
 )
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
@@ -39,6 +39,7 @@ try:
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
+    from matplotlib.container import ErrorbarContainer
     from matplotlib.widgets import RectangleSelector, CheckButtons, Button
     from matplotlib.path import Path
     from matplotlib.markers import MarkerStyle
@@ -1022,6 +1023,269 @@ def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers
         for local_idx, fid in enumerate(g['fids']):
             fid_to_scatter[fid] = (sc, local_idx)
     return fid_to_scatter, category_artists
+
+
+# =============================================================================
+# CATEGORY MEAN +/- 2-SIGMA STATISTICS OVERLAYS
+# =============================================================================
+# Every generate_*_plot() method draws its normal per-sample points/lines as
+# before, then additionally builds one of these overlay artist sets per
+# category - a mean +/- 2 sigma marker/error-bar and a convex-hull/min-max
+# envelope - both created hidden (visible=False). The interactive category
+# panel (_open_category_panel) then reveals them and fades the raw points on
+# a "Show mean +/- 2 sigma" toggle, so switching modes is instant (no
+# re-plotting) and still leaves the underlying points clickable for QGIS
+# feature selection.
+
+def _convex_hull(points):
+    """Andrew's monotone-chain convex hull, in counter-clockwise order.
+
+    No scipy dependency (not guaranteed present alongside QGIS's Python).
+    Inputs with fewer than 3 distinct points are returned as-is.
+    """
+    pts = sorted(set(points))
+    if len(pts) < 3:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _group_mean_2sigma(xs, ys):
+    """Return (mean_x, mean_y, err_x, err_y), err_* being 2 standard
+    deviations (0 when fewer than 2 points)."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    mean_x, mean_y = float(np.nanmean(xs)), float(np.nanmean(ys))
+    err_x = float(2 * np.nanstd(xs)) if len(xs) > 1 else 0.0
+    err_y = float(2 * np.nanstd(ys)) if len(ys) > 1 else 0.0
+    return mean_x, mean_y, err_x, err_y
+
+
+def _build_cat_groups_from_points(pts_data, sample_names, category_colors, category_markers, sizes=None):
+    """Group already-computed (x, y) points by category name.
+
+    A lightweight alternative to _scatter_grouped()'s cat_groups, for plot
+    types (discrimination/minerals/custom-ternary) that funnel through
+    _scatter_grouped for the raw scatter and don't otherwise keep a
+    per-category grouping around. Carries what _build_xy_stat_artists() needs:
+    point coordinates, one representative colour/marker, and (when bubble
+    sizing is active) each point's marker area, so the mean marker can be
+    sized consistently with the bubble-size rule.
+
+    `sizes`, if given, is a per-point list of marker areas (matplotlib
+    scatter `s` units) aligned with `pts_data`/`sample_names`.
+    """
+    cat_groups = {}
+    for i, ((x, y), name) in enumerate(zip(pts_data, sample_names)):
+        g = cat_groups.setdefault(name, {
+            'xs': [], 'ys': [], 'sizes': [],
+            'color': category_colors.get(name, 'tab:blue') if category_colors else 'tab:blue',
+            'marker': (category_markers.get(name, 'o') if category_markers else 'o'),
+            'name': name,
+        })
+        g['xs'].append(x)
+        g['ys'].append(y)
+        g['sizes'].append(sizes[i] if sizes else 80)
+    return cat_groups
+
+
+def _group_color(g):
+    colors = g.get('colors')
+    if colors:
+        return colors[0]
+    return g.get('color', 'tab:blue')
+
+
+def _build_xy_stat_artists(ax, cat_groups):
+    """Build hidden mean +/- 2-sigma and convex-hull envelope overlays for
+    XY-style scatter plots, one per category.
+
+    `cat_groups`: {key: {'xs': [...], 'ys': [...], 'name': str, plus either
+    'color'/'marker' (custom-ternary/discrimination/minerals) or
+    'colors'/'marker' (custom XY/petrophysics's own cat_groups, list/scalar -
+    either shape is accepted), plus optionally 'sizes': [...] (per-point
+    marker areas - the mean marker is sized to their average, so it follows
+    the plot's bubble-size rule when one is active)}}.
+    Returns (stats_registry, envelope_registry): {category_name: [artist, ...]}.
+    """
+    stats_registry = {}
+    envelope_registry = {}
+    for g in cat_groups.values():
+        xs, ys = g['xs'], g['ys']
+        if not xs:
+            continue
+        name = g['name']
+        color = _group_color(g)
+        marker = g.get('marker') or 'o'
+        sizes = g.get('sizes')
+        mean_area = float(np.mean(sizes)) if sizes else 144.0
+        ms = max(4.0, math.sqrt(mean_area))
+
+        mean_x, mean_y, err_x, err_y = _group_mean_2sigma(xs, ys)
+        err = ax.errorbar(
+            mean_x, mean_y, xerr=err_x or None, yerr=err_y or None,
+            fmt=marker, ms=ms, mfc=color, mec=color, mew=1.3,
+            ecolor=color, elinewidth=1.8, capsize=6, capthick=1.8,
+            zorder=16, visible=False)
+        stats_registry.setdefault(name, []).append(err)
+
+        if len(xs) >= 3:
+            hull = _convex_hull(list(zip(xs, ys)))
+            if len(hull) >= 3:
+                poly = Polygon(hull, closed=True, facecolor=color, edgecolor='none',
+                               linewidth=0, alpha=0.18, zorder=1, visible=False)
+                ax.add_patch(poly)
+                envelope_registry.setdefault(name, []).append(poly)
+    return stats_registry, envelope_registry
+
+
+def _restyle_stats_artist(artist, style, lock_size=False):
+    """Recolour/re-marker a mean +/- 2-sigma errorbar (or a dict/list of
+    them) to match a category's current style, leaving its computed
+    position/error-bar geometry untouched.
+
+    `lock_size=True` (bubble sizing active) leaves the marker's size alone,
+    matching how _apply_style_to_matplotlib_artist() locks raw-point sizes.
+    """
+    if artist is None:
+        return
+    if isinstance(artist, dict):
+        return _restyle_stats_artist(artist.get('artist'), style, lock_size)
+    if isinstance(artist, ErrorbarContainer):
+        colour = style.get('color', '#000000')
+        face = 'white' if style.get('fill') == 'hollow' else colour
+        data_line, caplines, barlinecols = artist.lines
+        if data_line is not None:
+            if hasattr(data_line, 'set_marker'):
+                data_line.set_marker(style.get('marker', 'o'))
+            if hasattr(data_line, 'set_markerfacecolor'):
+                data_line.set_markerfacecolor(face)
+            # Once a Line2D's markeredgecolor is explicitly set (as the mean
+            # marker's is, at construction), set_color() alone no longer
+            # touches it - it has to be restyled explicitly too, or the
+            # marker's contour keeps whatever colour it was built with.
+            if hasattr(data_line, 'set_markeredgecolor'):
+                data_line.set_markeredgecolor(colour)
+            if hasattr(data_line, 'set_color'):
+                data_line.set_color(colour)
+            if not lock_size and hasattr(data_line, 'set_markersize'):
+                data_line.set_markersize(max(6.0, float(style.get('markersize', 8)) * 1.5))
+        for cap in caplines:
+            cap.set_color(colour)
+            # Cap "ticks" are themselves marker-based Line2D's, subject to
+            # the same markeredgecolor quirk as the mean marker above.
+            if hasattr(cap, 'set_markeredgecolor'):
+                cap.set_markeredgecolor(colour)
+        for barcol in barlinecols:
+            barcol.set_color(colour)
+        return
+    if isinstance(artist, (list, tuple)):
+        for item in artist:
+            _restyle_stats_artist(item, style, lock_size)
+
+
+def _restyle_envelope_artist(artist, style):
+    """Recolour an envelope overlay (Polygon or fill_between PolyCollection,
+    or a dict/list of them) to match a category's current style colour.
+
+    Deliberately contour-less (edgecolor stays 'none') - only the fill
+    follows the category colour.
+    """
+    if artist is None:
+        return
+    if isinstance(artist, dict):
+        return _restyle_envelope_artist(artist.get('artist'), style)
+    if isinstance(artist, (list, tuple)):
+        for item in artist:
+            _restyle_envelope_artist(item, style)
+        return
+    colour = style.get('color', '#000000')
+    if hasattr(artist, 'set_facecolor'):
+        artist.set_facecolor(colour)
+    if hasattr(artist, 'set_edgecolor'):
+        artist.set_edgecolor('none')
+
+
+def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
+                               category_colors, category_markers, markers_enabled=True,
+                               sample_markersizes=None):
+    """Build hidden mean +/- 2-sigma and min/max-envelope overlays for a
+    spider diagram, one per category.
+
+    Statistics are computed in log10 space (spider diagrams use a log
+    y-axis and geochemical ratios are roughly log-normal), then mapped back
+    to linear values for display. Returns (stats_registry, envelope_registry)
+    with the same shape as _build_xy_stat_artists().
+
+    `sample_markersizes`, if given, is a per-sample list of the markersize
+    (already sqrt-of-area, matching each raw sample line's own bubble-scaled
+    marker) aligned with `plot_data`/`sample_names`; the mean marker is sized
+    to their per-category average, so it follows the plot's bubble-size rule
+    when one is active.
+    """
+    import warnings
+
+    stats_registry = {}
+    envelope_registry = {}
+    cat_indices = {}
+    for i, name in enumerate(sample_names):
+        cat_indices.setdefault(name, []).append(i)
+
+    for name, idxs in cat_indices.items():
+        color = category_colors.get(name, 'tab:blue') if category_colors else 'tab:blue'
+        marker = (category_markers.get(name, 'o') if (category_markers and markers_enabled) else 'o')
+        arr = np.array([plot_data[i] for i in idxs], dtype=float)  # (n_samples, n_elements)
+        mean_markersize = (float(np.mean([sample_markersizes[i] for i in idxs]))
+                           if sample_markersizes else 9.0)
+
+        # Elements missing across every sample in the category leave an
+        # all-NaN slice, which nanmin/nanmax/nanmean/nanstd warn about
+        # (harmlessly - the resulting NaNs are filtered out via `valid` below).
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            log_arr = np.log10(arr)
+            elem_min = np.nanmin(arr, axis=0)
+            elem_max = np.nanmax(arr, axis=0)
+            mean_log = np.nanmean(log_arr, axis=0)
+            std_log = np.nanstd(log_arr, axis=0) if arr.shape[0] > 1 else np.zeros_like(mean_log)
+
+        valid = np.isfinite(mean_log)
+        if not np.any(valid):
+            continue
+
+        mean_vals = 10 ** mean_log
+        upper = 10 ** (mean_log + 2 * std_log)
+        lower = 10 ** (mean_log - 2 * std_log)
+
+        err = ax.errorbar(
+            x_positions[valid], mean_vals[valid],
+            yerr=[mean_vals[valid] - lower[valid], upper[valid] - mean_vals[valid]],
+            fmt='-', marker=marker, markersize=mean_markersize, linewidth=2.5,
+            color=color, ecolor=color, elinewidth=1.6, capsize=4, capthick=1.6,
+            markerfacecolor='white', markeredgecolor=color,
+            markeredgewidth=1.5, zorder=16, visible=False)
+        stats_registry.setdefault(name, []).append(err)
+
+        if np.any(np.isfinite(elem_min) & np.isfinite(elem_max)):
+            band = ax.fill_between(x_positions, elem_min, elem_max, facecolor=color,
+                                   edgecolor='none', linewidth=0, alpha=0.18, zorder=1, visible=False)
+            envelope_registry.setdefault(name, []).append(band)
+
+    return stats_registry, envelope_registry
+
 
 class PolygonDiagramMixin:
     """Shared classify_point and draw_fields for diagram classes that define _get_fields().
@@ -3319,6 +3583,7 @@ class GeochemistryDockWidget(QDockWidget):
         plotted_categories = set()
         line_to_fid = {}
         artist_registry = {}
+        sample_line_markersizes = []
 
         for i, (values, name, feature) in enumerate(zip(plot_data, sample_names, features)):
             marker = sample_markers[i] if self.spider_markers.isChecked() else None
@@ -3334,6 +3599,7 @@ class GeochemistryDockWidget(QDockWidget):
                 line_markersize = math.sqrt(area)
             else:
                 line_markersize = 8
+            sample_line_markersizes.append(line_markersize)
 
             lines = ax.plot(x_positions, values, marker=marker, markersize=line_markersize, linewidth=1.5,
                    label=label, color=color, markerfacecolor='white' if marker else None,
@@ -3356,6 +3622,11 @@ class GeochemistryDockWidget(QDockWidget):
         n_samples = len(plot_data)
         ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalised to {norm_name}', fontsize=14)
 
+        stats_registry, envelope_registry = _build_spider_stat_artists(
+            ax, x_positions, plot_data, sample_names, category_colors, category_markers,
+            markers_enabled=self.spider_markers.isChecked(),
+            sample_markersizes=sample_line_markersizes if bubble_active else None)
+
         category_counts = Counter(sample_names)
         export_legend_artists = {}
         category_legend_obj = None
@@ -3377,7 +3648,8 @@ class GeochemistryDockWidget(QDockWidget):
         self._open_category_panel(
             fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Spider Diagram Categories', bubble_active=bubble_active)
+            title='Spider Diagram Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def add_classification_field(self):
@@ -3511,10 +3783,16 @@ class GeochemistryDockWidget(QDockWidget):
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
+        valid_sizes = [s for s, valid in zip(sample_sizes, valid_mask) if valid] if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
             fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Discrimination Diagram Categories', bubble_active=bubble_active)
+            title='Discrimination Diagram Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def generate_minerals_plot(self, layer, features, sample_names):
@@ -3584,10 +3862,16 @@ class GeochemistryDockWidget(QDockWidget):
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
+        valid_sizes = [s for s, valid in zip(sample_sizes, valid_mask) if valid] if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
             fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Mineral Classification Categories', bubble_active=bubble_active)
+            title='Mineral Classification Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def generate_petrophysics_plot(self, layer, features, sample_names):
@@ -3714,6 +3998,8 @@ class GeochemistryDockWidget(QDockWidget):
             for local_idx, fid in enumerate(g['fids']):
                 fid_to_scatter[fid] = (sc, local_idx)
 
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, cat_groups)
+
         ax.set_xlabel(f"{x_field}{x_unit_label}", fontsize=12)
         ax.set_ylabel(f"{y_field}{y_unit_label}", fontsize=12)
         ax.set_title(f"{y_field} vs {x_field} (n={valid_count})", fontsize=14)
@@ -3739,7 +4025,8 @@ class GeochemistryDockWidget(QDockWidget):
         self._open_category_panel(
             fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Petrophysics Categories', bubble_active=bubble_active)
+            title='Petrophysics Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def _apply_bdl_substitution(self, value):
@@ -4015,6 +4302,8 @@ class GeochemistryDockWidget(QDockWidget):
             for local_idx, fid in enumerate(g['fids']):
                 fid_to_scatter[fid] = (sc, local_idx)
 
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, cat_groups)
+
         ax.set_xlabel(x_label, fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
 
@@ -4045,7 +4334,8 @@ class GeochemistryDockWidget(QDockWidget):
         self._open_category_panel(
             fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Custom XY Plot Categories', bubble_active=bubble_active)
+            title='Custom XY Plot Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, fid_to_scatter, layer_id):
@@ -4092,7 +4382,12 @@ class GeochemistryDockWidget(QDockWidget):
             for fid, (sc, local_idx) in fid_to_scatter.items():
                 if sc not in coll_edge:
                     n = len(sc.get_offsets())
-                    coll_edge[sc] = ['black'] * n
+                    # Hollow-styled categories have a coloured (not black)
+                    # outline - _apply_style_to_matplotlib_artist() stashes
+                    # that as _geochem_base_edgecolor so it survives being
+                    # the "not selected" baseline here.
+                    base_edge = getattr(sc, '_geochem_base_edgecolor', 'black')
+                    coll_edge[sc] = [base_edge] * n
                     coll_lw[sc]   = [0.5] * n
                 if fid in selected_set:
                     coll_edge[sc][local_idx] = 'red'
@@ -4408,6 +4703,7 @@ class GeochemistryDockWidget(QDockWidget):
             'markersize': 8.0,
             'linewidth': 1.5,
             'alpha': 1.0,
+            'fill': 'full',
         }
 
     def _style_templates_path(self):
@@ -4460,6 +4756,8 @@ class GeochemistryDockWidget(QDockWidget):
         result['alpha'] = max(0.05, min(1.0, result['alpha']))
         for key in ('color', 'marker'):
             result[key] = str(result.get(key, fallback[key]))
+        if result.get('fill') not in ('full', 'hollow'):
+            result['fill'] = fallback['fill']
         return result
 
     def _set_artist_visible(self, artist, visible):
@@ -4474,6 +4772,78 @@ class GeochemistryDockWidget(QDockWidget):
             return
         if hasattr(artist, 'set_visible'):
             artist.set_visible(visible)
+
+    def _set_artist_alpha(self, artist, alpha):
+        """Set alpha on a Matplotlib artist, or a dict/list of artists.
+
+        Used to fade a category's raw points/lines when the interactive
+        panel's "Show mean +/- 2 sigma" overlay is active, independently of
+        the artist's stored category-style alpha (which _apply_category_style
+        restores whenever a style is (re)applied).
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._set_artist_alpha(artist.get('artist'), alpha)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._set_artist_alpha(item, alpha)
+            return
+        if hasattr(artist, 'set_alpha'):
+            artist.set_alpha(alpha)
+
+    def _set_artist_linewidth(self, artist, linewidth):
+        """Set linewidth on a Matplotlib artist, or a dict/list/tuple of
+        artists - including an ErrorbarContainer, whose nested data
+        line/caplines/error-bar LineCollections this recurses into (it is
+        itself tuple-like: `tuple(container) == container.lines`).
+
+        Used by the interactive panel's "Error bar thickness" control.
+        Error-bar caps render via their marker glyph (linestyle='None',
+        marker='_'/'|'), not an actual line, so their visible stroke width
+        comes from markeredgewidth, not linewidth - set both so the caps
+        thicken along with the whiskers and the mean marker's own outline.
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._set_artist_linewidth(artist.get('artist'), linewidth)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._set_artist_linewidth(item, linewidth)
+            return
+        if hasattr(artist, 'set_linewidth'):
+            artist.set_linewidth(linewidth)
+        if hasattr(artist, 'set_markeredgewidth'):
+            artist.set_markeredgewidth(linewidth)
+
+    def _bump_artist_zorder(self, artist, base_cache, bonus):
+        """Offset a Matplotlib artist's (or dict/list/tuple's) z-order by
+        `bonus`, relative to its own original z-order at construction time.
+
+        The original z-order is cached in `base_cache` (keyed by id(artist))
+        the first time each leaf artist is seen, so repeated calls with a
+        different `bonus` always offset from the same baseline instead of
+        compounding. This lets the interactive panel's category ordering
+        control reorder which category's points/lines/mean-marker/envelope
+        draw on top of another's, while preserving each layer's own
+        raw/stats/envelope stacking tier (they get different base z-orders
+        to begin with).
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._bump_artist_zorder(artist.get('artist'), base_cache, bonus)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._bump_artist_zorder(item, base_cache, bonus)
+            return
+        if not hasattr(artist, 'set_zorder'):
+            return
+        key = id(artist)
+        if key not in base_cache:
+            base_cache[key] = artist.get_zorder() if hasattr(artist, 'get_zorder') else 1.0
+        artist.set_zorder(base_cache[key] + bonus)
 
     def _build_default_category_styles(self, sample_names):
         """Build fresh default per-category styles seeded from the auto colour map."""
@@ -4596,16 +4966,26 @@ class GeochemistryDockWidget(QDockWidget):
         alpha = float(style.get('alpha', 1.0))
         colour = style.get('color', '#000000')
         line_width = float(style.get('linewidth', 1.0))
+        hollow = style.get('fill') == 'hollow'
+        face = 'white' if hollow else colour
 
         if role == 'legend_label':
             # Legend text stays plain black; only the marker swatch restyles.
             return
         if role == 'scatter':
-            # PathCollection (ax.scatter and its legend handle). The black
-            # point outline is left untouched since it also doubles as the
-            # QGIS-selection highlight colour (see _attach_scatter_selection).
+            # PathCollection (ax.scatter and its legend handle). Edge colour
+            # follows the category colour only in hollow mode - full mode
+            # keeps the original black outline, since that colour also
+            # doubles as the QGIS-selection highlight baseline (see
+            # apply_selection() in _attach_scatter_selection, which reads
+            # the same _geochem_base_edgecolor stashed here).
+            edge = colour if hollow else 'black'
             if hasattr(artist, 'set_facecolor'):
-                artist.set_facecolor(colour)
+                artist.set_facecolor(face)
+            if hasattr(artist, 'set_edgecolor'):
+                n = max(1, len(artist.get_offsets())) if hasattr(artist, 'get_offsets') else 1
+                artist.set_edgecolor([edge] * n)
+                artist._geochem_base_edgecolor = edge
             if not lock_size and hasattr(artist, 'set_sizes'):
                 n = max(1, len(artist.get_offsets()))
                 artist.set_sizes([float(style.get('markersize', 8)) ** 2] * n)
@@ -4624,7 +5004,7 @@ class GeochemistryDockWidget(QDockWidget):
             if not lock_size and hasattr(artist, 'set_markersize'):
                 artist.set_markersize(float(style.get('markersize', 8)))
             if hasattr(artist, 'set_markerfacecolor'):
-                artist.set_markerfacecolor(colour)
+                artist.set_markerfacecolor(face)
             if hasattr(artist, 'set_markeredgecolor'):
                 artist.set_markeredgecolor(colour)
             if hasattr(artist, 'set_color'):
@@ -4637,7 +5017,7 @@ class GeochemistryDockWidget(QDockWidget):
     def _open_category_panel(self, fig, artist_registry, category_counts=None,
                              category_styles=None, title='Plot Categories',
                              style_template_key=None, export_legend_artists=None,
-                             bubble_active=False):
+                             bubble_active=False, stats_registry=None, envelope_registry=None):
         """Embed category visibility/style controls in a right-hand Qt panel.
 
         The panel is attached to the Matplotlib figure's own Qt window as a
@@ -4648,6 +5028,12 @@ class GeochemistryDockWidget(QDockWidget):
         `bubble_active=True` disables per-category symbol-size editing here,
         since the plot's marker sizes are already driven by its bubble-size
         scaling and would otherwise be silently flattened by this panel.
+
+        `stats_registry`/`envelope_registry` are the hidden per-category mean
+        +/- 2-sigma and envelope artists built by _build_xy_stat_artists() /
+        _build_spider_stat_artists(). When either is non-empty, a
+        "Statistics" control is added that reveals them and fades the raw
+        points/lines, without needing to re-plot (Qt dock path only).
         """
         if not artist_registry:
             return
@@ -4655,8 +5041,43 @@ class GeochemistryDockWidget(QDockWidget):
         category_counts = category_counts or {}
         category_styles = category_styles or {}
         export_legend_artists = export_legend_artists or {}
+        stats_registry = stats_registry or {}
+        envelope_registry = envelope_registry or {}
         categories = sorted(artist_registry.keys(), key=lambda x: str(x))
         visible_state = {category: True for category in categories}
+        _stats_display_ref = [lambda: None]
+        category_order = list(categories)
+        zorder_base_cache = {}
+        order_spin_by_category = {}
+
+        def _apply_category_order():
+            for rank, category in enumerate(category_order):
+                bonus = rank * 0.001
+                for entry in artist_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in stats_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in envelope_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in export_legend_artists.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+            fig.canvas.draw_idle()
+
+        def _reorder_category(category, new_rank_1indexed):
+            new_index = max(0, min(len(category_order) - 1, new_rank_1indexed - 1))
+            old_index = category_order.index(category)
+            if new_index == old_index:
+                return
+            category_order.pop(old_index)
+            category_order.insert(new_index, category)
+            for cat in categories:
+                spin = order_spin_by_category.get(cat)
+                if spin is None:
+                    continue
+                spin.blockSignals(True)
+                spin.setValue(category_order.index(cat) + 1)
+                spin.blockSignals(False)
+            _apply_category_order()
 
         def _apply_category_style(category):
             style = category_styles.get(category, self._default_category_style(0))
@@ -4664,6 +5085,16 @@ class GeochemistryDockWidget(QDockWidget):
                 self._apply_style_to_matplotlib_artist(entry, 'marker', style, lock_size=bubble_active)
             for legend_artist in export_legend_artists.get(category, []):
                 self._apply_style_to_matplotlib_artist(legend_artist, 'marker', style, lock_size=bubble_active)
+            # Keep the mean +/- 2 sigma overlay's colour/marker/size in sync
+            # with the individual points' style.
+            for stat_artist in stats_registry.get(category, []):
+                _restyle_stats_artist(stat_artist, style, lock_size=bubble_active)
+            for env_artist in envelope_registry.get(category, []):
+                _restyle_envelope_artist(env_artist, style)
+            # Re-applying a style resets the raw artist's alpha to the style's
+            # own value, which would undo any "Show mean +/- 2 sigma" fade -
+            # so reapply that fade on top, if the Statistics toggle is on.
+            _stats_display_ref[0]()
             fig.canvas.draw_idle()
 
         def _sync_legend_symbols():
@@ -4681,6 +5112,9 @@ class GeochemistryDockWidget(QDockWidget):
                     self._set_artist_visible(artist, visible)
                 for legend_artist in export_legend_artists.get(category, []):
                     self._set_artist_visible(legend_artist, visible)
+            # The Statistics overlay's own visibility/fade also depends on
+            # which categories are shown/hidden here.
+            _stats_display_ref[0]()
             fig.canvas.draw_idle()
 
         def _apply_all_category_styles():
@@ -4702,6 +5136,84 @@ class GeochemistryDockWidget(QDockWidget):
             panel_layout = QVBoxLayout(panel)
             panel_layout.setContentsMargins(8, 8, 8, 8)
             panel_layout.setSpacing(6)
+
+            if stats_registry or envelope_registry:
+                stats_group = QGroupBox('Statistics', panel)
+                stats_layout = QVBoxLayout(stats_group)
+                stats_caption = QLabel(
+                    "Show each category's mean ± 2σ, with individual samples "
+                    "faded behind it (or replaced by a shaded envelope).", stats_group)
+                stats_caption.setWordWrap(True)
+                stats_layout.addWidget(stats_caption)
+
+                stats_checkbox = QCheckBox('Show mean ± 2σ', stats_group)
+                envelope_checkbox = QCheckBox(
+                    'Individual data as envelope (instead of faint points/lines)', stats_group)
+                envelope_checkbox.setEnabled(False)
+                stats_layout.addWidget(stats_checkbox)
+                stats_layout.addWidget(envelope_checkbox)
+
+                opacity_row = QHBoxLayout()
+                opacity_label = QLabel('Background opacity:', stats_group)
+                opacity_spin = QDoubleSpinBox(stats_group)
+                opacity_spin.setRange(0.05, 1.0)
+                opacity_spin.setDecimals(2)
+                opacity_spin.setSingleStep(0.05)
+                opacity_spin.setValue(0.30)
+                opacity_spin.setEnabled(False)
+                opacity_spin.setToolTip(
+                    "Opacity of the individual points/lines (or envelope fill) shown "
+                    "behind the mean ± 2σ overlay.")
+                opacity_row.addWidget(opacity_label)
+                opacity_row.addWidget(opacity_spin)
+                stats_layout.addLayout(opacity_row)
+
+                width_row = QHBoxLayout()
+                width_label = QLabel('Error bar thickness:', stats_group)
+                width_spin = QDoubleSpinBox(stats_group)
+                width_spin.setRange(0.5, 6.0)
+                width_spin.setDecimals(1)
+                width_spin.setSingleStep(0.2)
+                width_spin.setValue(1.8)
+                width_spin.setEnabled(False)
+                width_spin.setToolTip("Line width of the mean ± 2σ marker/error bars.")
+                width_row.addWidget(width_label)
+                width_row.addWidget(width_spin)
+                stats_layout.addLayout(width_row)
+
+                panel_layout.addWidget(stats_group, 0)
+
+                def _apply_stats_display():
+                    enabled = stats_checkbox.isChecked()
+                    envelope = envelope_checkbox.isChecked()
+                    opacity = opacity_spin.value()
+                    line_width = width_spin.value()
+                    envelope_checkbox.setEnabled(enabled)
+                    opacity_spin.setEnabled(enabled)
+                    width_spin.setEnabled(enabled)
+                    for category in categories:
+                        cat_visible = visible_state.get(category, True)
+                        self._set_artist_visible(stats_registry.get(category, []), enabled and cat_visible)
+                        self._set_artist_visible(
+                            envelope_registry.get(category, []), enabled and envelope and cat_visible)
+                        self._set_artist_linewidth(stats_registry.get(category, []), line_width)
+                        for env_artist in envelope_registry.get(category, []):
+                            self._set_artist_alpha(env_artist, opacity)
+                        style = category_styles.get(category, self._default_category_style(0))
+                        base_alpha = float(style.get('alpha', 1.0))
+                        if enabled:
+                            effective_alpha = 0.0 if envelope else opacity
+                        else:
+                            effective_alpha = base_alpha
+                        for entry in artist_registry.get(category, []):
+                            self._set_artist_alpha(entry, effective_alpha)
+                    fig.canvas.draw_idle()
+
+                _stats_display_ref[0] = _apply_stats_display
+                stats_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                envelope_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                opacity_spin.valueChanged.connect(lambda _val: _apply_stats_display())
+                width_spin.valueChanged.connect(lambda _val: _apply_stats_display())
 
             style_mgmt_group = QGroupBox('Style Management', panel)
             style_mgmt_layout = QVBoxLayout(style_mgmt_group)
@@ -4726,7 +5238,9 @@ class GeochemistryDockWidget(QDockWidget):
 
             class_group = QGroupBox('Categories', panel)
             class_layout = QVBoxLayout(class_group)
-            caption = QLabel('Toggle category visibility, or edit its colour, marker, size and transparency.')
+            caption = QLabel(
+                'Toggle category visibility, edit its colour, marker, size and transparency, '
+                'or set its drawing order (higher number = drawn on top).')
             caption.setWordWrap(True)
             class_layout.addWidget(caption)
 
@@ -4793,9 +5307,13 @@ class GeochemistryDockWidget(QDockWidget):
                         colour_btn.setStyleSheet(f'background-color: {colour_value[0]};')
                 colour_btn.clicked.connect(_choose_colour)
 
+                hollow_checkbox = QCheckBox('Hollow (white fill, coloured outline)', dlg)
+                hollow_checkbox.setChecked(style.get('fill') == 'hollow')
+
                 form.addRow('Symbol shape:', marker_cb)
                 form.addRow('Symbol size:', marker_size)
                 form.addRow('Symbol colour:', colour_btn)
+                form.addRow('Symbol fill:', hollow_checkbox)
                 form.addRow('Line width:', line_width)
                 form.addRow('Transparency:', alpha)
                 layout.addLayout(form)
@@ -4812,6 +5330,7 @@ class GeochemistryDockWidget(QDockWidget):
                         'color': colour_value[0],
                         'linewidth': float(line_width.value()),
                         'alpha': float(alpha.value()),
+                        'fill': 'hollow' if hollow_checkbox.isChecked() else 'full',
                     })
                     category_styles[category] = style
                     _apply_category_style(category)
@@ -4826,6 +5345,15 @@ class GeochemistryDockWidget(QDockWidget):
                 checkbox = QCheckBox(f'{category} (n={category_counts.get(category, 0)})', row_widget)
                 checkbox.setChecked(True)
                 checkbox_by_category[category] = checkbox
+
+                order_spin = QSpinBox(row_widget)
+                order_spin.setRange(1, len(categories))
+                order_spin.setValue(category_order.index(category) + 1)
+                order_spin.setToolTip(
+                    'Drawing (z-stack) order: higher numbers draw on top of lower ones.')
+                order_spin.setFixedWidth(44)
+                order_spin_by_category[category] = order_spin
+
                 style_btn = QPushButton('Style…', row_widget)
                 style_btn.setToolTip(f'Edit plotting style for {category}')
                 style_button_by_category[category] = style_btn
@@ -4839,9 +5367,14 @@ class GeochemistryDockWidget(QDockWidget):
                 def _make_style_callback(cat):
                     return lambda: _style_dialog(cat)
 
+                def _make_order_callback(cat):
+                    return lambda value: _reorder_category(cat, value)
+
                 checkbox.stateChanged.connect(_make_state_callback(category, checkbox))
                 style_btn.clicked.connect(_make_style_callback(category))
+                order_spin.valueChanged.connect(_make_order_callback(category))
                 row_layout.addWidget(checkbox, 1)
+                row_layout.addWidget(order_spin, 0)
                 row_layout.addWidget(style_btn, 0)
                 controls_layout.addWidget(row_widget)
 
@@ -5319,6 +5852,13 @@ class GeochemistryDockWidget(QDockWidget):
                 pts_data.append((x, y))
                 ordered_fids.append(fid)
 
+        fid_to_name = dict(zip(fid_list, valid_names))
+        fid_to_size = dict(zip(fid_list, sample_sizes)) if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, [fid_to_name[f] for f in ordered_fids], category_colors, category_markers,
+            sizes=([fid_to_size[f] for f in ordered_fids] if fid_to_size else None))
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
+
         title = f"{a_label}  –  {b_label}  –  {c_label}  (n={len(raw_data)})"
         ax.set_title(title, fontsize=11, pad=12)
 
@@ -5341,5 +5881,6 @@ class GeochemistryDockWidget(QDockWidget):
         self._open_category_panel(
             fig, artist_registry, category_counts=Counter(valid_names), category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
-            title='Ternary Plot Categories', bubble_active=bubble_active)
+            title='Ternary Plot Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig

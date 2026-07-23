@@ -10,6 +10,10 @@ Developed for UWA EART3343 Lab exercises.
 
 # Changelog 0.0.5
 
+      * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
+      * Add per-category drawing (z-stack) order control to the interactive style panel   
+      * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel   
+      * Fix category style colour edits not updating the mean ± 2σ marker's outline and error-bar tick colours   
       * Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
       * Add "no category" option to plot all points with a single symbol   
       * Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
@@ -113,7 +117,11 @@ Split into two sub-tabs:
 
 The **Category** field (Layer Selection) groups and colours samples. Choose `(none) - plot all points with one symbol` to skip categorisation and plot every selected sample identically.
 
-Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour and transparency live. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots. If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots. If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+
+### Category mean ± 2σ statistics overlay
+
+The Style panel's **Statistics** section adds a **Show mean ± 2σ** toggle to any generated plot. When enabled, each visible category's individual points/lines are faded into the background and a mean marker (or, for Spider diagrams, a mean trace) with 2-standard-deviation error bars is drawn on top. An **Individual data as envelope** checkbox swaps the faded points/lines for a plain, contour-less semi-transparent envelope (a convex hull for scatter-type plots, a min/max band for Spider diagrams) instead. **Background opacity** and **Error bar thickness** spinboxes control the faded/envelope opacity and the mean marker/error-bar line weight. The mean marker follows the plot's bubble-size scaling when active, and stays in sync with a category's colour, marker and fill style if you edit them afterwards.
 
 ### Bubble Size (all tabs)
 
