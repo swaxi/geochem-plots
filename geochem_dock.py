@@ -4051,7 +4051,7 @@ class GeochemistryDockWidget(QDockWidget):
         if method == 'Detection limit':
             return detection_limit
         if method == 'Random value (0 to detection limit)':
-            return random.uniform(0.0, detection_limit)
+            return random.uniform(0.0, detection_limit)  # nosec B311 - statistical substitution for BDL values, not security-sensitive
         if method == 'Fixed value':
             return self.custom_bdl_fixed_spin.value()
         return value
@@ -4374,7 +4374,7 @@ class GeochemistryDockWidget(QDockWidget):
             for ann in current_labels:
                 try:
                     ann.remove()
-                except Exception:
+                except Exception:  # nosec B110 - best-effort label cleanup, must never block reselection
                     pass
             current_labels.clear()
 
@@ -4442,7 +4442,7 @@ class GeochemistryDockWidget(QDockWidget):
                     renderer.setOrderBy(order_by)
                     renderer.setOrderByEnabled(True)
                     _layer_init.triggerRepaint()
-            except Exception:
+            except Exception:  # nosec B110 - best-effort draw-order tweak, must not block selection/plotting
                 pass
 
         _rect_used = [False]
@@ -4995,7 +4995,7 @@ class GeochemistryDockWidget(QDockWidget):
                 try:
                     ms = MarkerStyle(style.get('marker', 'o'))
                     artist.set_paths([ms.get_path().transformed(ms.get_transform())])
-                except Exception:
+                except Exception:  # nosec B110 - best-effort marker restyle, must not block the rest of the legend update
                     pass
             if hasattr(artist, 'set_alpha'):
                 artist.set_alpha(alpha)
@@ -5566,7 +5566,7 @@ class GeochemistryDockWidget(QDockWidget):
         label_to_category = dict(zip(labels, categories))
         try:
             fig.subplots_adjust(right=0.68)
-        except Exception:
+        except Exception:  # nosec B110 - best-effort layout tweak, must not block the fallback legend controls
             pass
 
         check_ax = fig.add_axes([0.72, 0.42, 0.25, 0.45])
