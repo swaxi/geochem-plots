@@ -84,6 +84,7 @@ try:
     QSizePolicy_Expanding = QSizePolicy.Policy.Expanding
     QDockWidget_Movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
     QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
+    QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
 
 except AttributeError:
     # Qt5 detected
@@ -118,6 +119,7 @@ except AttributeError:
     QSizePolicy_Expanding = QSizePolicy.Expanding
     QDockWidget_Movable = QDockWidget.DockWidgetMovable
     QDockWidget_Floatable = QDockWidget.DockWidgetFloatable
+    QPainter_Antialiasing = QPainter.Antialiasing
 
 
 # =============================================================================
@@ -174,7 +176,7 @@ class _MarkerSymbolWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter_Antialiasing)
 
         side = min(self.width(), self.height())
         cx = self.width() / 2.0
@@ -5630,13 +5632,6 @@ class GeochemistryDockWidget(QDockWidget):
 
     def get_numeric_field_names(self):
         """Get numeric field names from the current layer."""
-        from qgis.core import QgsField
-        try:
-            from qgis.PyQt.QtCore import QVariant
-        except ImportError:
-            import sip
-            from PyQt5.QtCore import QVariant
-
         layer_id = self.layer_combo.currentData()
         if layer_id is None:
             return []
