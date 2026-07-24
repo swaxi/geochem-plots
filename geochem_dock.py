@@ -1690,6 +1690,167 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
         return fid_to_scatter, category_artists
 
 
+class Hasterok2018_Sedimentary(PolygonDiagramMixin):
+    """SiO2 - Al2O3+Fe2O3 - CaO+MgO ternary classification of sedimentary
+    (and metasedimentary) rocks after Hasterok, Gard & Webb (2018), itself a
+    modification of Mason (1966)'s original diagram.
+
+    Field boundaries digitised from the XY-coordinate table published at
+    https://chemostratigraphy.com/geochemical-differentiation-of-sedimentary-rocks-after-b-mason/
+    (Figures 2-3), converted from that page's own X/Y convention into this
+    module's (a, b, c) -> Cartesian ternary projection.
+
+    The paper normalizes major oxides to a volatile-free basis before
+    plotting, but since that normalization rescales SiO2, Al2O3, Fe2O3, CaO
+    and MgO by the same common factor, it leaves their ratios - and hence
+    their ternary position - unchanged, so it is not reproduced here;
+    ternary_to_cartesian() already renormalizes (a, b, c) to sum to 1.
+    """
+
+    name = "SiO2 - Al2O3+Fe2O3 - CaO+MgO (Sedimentary Rocks)"
+    reference = "Hasterok et al. (2018), after Mason (1966)"
+    field_name = "Hastrk2018"
+
+    # Oxides required to plot a point; screened for availability up front
+    # (see check_data_availability) since a layer missing one of these
+    # oxide groups entirely cannot plot ANY point on this diagram.
+    required_oxides = ['SiO2', 'Al2O3', 'Fe2O3 (or FeO)', 'CaO', 'MgO']
+
+    # UI-controlled (Discrimination tab checkbox): how to handle negative,
+    # below-detection-limit-coded oxide values (this codebase's convention
+    # for BDL is a negative value whose magnitude is the detection limit).
+    # False (default) discards the point; True substitutes 0.
+    bdl_as_zero = False
+
+    @classmethod
+    def check_data_availability(cls, layer):
+        """Return a list of required-oxide descriptions with no usable field
+        in `layer` (neither the oxide itself nor a convertible elemental/ppm
+        equivalent), for a first-screening warning before plotting."""
+        missing = []
+        for oxide in ('SiO2', 'Al2O3', 'CaO', 'MgO'):
+            if find_element_field(layer, oxide) is None:
+                missing.append(oxide)
+        if (find_element_field(layer, 'Fe2O3') is None
+                and find_element_field(layer, 'FeO') is None
+                and find_element_field(layer, 'Fe') is None):
+            missing.append('Fe2O3 (or FeO / Fe)')
+        return missing
+
+    @classmethod
+    def _get_fields(cls):
+        return [
+            {'name': 'Quartzite',
+             'position': [0.5, 0.807],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.5, 0.45, 0.55],
+             'y': [0.8660, 0.7794, 0.7794]
+            },
+            {'name': 'Psammite (Sandstones)',
+             'position': [0.56, 0.615],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': -35, 'color': 'k',
+             'x': [0.45, 0.415, 0.59, 0.725, 0.55],
+             'y': [0.7794, 0.7188, 0.5023, 0.4763, 0.7794]
+            },
+            {'name': 'Pelite (Argillaceous Rocks)',
+             'position': [0.30, 0.48],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.415, 0.15, 0.25, 0.50, 0.50, 0.59],
+             'y': [0.7188, 0.2598, 0.2598, 0.2598, 0.3464, 0.5023]
+            },
+            {'name': 'Marble (Limestones and dolomites)',
+             'position': [0.77, 0.30],
+             'fontsize': 8, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.59, 0.725, 1.0, 0.9, 0.50, 0.50],
+             'y': [0.5023, 0.4763, 0.0, 0.0, 0.2598, 0.3464]
+            },
+            {'name': 'Soil (Laterites and bauxites)',
+             'position': [0.075, 0.11],
+             'fontsize': 6, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.15, 0.25, 0.05, 0.0],
+             'y': [0.2598, 0.2598, 0.0, 0.0]
+            },
+            {'name': 'Rare/non-existent',
+             'position': [0.45, 0.10],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.25, 0.50, 0.9, 0.05],
+             'y': [0.2598, 0.2598, 0.0, 0.0]
+            },
+        ]
+
+    @classmethod
+    def classify_point(cls, a, b, c):
+        if a is None or b is None or c is None:
+            return None
+        if a + b + c <= 0:
+            return None
+        x, y = ternary_to_cartesian(a, b, c)
+        for f in cls._get_fields():
+            xs = f['x'] + [f['x'][0]]
+            ys = f['y'] + [f['y'][0]]
+            if Path(list(zip(xs, ys))).contains_point((x, y)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
+
+    @classmethod
+    def _screen_bdl(cls, value):
+        """Apply the negative-value (BDL) handling policy to one oxide value."""
+        if value is None:
+            return None
+        if value < 0:
+            return 0.0 if cls.bdl_as_zero else None
+        return value
+
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        sio2 = cls._screen_bdl(get_element_value(feature, layer, 'SiO2'))
+        al2o3 = cls._screen_bdl(get_element_value(feature, layer, 'Al2O3'))
+        cao = cls._screen_bdl(get_element_value(feature, layer, 'CaO'))
+        mgo = cls._screen_bdl(get_element_value(feature, layer, 'MgO'))
+
+        fe2o3 = get_element_value(feature, layer, 'Fe2O3')
+        if fe2o3 is None:
+            feo = get_element_value(feature, layer, 'FeO')
+            fe2o3 = feo / 0.8998 if feo is not None else None
+        fe2o3 = cls._screen_bdl(fe2o3)
+
+        if any(v is None for v in (sio2, al2o3, fe2o3, cao, mgo)):
+            return None, None, None
+        if sio2 + al2o3 + fe2o3 + cao + mgo <= 0:
+            return None, None, None
+
+        return al2o3 + fe2o3, cao + mgo, sio2
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
+        plot_ternary_axes(ax, labels=['Al2O3+Fe2O3', 'CaO+MgO', 'SiO2'])
+        cls.draw_fields(ax)
+
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
+
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter, category_artists
+
+
 class Pearce1984_YNb:
     """Nb vs Y diagram for granites (Pearce et al., 1984)."""
 
@@ -2463,6 +2624,7 @@ DISCRIMINATION_DIAGRAMS = {
     'Zr/Ti vs Nb/Y (Pearce 1996)': Pearce1996_NbY_ZrTi,
     'Zr/Ti vs Nb/Y (Winchester & Floyd 1977)': Winchester_Floyd1977_NbY_ZrTi,
     'Zr/4-Nb×2-Y Ternary (Meschede 1986)': Meschede1986_Ternary,
+    'SiO2-Al2O3+Fe2O3-CaO+MgO Sedimentary Rocks (Hasterok et al. 2018)': Hasterok2018_Sedimentary,
     'Nb vs Y (Pearce et al. 1984)': Pearce1984_YNb,
     'Rb vs (Y+Nb) (Pearce et al. 1984)': Pearce1984_YNbRb,
     'Ti vs Zr (Pearce & Cann 1973)': PearceCann1973_ZrTi
@@ -2742,6 +2904,14 @@ class GeochemistryDockWidget(QDockWidget):
         self.discrim_category_legend = QCheckBox("Category Legend")
         self.discrim_category_legend.setChecked(True)
         discrim_layout.addLayout(self._checkbox_row(self.discrim_legend, self.discrim_category_legend))
+
+        self.discrim_bdl_as_zero = QCheckBox("Treat below-LOD (negative-coded) oxide values as 0")
+        self.discrim_bdl_as_zero.setChecked(False)
+        self.discrim_bdl_as_zero.setToolTip(
+            "Applies to diagrams that support it (e.g. Hasterok et al. 2018).\n"
+            "Unchecked (default): points with a negative-coded oxide value are discarded.\n"
+            "Checked: negative-coded oxide values are substituted with 0 instead.")
+        discrim_layout.addWidget(self.discrim_bdl_as_zero)
 
         discrim_layout.addWidget(self._create_bubble_size_group('discrim', CUSTOM_XY_ELEMENTS, editable=True))
         discrim_layout.addStretch()
@@ -3654,6 +3824,38 @@ class GeochemistryDockWidget(QDockWidget):
             stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
+    def _prepare_diagram_for_run(self, diagram_class, layer):
+        """First-screening + option wiring shared by 'Generate Diagram' and
+        'Classify Layer' for discrimination-diagram classes.
+
+        Sets `diagram_class.bdl_as_zero` from the Discrimination tab's
+        checkbox for diagram classes that support it, and, for diagram
+        classes that declare `check_data_availability`, warns up front if
+        any required oxide has no usable field anywhere in the layer
+        (as an oxide wt% field or a convertible elemental/ppm field) - such
+        oxides make every point on the diagram unclassifiable, not just some.
+
+        Returns False if the user cancels after seeing the warning (run
+        should be aborted), True otherwise.
+        """
+        if hasattr(diagram_class, 'bdl_as_zero'):
+            diagram_class.bdl_as_zero = self.discrim_bdl_as_zero.isChecked()
+
+        if hasattr(diagram_class, 'check_data_availability'):
+            missing = diagram_class.check_data_availability(layer)
+            if missing:
+                reply = QMessageBox.warning(
+                    self, "Missing Required Geochemical Data",
+                    f"Layer '{layer.name()}' has no usable field (as oxide wt% or a "
+                    f"convertible elemental/ppm field) for the following oxide(s) "
+                    f"required by '{diagram_class.name}':\n\n" + "\n".join(missing) +
+                    "\n\nEvery point will be excluded from this diagram until these "
+                    "are available. Continue anyway?",
+                    QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+                if reply != QMessageBox_Ok:
+                    return False
+        return True
+
     def add_classification_field(self):
         """Add or update a classification field on the layer for the current discrimination diagram."""
         layer_id = self.layer_combo.currentData()
@@ -3668,6 +3870,9 @@ class GeochemistryDockWidget(QDockWidget):
             diagram_name = self.diagram_combo.currentText()
             diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
         field_name = diagram_class.field_name
+
+        if not self._prepare_diagram_for_run(diagram_class, layer):
+            return
 
         if not layer.isEditable():
             if not layer.startEditing():
@@ -3716,6 +3921,9 @@ class GeochemistryDockWidget(QDockWidget):
         """Generate discrimination diagram."""
         diagram_name = self.diagram_combo.currentText()
         diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
+
+        if not self._prepare_diagram_for_run(diagram_class, layer):
+            return
 
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('discrim')

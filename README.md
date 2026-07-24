@@ -10,6 +10,7 @@ Developed for UWA EART3343 Lab exercises.
 
 # Changelog 0.0.5
 
+      * Add Geochemical Differentiation of Sedimentary Rocks ternary diagram (Hasterok et al. 2018, after Mason 1966), with a first-screening check for required oxide fields and a below-detection-limit (negative value) handling option   
       * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
       * Add per-category drawing (z-stack) order control to the interactive style panel   
       * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel     
@@ -81,7 +82,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 - [Bubble Size](#bubble-size-all-tabs) section to scale each sample's line markers by an extra field
 
 ### Discrimination/Classification
-- Plot-type drop-down with 8 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996; Winchester & Floyd 1977), Zr/4-Nb×2-Y ternary (Meschede 1986), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
+- Plot-type drop-down with 9 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996; Winchester & Floyd 1977), Zr/4-Nb×2-Y ternary (Meschede 1986), Geochemical Differentiation of Sedimentary Rocks ternary (Hasterok et al. 2018, after Mason 1966), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
 - **Field Legend** shows the diagram's named fields; **Category Legend** shows sample categories
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** (in the Samples panel) writes the field name each point falls into (or void) back to the layer, for the currently selected diagram
