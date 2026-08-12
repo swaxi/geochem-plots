@@ -10,6 +10,10 @@ Developed for UWA EART3343 Lab exercises.
 
 # Changelog 0.0.5
 
+      * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins, so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.
+      * Fixed a bug where a missing matplotlib installation crashed at import time instead of degrading gracefully.
+      * Fixed a Qt6/QGIS4 compatibility bug affecting QAction, which moved from QtWidgets to QtGui in Qt6.
+      * Declared Qt6/QGIS4 support in metadata.txt, now that Qt6 compatibility has been verified.
       * Add Geochemical Differentiation of Sedimentary Rocks ternary diagram (Hasterok et al. 2018, after Mason 1966), with a first-screening check for required oxide fields and a below-detection-limit (negative value) handling option   
       * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
       * Add per-category drawing (z-stack) order control to the interactive style panel   
@@ -25,15 +29,17 @@ Developed for UWA EART3343 Lab exercises.
       * Improve point label readability (white background) and stacking order (always drawn above points)   
       * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
 
+Full changelog: <a href="https://github.com/swaxi/geochem-plots/blob/main/metadata.txt">Metadata</a>
+
 ## Installation
 ### *Installing Dependencies with qpip (Recommended)*
-The **GEOL-QMAPS** relies on several Python packages that are not always included in a standard QGIS installation. To simplify dependency management, the plugin supports installation through **qpip**, the QGIS Python package manager.
+**Geochemistry Plotting Tools** relies on several Python packages (`numpy`, `matplotlib`) that are not always included in a standard QGIS installation. To simplify dependency management, the plugin supports installation through **qpip**, the QGIS Python package manager.
 
 Before installing **Geochemistry Plotting Tools**, it is recommended to:
 1. Install the **qpip** plugin from the QGIS Plugin Manager.
 2. Allow **qpip** to install any missing dependencies automatically when prompted by the **Geochemistry Plotting Tools** plugin (or any other plugin with depedencies).
 
-Using **qpip** ensures that all Python dependencies are installed within the active QGIS environment and avoids conflicts with system-wide Python installations.
+Using **qpip** ensures that all Python dependencies are installed within the active QGIS environment and avoids conflicts with system-wide Python installations. The declared version ranges (`numpy>=1.26.4,<2.0`, `matplotlib>=3.7,<3.12`) match those used by the other `swaxi` QGIS plugins (GEOL-QMAPS, Stereoplot), so installing several of them together converges on one consistent set of package versions.
 
 > **Important:** If the **Geochemistry Plotting Tools** plugin fails to start or reports missing Python modules, first verify that qpip is installed and that all required dependencies have been successfully installed. In most cases, dependency-related issues can be resolved by reinstalling the missing packages through qpip and restarting QGIS.
 

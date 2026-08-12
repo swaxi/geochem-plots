@@ -4,6 +4,7 @@ qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
 version=0.0.5
+supportsQt6=True
 author=Mark Jessell, Julien Perret (University of Western Australia)
 email=mark.jessell@uwa.edu.au; julien.perret@uwa.edu.au
 
@@ -14,6 +15,14 @@ repository=https://github.com/swaxi/geochem-plots
 
 changelog=0.0.5
      0.0.5 2026-07
+       **Dependency Harmonisation & Qt6 Fixes**
+       * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins (numpy>=1.26.4,<2.0 ; matplotlib>=3.7,<3.12), so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.
+       * Fixed a bug where a missing matplotlib installation crashed at import time instead of degrading gracefully (an unconditional matplotlib.colors import sat outside the intended try/except guard).
+       * Fixed a Qt6/QGIS4 compatibility bug: QAction is now imported with a Qt5/Qt6-safe fallback (previously imported only from QtWidgets, which raises ImportError under Qt6 since QAction moved to QtGui).
+       * Added the supportsQt6=True declaration to this file, now that Qt6/QGIS4 compatibility has been verified.
+       * Fixed a copy-paste error in the README that referred to this plugin as "GEOL-QMAPS" in the installation instructions.
+
+       **New Features**
        * Add Geochemical Differentiation of Sedimentary Rocks ternary diagram (Hasterok et al. 2018, after Mason 1966), with a first-screening check for required oxide fields and a below-detection-limit (negative value) handling option
        * Add category mean +/- 2 sigma statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean +/- 2 sigma with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker
        * Add per-category drawing (z-stack) order control to the interactive style panel

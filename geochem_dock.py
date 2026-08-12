@@ -8,7 +8,6 @@ import os
 import json
 import random
 from collections import Counter
-import matplotlib.colors as mcolors
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
@@ -23,6 +22,7 @@ from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize
 
 try:
     import matplotlib
+    import matplotlib.colors as mcolors
     try:
         from qgis.PyQt.QtCore import QT_VERSION_STR
         qt_major = int(QT_VERSION_STR.split('.')[0])
