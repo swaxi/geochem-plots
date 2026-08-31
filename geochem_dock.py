@@ -6,18 +6,23 @@ Contains the main dockable widget with all plotting functionality.
 
 import os
 import json
-import matplotlib.colors as mcolors
+import random
+from collections import Counter
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
     QFileDialog, QMessageBox, QGroupBox, QTabWidget,
-    QGridLayout, QRadioButton, QButtonGroup, QScrollArea
+    QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
+    QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
+    QDialogButtonBox, QSizePolicy
 )
-from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QSettings
+from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
+from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize
 
 try:
     import matplotlib
+    import matplotlib.colors as mcolors
     try:
         from qgis.PyQt.QtCore import QT_VERSION_STR
         qt_major = int(QT_VERSION_STR.split('.')[0])
@@ -34,8 +39,10 @@ try:
     import matplotlib.ticker as ticker
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
-    from matplotlib.widgets import RectangleSelector
+    from matplotlib.container import ErrorbarContainer
+    from matplotlib.widgets import RectangleSelector, CheckButtons, Button
     from matplotlib.path import Path
+    from matplotlib.markers import MarkerStyle
     import numpy as np
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
@@ -65,6 +72,20 @@ try:
     Qt_ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
     Qt_UserRole = Qt.ItemDataRole.UserRole
 
+    # Category style panel (interactive legend) enums
+    Qt_NoBrush = Qt.BrushStyle.NoBrush
+    QDialog_Accepted = QDialog.DialogCode.Accepted
+    QDialogButtonBox_Ok = QDialogButtonBox.StandardButton.Ok
+    QDialogButtonBox_Cancel = QDialogButtonBox.StandardButton.Cancel
+    QSizePolicy_Fixed = QSizePolicy.Policy.Fixed
+    QSizePolicy_Preferred = QSizePolicy.Policy.Preferred
+    QSizePolicy_Ignored = QSizePolicy.Policy.Ignored
+    QSizePolicy_Minimum = QSizePolicy.Policy.Minimum
+    QSizePolicy_Expanding = QSizePolicy.Policy.Expanding
+    QDockWidget_Movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
+    QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
+    QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
+
 except AttributeError:
     # Qt5 detected
     QT6 = False
@@ -86,12 +107,129 @@ except AttributeError:
     Qt_ScrollBarAsNeeded = Qt.ScrollBarAsNeeded
     Qt_UserRole = Qt.UserRole
 
+    # Category style panel (interactive legend) enums
+    Qt_NoBrush = Qt.NoBrush
+    QDialog_Accepted = QDialog.Accepted
+    QDialogButtonBox_Ok = QDialogButtonBox.Ok
+    QDialogButtonBox_Cancel = QDialogButtonBox.Cancel
+    QSizePolicy_Fixed = QSizePolicy.Fixed
+    QSizePolicy_Preferred = QSizePolicy.Preferred
+    QSizePolicy_Ignored = QSizePolicy.Ignored
+    QSizePolicy_Minimum = QSizePolicy.Minimum
+    QSizePolicy_Expanding = QSizePolicy.Expanding
+    QDockWidget_Movable = QDockWidget.DockWidgetMovable
+    QDockWidget_Floatable = QDockWidget.DockWidgetFloatable
+    QPainter_Antialiasing = QPainter.Antialiasing
+
 
 # =============================================================================
 # CATEGORICAL COLOUR MAPPING UTILITIES
 # =============================================================================
 
 CATEGORY_MARKERS = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*', 'P', 'X', 'd', '8', 'H']
+
+# Sentinel shown as the first entry of the "Category:" field combo, letting
+# users opt out of per-category colouring/markers entirely and plot every
+# selected sample with a single shared symbol.
+NO_CATEGORY_OPTION = "(none) — plot all points with one symbol"
+NO_CATEGORY_LABEL = "All points"
+
+# Marker shapes offered by the interactive category style dialog, paired with
+# a human-readable label. Restricted to the subset that _MarkerSymbolWidget
+# knows how to draw as a crisp vector glyph.
+STYLE_MARKER_OPTIONS = [
+    ('Circle', 'o'), ('Square', 's'), ('Triangle up', '^'),
+    ('Triangle down', 'v'), ('Diamond', 'D'), ('Plus', 'P'),
+    ('Cross', 'X'), ('Star', '*'), ('Triangle left', '<'),
+    ('Triangle right', '>'),
+]
+
+
+class _MarkerSymbolWidget(QWidget):
+    """Vector marker preview used by the interactive category legend.
+
+    Painted directly with QPainter (rather than a raster pixmap) so it stays
+    crisp at any size and can be restyled live via set_symbol_style().
+    """
+
+    def __init__(self, marker, colour, parent=None):
+        super().__init__(parent)
+        self.marker = marker or 'o'
+        try:
+            qcolour = QColor(mcolors.to_hex(mcolors.to_rgba(colour or '#000000')))
+        except Exception:
+            qcolour = QColor('#000000')
+        self.colour = qcolour
+        self.setMinimumSize(24, 24)
+        self.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+
+    def sizeHint(self):
+        return QSize(24, 24)
+
+    def set_symbol_style(self, marker, colour):
+        self.marker = marker or 'o'
+        try:
+            self.colour = QColor(mcolors.to_hex(mcolors.to_rgba(colour or '#000000')))
+        except Exception:
+            self.colour = QColor('#000000')
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter_Antialiasing)
+
+        side = min(self.width(), self.height())
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        r = side * 0.30
+
+        pen = QPen(self.colour)
+        pen.setWidthF(max(1.2, side * 0.09))
+        painter.setPen(pen)
+        painter.setBrush(QBrush(self.colour))
+
+        m = self.marker
+        if m == 'o':
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+        elif m == 's':
+            painter.drawRect(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+        elif m == '^':
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx, cy - r), QPointF(cx - r, cy + r), QPointF(cx + r, cy + r)]))
+        elif m == 'v':
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx - r, cy - r), QPointF(cx + r, cy - r), QPointF(cx, cy + r)]))
+        elif m == '<':
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx - r, cy), QPointF(cx + r, cy - r), QPointF(cx + r, cy + r)]))
+        elif m == '>':
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx + r, cy), QPointF(cx - r, cy - r), QPointF(cx - r, cy + r)]))
+        elif m == 'D':
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx, cy - r), QPointF(cx + r, cy), QPointF(cx, cy + r), QPointF(cx - r, cy)]))
+        elif m in ('P', '+'):
+            painter.setBrush(Qt_NoBrush)
+            painter.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+            painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+            if m == 'P':
+                painter.setBrush(QBrush(self.colour))
+                painter.drawRect(QRectF(cx - r * 0.38, cy - r * 0.38, r * 0.76, r * 0.76))
+        elif m in ('X', 'x'):
+            painter.setBrush(Qt_NoBrush)
+            painter.drawLine(QPointF(cx - r, cy - r), QPointF(cx + r, cy + r))
+            painter.drawLine(QPointF(cx - r, cy + r), QPointF(cx + r, cy - r))
+        elif m == '*':
+            painter.setBrush(Qt_NoBrush)
+            painter.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+            painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+            painter.drawLine(QPointF(cx - r * 0.72, cy - r * 0.72), QPointF(cx + r * 0.72, cy + r * 0.72))
+            painter.drawLine(QPointF(cx - r * 0.72, cy + r * 0.72), QPointF(cx + r * 0.72, cy - r * 0.72))
+        else:
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+
+        painter.end()
+
 
 def create_categorical_color_map(sample_names):
     """Create a colour and marker map based on unique category values in sample_names."""
@@ -311,8 +449,13 @@ EXTENDED_ORDER_ALT = [
 REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu']
 
 CUSTOM_XY_ELEMENTS = [
-    '1 (none)', 'Co', 'Cr', 'Gd', 'K2O', 'La', 'Lu', 'Mg#', 'MgO', 'Na2O', 'Nb',
-    'SiO2', 'Sm', 'Sr', 'Th', 'Ti', 'TiO2', 'V', 'Y', 'Yb', 'Zr'
+    '1 (none)', 'Ag', 'Al', 'Al2O3', 'As', 'Au', 'B', 'Ba', 'Bi', 'Ca', 'CaO',
+    'Cd', 'Ce', 'Co', 'Cr', 'Cr2O3', 'Cs', 'Cu', 'Dy', 'Er', 'Eu', 'F', 'Fe',
+    'Fe2O3', 'FeO', 'Ga', 'Gd', 'Ge', 'Hf', 'Ho', 'K', 'K2O', 'La', 'Lu',
+    'Mg#', 'Mg', 'MgO', 'Mn', 'MnO', 'Mo', 'Na', 'Na2O', 'Nb', 'Nd', 'Ni',
+    'NiO', 'P', 'P2O5', 'Pb', 'Pr', 'Rb', 'S', 'Sb', 'Sc', 'Se', 'Si', 'SiO2',
+    'Sm', 'Sn', 'Sr', 'Ta', 'Tb', 'Th', 'Ti', 'TiO2', 'Tm', 'U', 'V', 'W',
+    'Y', 'Yb', 'Zn', 'Zr'
 ]
 
 MW_MGO = 40.304
@@ -320,15 +463,106 @@ MW_FEO = 71.844
 
 
 # =============================================================================
+# UNIT & OXIDE CONVERSION UTILITIES
+# =============================================================================
+# Molar masses (g/mol, IUPAC standard atomic weights) for elements that are
+# commonly reported as an oxide wt% in whole-rock geochemistry, used to
+# convert between elemental (ppm) and oxide (wt%) concentrations.
+ELEMENT_MOLAR_MASS = {
+    'Si': 28.085, 'Ti': 47.867, 'Al': 26.982, 'Fe': 55.845, 'Mn': 54.938,
+    'Mg': 24.305, 'Ca': 40.078, 'Na': 22.990, 'K': 39.098, 'P': 30.974,
+    'Cr': 51.996, 'Ni': 58.693, 'O': 15.999,
+}
+
+# oxide formula -> (element symbol, atoms of element, atoms of oxygen)
+OXIDE_COMPOSITION = {
+    'SiO2': ('Si', 1, 2), 'TiO2': ('Ti', 1, 2), 'Al2O3': ('Al', 2, 3),
+    'Fe2O3': ('Fe', 2, 3), 'FeO': ('Fe', 1, 1), 'MnO': ('Mn', 1, 1),
+    'MgO': ('Mg', 1, 1), 'CaO': ('Ca', 1, 1), 'Na2O': ('Na', 2, 1),
+    'K2O': ('K', 2, 1), 'P2O5': ('P', 2, 5), 'Cr2O3': ('Cr', 2, 3),
+    'NiO': ('Ni', 1, 1),
+}
+
+# Element -> its most common oxide form in whole-rock geochemistry reporting.
+ELEMENT_TO_OXIDE = {element: oxide for oxide, (element, _, _) in OXIDE_COMPOSITION.items()
+                    # Fe maps to Fe2O3 (total iron) by convention; FeO stays reachable via OXIDE_COMPOSITION.
+                    if not (oxide == 'FeO')}
+
+
+def _oxide_element_mass_fraction(oxide):
+    """Fraction of an oxide's molar mass contributed by its element."""
+    element, n_el, n_o = OXIDE_COMPOSITION[oxide]
+    element_mass = n_el * ELEMENT_MOLAR_MASS[element]
+    oxide_mass = element_mass + n_o * ELEMENT_MOLAR_MASS['O']
+    return element_mass / oxide_mass
+
+
+def oxide_pct_to_element_ppm(oxide, wt_pct):
+    """Convert oxide wt% (e.g. TiO2) to elemental ppm (e.g. Ti)."""
+    return wt_pct * _oxide_element_mass_fraction(oxide) * 10000.0
+
+
+def element_ppm_to_oxide_pct(oxide, ppm):
+    """Convert elemental ppm (e.g. Ti) to the corresponding oxide wt% (e.g. TiO2)."""
+    return (ppm / 10000.0) / _oxide_element_mass_fraction(oxide)
+
+
+_PPB_UNIT_MARKERS = ('_PPB', '(PPB)', '[PPB]')
+_PPM_UNIT_MARKERS = ('_PPM', '(PPM)', '[PPM]')
+_PCT_UNIT_MARKERS = ('_PCT', '_WTPCT', '_WT_PCT', '_WT%', '(PCT)', '(WT%)', '%')
+
+
+def _field_unit_hint(field_name):
+    """Guess a field's stored unit ('ppb'/'ppm'/'pct') from its name, or
+    None if the name carries no recognisable unit marker."""
+    upper = field_name.upper()
+    if any(marker in upper for marker in _PPB_UNIT_MARKERS):
+        return 'ppb'
+    if any(marker in upper for marker in _PPM_UNIT_MARKERS):
+        return 'ppm'
+    if any(marker in upper for marker in _PCT_UNIT_MARKERS) or upper.endswith('_WT'):
+        return 'pct'
+    return None
+
+
+def _value_to_ppm(raw_value, field_name, default_unit='ppm'):
+    """Convert a raw stored value to ppm, guessing its unit from the field name."""
+    unit = _field_unit_hint(field_name) or default_unit
+    if unit == 'ppb':
+        return raw_value * 0.001
+    if unit == 'pct':
+        return raw_value * 10000.0
+    return raw_value
+
+
+def _value_to_pct(raw_value, field_name, default_unit='pct'):
+    """Convert a raw stored value to wt%, guessing its unit from the field name."""
+    unit = _field_unit_hint(field_name) or default_unit
+    if unit == 'ppb':
+        return raw_value * 1e-7
+    if unit == 'ppm':
+        return raw_value * 1e-4
+    return raw_value
+
+
+# =============================================================================
 # FIELD NAME MATCHING UTILITIES
 # =============================================================================
 import re
 
-def find_element_field(layer, element):
-    """Find the field name in a layer that corresponds to a given element."""
+def find_element_field(layer, element, allow_oxide_forms=True):
+    """Find the field name in a layer that corresponds to a given element.
+
+    `allow_oxide_forms=False` restricts the search to fields that plausibly
+    report `element` itself (elemental if `element` is a plain symbol, or
+    the given oxide if `element` is an oxide formula), without falling back
+    to chemically-related alternate forms. This is used by the unit-aware
+    value getters below, which perform their own explicit elemental<->oxide
+    conversion instead of silently substituting one for the other.
+    """
     field_names = [f.name() for f in layer.fields()]
     element_upper = element.upper()
-    
+
     patterns = [
         element, element.upper(), element.lower(), element.capitalize(),
         f"{element}_ppm", f"{element.upper()}_ppm", f"{element.lower()}_ppm",
@@ -338,7 +572,7 @@ def find_element_field(layer, element):
         f"{element}_wt", f"{element}_WT", f"{element}_wtpct", f"{element}_wt_pct",
         f"{element}(ppm)", f"{element} (ppm)", f"{element}(PPM)", f"{element}_[ppm]",
     ]
-    
+
     oxide_forms = {
         'Ti': ['TiO2_pct', 'TiO2_PCT', 'TiO2_wt', 'TiO2', 'tio2_pct', 'TIO2_PCT'],
         'Fe': ['Fe2O3_pct', 'Fe2O3T_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeOT_pct', 'FeO_PCT'],
@@ -351,8 +585,8 @@ def find_element_field(layer, element):
         'Si': ['SiO2_pct', 'SiO2_PCT', 'SiO2_wt', 'SiO2'],
         'Al': ['Al2O3_pct', 'Al2O3_PCT', 'Al2O3_wt', 'Al2O3'],
     }
-    
-    if element in oxide_forms:
+
+    if allow_oxide_forms and element in oxide_forms:
         patterns.extend(oxide_forms[element])
 
     # 0. For single-character elements (Y, V, U, B, etc.), prefer Symbol_Fullname
@@ -383,15 +617,23 @@ def find_element_field(layer, element):
         if symbol_name_regex.match(field_name):
             return field_name
 
-    # 3. Fallback: uppercase prefix match with known suffixes
+    # 3. Fallback: uppercase prefix match with known unit suffixes. The
+    # oxide-composition suffixes (e.g. element='Ti' matching 'TiO2_PCT')
+    # are cross-form matches, so they're gated the same as oxide_forms/
+    # oxide_to_base below.
+    plain_suffixes = ['', '_PPM', '_PPB', '_PCT', '_WT', '_WTPCT',
+                      '_WT_PCT', '(PPM)', ' (PPM)', '_[PPM]', '_WT%', 'PPM', 'PPB']
+    oxide_suffixes = ['O2_PCT', 'O_PCT', '2O3_PCT', '2O_PCT', '2O5_PCT']
+    allowed_remainders = plain_suffixes + (oxide_suffixes if allow_oxide_forms else [])
     for field_name in field_names:
         field_upper = field_name.upper()
         if field_upper.startswith(element_upper):
             remainder = field_upper[len(element_upper):]
-            if remainder in ['', '_PPM', '_PPB', '_PCT', '_WT', '_WTPCT',
-                           '_WT_PCT', '(PPM)', ' (PPM)', '_[PPM]', '_WT%', 'PPM', 'PPB',
-                           'O2_PCT', 'O_PCT', '2O3_PCT', '2O_PCT', '2O5_PCT']:
+            if remainder in allowed_remainders:
                 return field_name
+
+    if not allow_oxide_forms:
+        return None
 
     # 4. For oxide lookups, fall back to the base element ppm field.
     # e.g. looking for 'TiO2' but only 'Ti_Titanium' (ppm) exists.
@@ -464,28 +706,83 @@ def find_element_field_old(layer, element):
     return None
 
 
-def get_element_value(feature, layer, element, convert_to_ppm=True):
-    """Get the value of an element from a feature."""
-    field_name = find_element_field(layer, element)
-    if field_name:
-        try:
-            value = float(feature[field_name])
-            
-            if convert_to_ppm:
-                field_upper = field_name.upper()
-                # TiO2, MnO, P2O5 are always stored as wt% — convert even when the
-                # field has no _pct/_wt suffix (e.g. a plain 'TiO2' column).
-                if 'TIO2' in field_upper:
-                    value = value * 5995
-                elif 'MNO' in field_upper:
-                    value = value * 7745
-                elif 'P2O5' in field_upper:
-                    value = value * 4364
-                    
-            return value
-        except (ValueError, TypeError):
+def _read_numeric_field(feature, field_name):
+    """Read a field's value as a float, or None if missing/non-numeric."""
+    try:
+        value = feature[field_name]
+        if value is None or value == NULL:
             return None
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_element_ppm(feature, layer, element):
+    """Return `element`'s concentration in ppm (trace-element basis).
+
+    Tries a field for the plain elemental symbol first (any unit - ppm,
+    ppb or pct - auto-converted to ppm). If none is found and the element
+    has a common oxide form (e.g. Ti -> TiO2), falls back to that oxide
+    field and converts oxide wt% to elemental ppm via its molar mass.
+    """
+    field_name = find_element_field(layer, element, allow_oxide_forms=False)
+    if field_name is not None:
+        raw = _read_numeric_field(feature, field_name)
+        if raw is not None:
+            return _value_to_ppm(raw, field_name, default_unit='ppm')
+
+    oxide = ELEMENT_TO_OXIDE.get(element)
+    if oxide is not None:
+        oxide_field = find_element_field(layer, oxide, allow_oxide_forms=False)
+        if oxide_field is not None:
+            raw = _read_numeric_field(feature, oxide_field)
+            if raw is not None:
+                pct = _value_to_pct(raw, oxide_field, default_unit='pct')
+                return oxide_pct_to_element_ppm(oxide, pct)
     return None
+
+
+def get_oxide_pct(feature, layer, oxide):
+    """Return `oxide`'s concentration in wt%.
+
+    Tries a field for the oxide formula first (any unit - ppm, ppb or pct
+    - auto-converted to wt%). If none is found, falls back to the
+    corresponding elemental field and converts elemental ppm/pct to oxide
+    wt% via its molar mass.
+    """
+    field_name = find_element_field(layer, oxide, allow_oxide_forms=False)
+    if field_name is not None:
+        raw = _read_numeric_field(feature, field_name)
+        if raw is not None:
+            return _value_to_pct(raw, field_name, default_unit='pct')
+
+    composition = OXIDE_COMPOSITION.get(oxide)
+    if composition is not None:
+        element = composition[0]
+        elem_field = find_element_field(layer, element, allow_oxide_forms=False)
+        if elem_field is not None:
+            raw = _read_numeric_field(feature, elem_field)
+            if raw is not None:
+                ppm = _value_to_ppm(raw, elem_field, default_unit='ppm')
+                return element_ppm_to_oxide_pct(oxide, ppm)
+    return None
+
+
+def get_element_value(feature, layer, element, convert_to_ppm=True):
+    """Get the value of an element (in ppm) or a recognised oxide formula
+    (in wt%) from a feature, auto-converting between ppm/ppb/pct and
+    elemental/oxide forms depending on what is actually stored in the layer.
+
+    `convert_to_ppm=False` returns the field's raw stored value unconverted.
+    """
+    if not convert_to_ppm:
+        field_name = find_element_field(layer, element)
+        if field_name is None:
+            return None
+        return _read_numeric_field(feature, field_name)
+    if element in OXIDE_COMPOSITION:
+        return get_oxide_pct(feature, layer, element)
+    return get_element_ppm(feature, layer, element)
 
 
 def get_available_elements(layer, element_list):
@@ -551,23 +848,73 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
         except (ValueError, TypeError, ZeroDivisionError):
             return None
     
-    field_name = find_element_field(layer, element_name)
-    if field_name is None:
-        return None
-    
-    try:
-        value = float(feature[field_name])
-        if value is None or value == NULL:
+    # Recognised element symbols are returned in ppm and recognised oxide
+    # formulas in wt%, auto-converting from whichever unit/form (ppm, ppb,
+    # pct, elemental or oxide) the layer actually stores. A field picked
+    # directly via "show all numeric fields" isn't a known species, so it's
+    # returned as stored, with no conversion.
+    if element_name in OXIDE_COMPOSITION:
+        value = get_oxide_pct(feature, layer, element_name)
+    elif element_name in CUSTOM_XY_ELEMENTS:
+        value = get_element_ppm(feature, layer, element_name)
+    else:
+        field_name = find_element_field(layer, element_name)
+        if field_name is None:
             return None
-        
-        if normalize and norm_values and element_name in norm_values:
-            norm_val = norm_values.get(element_name)
-            if norm_val and norm_val > 0:
-                value = value / norm_val
-        
-        return value
-    except (ValueError, TypeError):
+        value = _read_numeric_field(feature, field_name)
+
+    if value is None:
         return None
+
+    if normalize and norm_values and element_name in norm_values:
+        norm_val = norm_values.get(element_name)
+        if norm_val and norm_val > 0:
+            value = value / norm_val
+
+    return value
+
+
+# =============================================================================
+# BUBBLE SIZE SCALING UTILITIES
+# =============================================================================
+import math
+
+BUBBLE_SCALE_METHODS = {'Linear': 'linear', 'Log10': 'log10', 'Exponential': 'exponential'}
+
+
+def bubble_size_fraction(value, vmin, vmax, method='linear'):
+    """Return `value`'s position in [0, 1] between vmin and vmax, using the
+    chosen scaling curve.
+
+    'linear' interpolates in value-space; 'log10' interpolates in log-space
+    (equal ratios map to equal steps, suited to data spanning orders of
+    magnitude) and requires positive values; 'exponential' grows size
+    increasingly fast as value approaches vmax, emphasising the largest
+    values.
+    """
+    if vmax <= vmin:
+        return 1.0
+    if method == 'log10':
+        if value is None or value <= 0 or vmin <= 0 or vmax <= 0:
+            return 0.0
+        lo, hi, v = math.log10(vmin), math.log10(vmax), math.log10(value)
+        if hi <= lo:
+            return 1.0
+        t = (v - lo) / (hi - lo)
+    elif method == 'exponential':
+        linear_t = (value - vmin) / (vmax - vmin)
+        k = 3.0
+        t = (math.exp(k * linear_t) - 1.0) / (math.exp(k) - 1.0)
+    else:
+        t = (value - vmin) / (vmax - vmin)
+    return max(0.0, min(1.0, t))
+
+
+def bubble_symbol_size(value, vmin, vmax, min_size, max_size, method='linear'):
+    """Map `value` to a marker size (matplotlib scatter `s`, in points²)
+    between min_size and max_size, using the chosen scaling curve."""
+    t = bubble_size_fraction(value, vmin, vmax, method)
+    return min_size + t * (max_size - min_size)
 
 
 # =============================================================================
@@ -629,11 +976,15 @@ def ternary_text(ax, a, b, c, text, **kwargs):
 # =============================================================================
 
 def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers,
-                     show_category_legend, category_colors):
+                     show_category_legend, category_colors, sample_sizes=None):
     """One ax.scatter() call per category group instead of one per point.
 
     Handles both binary (x, y) and ternary (a, b, c) coordinate tuples.
-    Returns {fid: (PathCollection, local_index)} for use by apply_selection().
+    `sample_sizes`, if given, is a per-sample list of marker areas (points^2,
+    matplotlib scatter `s` units) aligned with `sample_names`/`data`, used
+    for bubble-size plots; otherwise every point uses a fixed default size.
+    Returns ({fid: (PathCollection, local_index)}, {category: [PathCollection, ...]})
+    for use by apply_selection() and the interactive category styling panel.
     """
     default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
     fid_iter = iter(fids)
@@ -651,26 +1002,292 @@ def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers
         fid = next(fid_iter)
         color  = sample_colors[i]  if i < len(sample_colors)  else sample_colors[i  % len(sample_colors)]
         marker = sample_markers[i] if sample_markers           else default_markers[i % len(default_markers)]
+        size = sample_sizes[i] if sample_sizes and i < len(sample_sizes) else 80
         cat_key = (name, marker) if sample_markers else name
         if cat_key not in cat_groups:
-            cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+            cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [], 'sizes': [],
                                    'marker': marker, 'name': name}
         g = cat_groups[cat_key]
         g['xs'].append(x);  g['ys'].append(y)
-        g['fids'].append(fid);  g['colors'].append(color)
+        g['fids'].append(fid);  g['colors'].append(color); g['sizes'].append(size)
 
     plotted_names = set()
     fid_to_scatter = {}
+    category_artists = {}
     for g in cat_groups.values():
         label = None
         if show_category_legend and category_colors and g['name'] not in plotted_names:
             label = g['name']
             plotted_names.add(g['name'])
-        sc = ax.scatter(g['xs'], g['ys'], marker=g['marker'], s=80, c=g['colors'],
+        sc = ax.scatter(g['xs'], g['ys'], marker=g['marker'], s=g['sizes'], c=g['colors'],
                         edgecolors='black', linewidths=0.5, zorder=10, label=label)
+        category_artists.setdefault(g['name'], []).append(sc)
         for local_idx, fid in enumerate(g['fids']):
             fid_to_scatter[fid] = (sc, local_idx)
-    return fid_to_scatter
+    return fid_to_scatter, category_artists
+
+
+# =============================================================================
+# CATEGORY MEAN +/- 2-SIGMA STATISTICS OVERLAYS
+# =============================================================================
+# Every generate_*_plot() method draws its normal per-sample points/lines as
+# before, then additionally builds one of these overlay artist sets per
+# category - a mean +/- 2 sigma marker/error-bar and a convex-hull/min-max
+# envelope - both created hidden (visible=False). The interactive category
+# panel (_open_category_panel) then reveals them and fades the raw points on
+# a "Show mean +/- 2 sigma" toggle, so switching modes is instant (no
+# re-plotting) and still leaves the underlying points clickable for QGIS
+# feature selection.
+
+def _convex_hull(points):
+    """Andrew's monotone-chain convex hull, in counter-clockwise order.
+
+    No scipy dependency (not guaranteed present alongside QGIS's Python).
+    Inputs with fewer than 3 distinct points are returned as-is.
+    """
+    pts = sorted(set(points))
+    if len(pts) < 3:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _group_mean_2sigma(xs, ys):
+    """Return (mean_x, mean_y, err_x, err_y), err_* being 2 standard
+    deviations (0 when fewer than 2 points)."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    mean_x, mean_y = float(np.nanmean(xs)), float(np.nanmean(ys))
+    err_x = float(2 * np.nanstd(xs)) if len(xs) > 1 else 0.0
+    err_y = float(2 * np.nanstd(ys)) if len(ys) > 1 else 0.0
+    return mean_x, mean_y, err_x, err_y
+
+
+def _build_cat_groups_from_points(pts_data, sample_names, category_colors, category_markers, sizes=None):
+    """Group already-computed (x, y) points by category name.
+
+    A lightweight alternative to _scatter_grouped()'s cat_groups, for plot
+    types (discrimination/minerals/custom-ternary) that funnel through
+    _scatter_grouped for the raw scatter and don't otherwise keep a
+    per-category grouping around. Carries what _build_xy_stat_artists() needs:
+    point coordinates, one representative colour/marker, and (when bubble
+    sizing is active) each point's marker area, so the mean marker can be
+    sized consistently with the bubble-size rule.
+
+    `sizes`, if given, is a per-point list of marker areas (matplotlib
+    scatter `s` units) aligned with `pts_data`/`sample_names`.
+    """
+    cat_groups = {}
+    for i, ((x, y), name) in enumerate(zip(pts_data, sample_names)):
+        g = cat_groups.setdefault(name, {
+            'xs': [], 'ys': [], 'sizes': [],
+            'color': category_colors.get(name, 'tab:blue') if category_colors else 'tab:blue',
+            'marker': (category_markers.get(name, 'o') if category_markers else 'o'),
+            'name': name,
+        })
+        g['xs'].append(x)
+        g['ys'].append(y)
+        g['sizes'].append(sizes[i] if sizes else 80)
+    return cat_groups
+
+
+def _group_color(g):
+    colors = g.get('colors')
+    if colors:
+        return colors[0]
+    return g.get('color', 'tab:blue')
+
+
+def _build_xy_stat_artists(ax, cat_groups):
+    """Build hidden mean +/- 2-sigma and convex-hull envelope overlays for
+    XY-style scatter plots, one per category.
+
+    `cat_groups`: {key: {'xs': [...], 'ys': [...], 'name': str, plus either
+    'color'/'marker' (custom-ternary/discrimination/minerals) or
+    'colors'/'marker' (custom XY/petrophysics's own cat_groups, list/scalar -
+    either shape is accepted), plus optionally 'sizes': [...] (per-point
+    marker areas - the mean marker is sized to their average, so it follows
+    the plot's bubble-size rule when one is active)}}.
+    Returns (stats_registry, envelope_registry): {category_name: [artist, ...]}.
+    """
+    stats_registry = {}
+    envelope_registry = {}
+    for g in cat_groups.values():
+        xs, ys = g['xs'], g['ys']
+        if not xs:
+            continue
+        name = g['name']
+        color = _group_color(g)
+        marker = g.get('marker') or 'o'
+        sizes = g.get('sizes')
+        mean_area = float(np.mean(sizes)) if sizes else 144.0
+        ms = max(4.0, math.sqrt(mean_area))
+
+        mean_x, mean_y, err_x, err_y = _group_mean_2sigma(xs, ys)
+        err = ax.errorbar(
+            mean_x, mean_y, xerr=err_x or None, yerr=err_y or None,
+            fmt=marker, ms=ms, mfc=color, mec=color, mew=1.3,
+            ecolor=color, elinewidth=1.8, capsize=6, capthick=1.8,
+            zorder=16, visible=False)
+        stats_registry.setdefault(name, []).append(err)
+
+        if len(xs) >= 3:
+            hull = _convex_hull(list(zip(xs, ys)))
+            if len(hull) >= 3:
+                poly = Polygon(hull, closed=True, facecolor=color, edgecolor='none',
+                               linewidth=0, alpha=0.18, zorder=1, visible=False)
+                ax.add_patch(poly)
+                envelope_registry.setdefault(name, []).append(poly)
+    return stats_registry, envelope_registry
+
+
+def _restyle_stats_artist(artist, style, lock_size=False):
+    """Recolour/re-marker a mean +/- 2-sigma errorbar (or a dict/list of
+    them) to match a category's current style, leaving its computed
+    position/error-bar geometry untouched.
+
+    `lock_size=True` (bubble sizing active) leaves the marker's size alone,
+    matching how _apply_style_to_matplotlib_artist() locks raw-point sizes.
+    """
+    if artist is None:
+        return
+    if isinstance(artist, dict):
+        return _restyle_stats_artist(artist.get('artist'), style, lock_size)
+    if isinstance(artist, ErrorbarContainer):
+        colour = style.get('color', '#000000')
+        face = 'white' if style.get('fill') == 'hollow' else colour
+        data_line, caplines, barlinecols = artist.lines
+        if data_line is not None:
+            if hasattr(data_line, 'set_marker'):
+                data_line.set_marker(style.get('marker', 'o'))
+            if hasattr(data_line, 'set_markerfacecolor'):
+                data_line.set_markerfacecolor(face)
+            # Once a Line2D's markeredgecolor is explicitly set (as the mean
+            # marker's is, at construction), set_color() alone no longer
+            # touches it - it has to be restyled explicitly too, or the
+            # marker's contour keeps whatever colour it was built with.
+            if hasattr(data_line, 'set_markeredgecolor'):
+                data_line.set_markeredgecolor(colour)
+            if hasattr(data_line, 'set_color'):
+                data_line.set_color(colour)
+            if not lock_size and hasattr(data_line, 'set_markersize'):
+                data_line.set_markersize(max(6.0, float(style.get('markersize', 8)) * 1.5))
+        for cap in caplines:
+            cap.set_color(colour)
+            # Cap "ticks" are themselves marker-based Line2D's, subject to
+            # the same markeredgecolor quirk as the mean marker above.
+            if hasattr(cap, 'set_markeredgecolor'):
+                cap.set_markeredgecolor(colour)
+        for barcol in barlinecols:
+            barcol.set_color(colour)
+        return
+    if isinstance(artist, (list, tuple)):
+        for item in artist:
+            _restyle_stats_artist(item, style, lock_size)
+
+
+def _restyle_envelope_artist(artist, style):
+    """Recolour an envelope overlay (Polygon or fill_between PolyCollection,
+    or a dict/list of them) to match a category's current style colour.
+
+    Deliberately contour-less (edgecolor stays 'none') - only the fill
+    follows the category colour.
+    """
+    if artist is None:
+        return
+    if isinstance(artist, dict):
+        return _restyle_envelope_artist(artist.get('artist'), style)
+    if isinstance(artist, (list, tuple)):
+        for item in artist:
+            _restyle_envelope_artist(item, style)
+        return
+    colour = style.get('color', '#000000')
+    if hasattr(artist, 'set_facecolor'):
+        artist.set_facecolor(colour)
+    if hasattr(artist, 'set_edgecolor'):
+        artist.set_edgecolor('none')
+
+
+def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
+                               category_colors, category_markers, markers_enabled=True,
+                               sample_markersizes=None):
+    """Build hidden mean +/- 2-sigma and min/max-envelope overlays for a
+    spider diagram, one per category.
+
+    Statistics are computed in log10 space (spider diagrams use a log
+    y-axis and geochemical ratios are roughly log-normal), then mapped back
+    to linear values for display. Returns (stats_registry, envelope_registry)
+    with the same shape as _build_xy_stat_artists().
+
+    `sample_markersizes`, if given, is a per-sample list of the markersize
+    (already sqrt-of-area, matching each raw sample line's own bubble-scaled
+    marker) aligned with `plot_data`/`sample_names`; the mean marker is sized
+    to their per-category average, so it follows the plot's bubble-size rule
+    when one is active.
+    """
+    import warnings
+
+    stats_registry = {}
+    envelope_registry = {}
+    cat_indices = {}
+    for i, name in enumerate(sample_names):
+        cat_indices.setdefault(name, []).append(i)
+
+    for name, idxs in cat_indices.items():
+        color = category_colors.get(name, 'tab:blue') if category_colors else 'tab:blue'
+        marker = (category_markers.get(name, 'o') if (category_markers and markers_enabled) else 'o')
+        arr = np.array([plot_data[i] for i in idxs], dtype=float)  # (n_samples, n_elements)
+        mean_markersize = (float(np.mean([sample_markersizes[i] for i in idxs]))
+                           if sample_markersizes else 9.0)
+
+        # Elements missing across every sample in the category leave an
+        # all-NaN slice, which nanmin/nanmax/nanmean/nanstd warn about
+        # (harmlessly - the resulting NaNs are filtered out via `valid` below).
+        with np.errstate(all='ignore'), warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            log_arr = np.log10(arr)
+            elem_min = np.nanmin(arr, axis=0)
+            elem_max = np.nanmax(arr, axis=0)
+            mean_log = np.nanmean(log_arr, axis=0)
+            std_log = np.nanstd(log_arr, axis=0) if arr.shape[0] > 1 else np.zeros_like(mean_log)
+
+        valid = np.isfinite(mean_log)
+        if not np.any(valid):
+            continue
+
+        mean_vals = 10 ** mean_log
+        upper = 10 ** (mean_log + 2 * std_log)
+        lower = 10 ** (mean_log - 2 * std_log)
+
+        err = ax.errorbar(
+            x_positions[valid], mean_vals[valid],
+            yerr=[mean_vals[valid] - lower[valid], upper[valid] - mean_vals[valid]],
+            fmt='-', marker=marker, markersize=mean_markersize, linewidth=2.5,
+            color=color, ecolor=color, elinewidth=1.6, capsize=4, capthick=1.6,
+            markerfacecolor='white', markeredgecolor=color,
+            markeredgewidth=1.5, zorder=16, visible=False)
+        stats_registry.setdefault(name, []).append(err)
+
+        if np.any(np.isfinite(elem_min) & np.isfinite(elem_max)):
+            band = ax.fill_between(x_positions, elem_min, elem_max, facecolor=color,
+                                   edgecolor='none', linewidth=0, alpha=0.18, zorder=1, visible=False)
+            envelope_registry.setdefault(name, []).append(band)
+
+    return stats_registry, envelope_registry
+
 
 class PolygonDiagramMixin:
     """Shared classify_point and draw_fields for diagram classes that define _get_fields().
@@ -814,16 +1431,17 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
         ax.text(6, 0.0015, 'ultra-\nalkaline', fontsize=8, ha='center', va='top')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
@@ -837,7 +1455,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
@@ -947,16 +1565,17 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
@@ -970,7 +1589,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class Meschede1986_Ternary(PolygonDiagramMixin):
@@ -1044,15 +1663,16 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
         return None, None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         plot_ternary_axes(ax, labels=['Zr/4', 'Y', 'Nb×2'])
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
@@ -1067,7 +1687,168 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
             legend_text = "AI, AII = WP alkali basalts\nB = P-type MORB\nC = VAB\nD = N-type MORB"
             ax.text(0.9, 0.5, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
+
+
+class Hasterok2018_Sedimentary(PolygonDiagramMixin):
+    """SiO2 - Al2O3+Fe2O3 - CaO+MgO ternary classification of sedimentary
+    (and metasedimentary) rocks after Hasterok, Gard & Webb (2018), itself a
+    modification of Mason (1966)'s original diagram.
+
+    Field boundaries digitised from the XY-coordinate table published at
+    https://chemostratigraphy.com/geochemical-differentiation-of-sedimentary-rocks-after-b-mason/
+    (Figures 2-3), converted from that page's own X/Y convention into this
+    module's (a, b, c) -> Cartesian ternary projection.
+
+    The paper normalizes major oxides to a volatile-free basis before
+    plotting, but since that normalization rescales SiO2, Al2O3, Fe2O3, CaO
+    and MgO by the same common factor, it leaves their ratios - and hence
+    their ternary position - unchanged, so it is not reproduced here;
+    ternary_to_cartesian() already renormalizes (a, b, c) to sum to 1.
+    """
+
+    name = "SiO2 - Al2O3+Fe2O3 - CaO+MgO (Sedimentary Rocks)"
+    reference = "Hasterok et al. (2018), after Mason (1966)"
+    field_name = "Hastrk2018"
+
+    # Oxides required to plot a point; screened for availability up front
+    # (see check_data_availability) since a layer missing one of these
+    # oxide groups entirely cannot plot ANY point on this diagram.
+    required_oxides = ['SiO2', 'Al2O3', 'Fe2O3 (or FeO)', 'CaO', 'MgO']
+
+    # UI-controlled (Discrimination tab checkbox): how to handle negative,
+    # below-detection-limit-coded oxide values (this codebase's convention
+    # for BDL is a negative value whose magnitude is the detection limit).
+    # False (default) discards the point; True substitutes 0.
+    bdl_as_zero = False
+
+    @classmethod
+    def check_data_availability(cls, layer):
+        """Return a list of required-oxide descriptions with no usable field
+        in `layer` (neither the oxide itself nor a convertible elemental/ppm
+        equivalent), for a first-screening warning before plotting."""
+        missing = []
+        for oxide in ('SiO2', 'Al2O3', 'CaO', 'MgO'):
+            if find_element_field(layer, oxide) is None:
+                missing.append(oxide)
+        if (find_element_field(layer, 'Fe2O3') is None
+                and find_element_field(layer, 'FeO') is None
+                and find_element_field(layer, 'Fe') is None):
+            missing.append('Fe2O3 (or FeO / Fe)')
+        return missing
+
+    @classmethod
+    def _get_fields(cls):
+        return [
+            {'name': 'Quartzite',
+             'position': [0.5, 0.807],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.5, 0.45, 0.55],
+             'y': [0.8660, 0.7794, 0.7794]
+            },
+            {'name': 'Psammite (Sandstones)',
+             'position': [0.56, 0.615],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': -35, 'color': 'k',
+             'x': [0.45, 0.415, 0.59, 0.725, 0.55],
+             'y': [0.7794, 0.7188, 0.5023, 0.4763, 0.7794]
+            },
+            {'name': 'Pelite (Argillaceous Rocks)',
+             'position': [0.30, 0.48],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.415, 0.15, 0.25, 0.50, 0.50, 0.59],
+             'y': [0.7188, 0.2598, 0.2598, 0.2598, 0.3464, 0.5023]
+            },
+            {'name': 'Marble (Limestones and dolomites)',
+             'position': [0.77, 0.30],
+             'fontsize': 8, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.59, 0.725, 1.0, 0.9, 0.50, 0.50],
+             'y': [0.5023, 0.4763, 0.0, 0.0, 0.2598, 0.3464]
+            },
+            {'name': 'Soil (Laterites and bauxites)',
+             'position': [0.075, 0.11],
+             'fontsize': 6, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.15, 0.25, 0.05, 0.0],
+             'y': [0.2598, 0.2598, 0.0, 0.0]
+            },
+            {'name': 'Rare/non-existent',
+             'position': [0.45, 0.10],
+             'fontsize': 9, 'ha': 'center', 'va': 'center', 'fontweight': 'normal',
+             'rotation': 0, 'color': 'k',
+             'x': [0.25, 0.50, 0.9, 0.05],
+             'y': [0.2598, 0.2598, 0.0, 0.0]
+            },
+        ]
+
+    @classmethod
+    def classify_point(cls, a, b, c):
+        if a is None or b is None or c is None:
+            return None
+        if a + b + c <= 0:
+            return None
+        x, y = ternary_to_cartesian(a, b, c)
+        for f in cls._get_fields():
+            xs = f['x'] + [f['x'][0]]
+            ys = f['y'] + [f['y'][0]]
+            if Path(list(zip(xs, ys))).contains_point((x, y)):
+                name = f['name']
+                return name if name != 'void' else ''
+        return None
+
+    @classmethod
+    def _screen_bdl(cls, value):
+        """Apply the negative-value (BDL) handling policy to one oxide value."""
+        if value is None:
+            return None
+        if value < 0:
+            return 0.0 if cls.bdl_as_zero else None
+        return value
+
+    @classmethod
+    def calculate_coordinates(cls, feature, layer):
+        sio2 = cls._screen_bdl(get_element_value(feature, layer, 'SiO2'))
+        al2o3 = cls._screen_bdl(get_element_value(feature, layer, 'Al2O3'))
+        cao = cls._screen_bdl(get_element_value(feature, layer, 'CaO'))
+        mgo = cls._screen_bdl(get_element_value(feature, layer, 'MgO'))
+
+        fe2o3 = get_element_value(feature, layer, 'Fe2O3')
+        if fe2o3 is None:
+            feo = get_element_value(feature, layer, 'FeO')
+            fe2o3 = feo / 0.8998 if feo is not None else None
+        fe2o3 = cls._screen_bdl(fe2o3)
+
+        if any(v is None for v in (sio2, al2o3, fe2o3, cao, mgo)):
+            return None, None, None
+        if sio2 + al2o3 + fe2o3 + cao + mgo <= 0:
+            return None, None, None
+
+        return al2o3 + fe2o3, cao + mgo, sio2
+
+    @classmethod
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
+        plot_ternary_axes(ax, labels=['Al2O3+Fe2O3', 'CaO+MgO', 'SiO2'])
+        cls.draw_fields(ax)
+
+        if sample_colors is None:
+            sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
+                                          sample_colors, sample_markers,
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
+
+        n_str = f' (n={n_samples})' if n_samples is not None else ''
+        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+
+        if show_category_legend and category_colors and len(category_colors) > 0:
+            n_categories = len(category_colors)
+            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), fontsize=8,
+                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return fid_to_scatter, category_artists
 
 
 class Pearce1984_YNb:
@@ -1121,16 +1902,17 @@ class Pearce1984_YNb:
         ax.text(200, 7, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         ax.set_xlabel('Y (ppm)', fontsize=12)
         ax.set_ylabel('Nb (ppm)', fontsize=12)
@@ -1150,7 +1932,7 @@ class Pearce1984_YNb:
             ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='bottom', horizontalalignment='right',
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class Pearce1984_YNbRb:
@@ -1202,16 +1984,17 @@ class Pearce1984_YNbRb:
         ax.text(400, 20, 'ORG', fontsize=12, ha='center', va='center')
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         ax.set_xlabel('Y + Nb (ppm)', fontsize=12)
         ax.set_ylabel('Rb (ppm)', fontsize=12)
@@ -1231,7 +2014,7 @@ class Pearce1984_YNbRb:
             ax.text(0.98, 0.02, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='bottom', horizontalalignment='right',
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class PearceCann1973_ZrTi(PolygonDiagramMixin):
@@ -1273,20 +2056,21 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
     @classmethod
     def calculate_coordinates(cls, feature, layer):
         zr = get_element_value(feature, layer, 'Zr')
-        ti = get_element_value(feature, layer, 'TiO2')
+        ti = get_element_value(feature, layer, 'Ti')
         if zr is not None and ti is not None and zr > 0 and ti > 0:
             return zr, ti
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         cls.draw_fields(ax)
 
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
 
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
@@ -1305,7 +2089,7 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
             legend_text = "IAT = Island arc tholeiites\nMORB = Mid-ocean ridge basalts\nCAB = Calc-alkaline basalts"
             ax.text(0.02, 0.98, legend_text, transform=ax.transAxes, fontsize=8,
                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class Wilson1989_TAS(PolygonDiagramMixin):
@@ -1452,14 +2236,15 @@ class Wilson1989_TAS(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         cls.draw_fields(ax)
 
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
 
         ax.plot([43.7, 46.9, 51.4, 53.1, 58.5, 63.3, 66.3, 71.2, 74.7],
                 [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.)  
@@ -1477,7 +2262,7 @@ class Wilson1989_TAS(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class Cox1979_TAS(PolygonDiagramMixin):
@@ -1595,14 +2380,15 @@ class Cox1979_TAS(PolygonDiagramMixin):
         return None, None
 
     @classmethod
-    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None):
+    def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True, sample_colors=None, category_colors=None, sample_markers=None, category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         cls.draw_fields(ax)
         
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
         
         ax.set_xlabel('SiO2 (wt%)', fontsize=12)
         ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
@@ -1616,7 +2402,7 @@ class Cox1979_TAS(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 class ApatiteGroupPlot(PolygonDiagramMixin):
@@ -1805,16 +2591,17 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
     @classmethod
     def plot(cls, ax, data, sample_names, show_legend=True, show_category_legend=True,
              sample_colors=None, category_colors=None, sample_markers=None,
-             category_markers=None, n_samples=None, fids=None):
+             category_markers=None, n_samples=None, fids=None, sample_sizes=None):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
 
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
-        fid_to_scatter = _scatter_grouped(ax, data, fids or [], sample_names,
+        fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
-                                          show_category_legend, category_colors)
+                                          show_category_legend, category_colors,
+                                          sample_sizes=sample_sizes)
 
         ax.set_xlabel('Σ(La+Ce+Pr+Nd) (ppm)', fontsize=12)
         ax.set_ylabel('Sr/Y', fontsize=12)
@@ -1828,7 +2615,7 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
             ncol = max(1, min(6, (n_categories + 3) // 4))
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                       ncol=ncol, framealpha=0.9, borderaxespad=0.)
-        return fid_to_scatter
+        return fid_to_scatter, category_artists
 
 
 DISCRIMINATION_DIAGRAMS = {
@@ -1837,9 +2624,17 @@ DISCRIMINATION_DIAGRAMS = {
     'Zr/Ti vs Nb/Y (Pearce 1996)': Pearce1996_NbY_ZrTi,
     'Zr/Ti vs Nb/Y (Winchester & Floyd 1977)': Winchester_Floyd1977_NbY_ZrTi,
     'Zr/4-Nb×2-Y Ternary (Meschede 1986)': Meschede1986_Ternary,
+    'SiO2-Al2O3+Fe2O3-CaO+MgO Sedimentary Rocks (Hasterok et al. 2018)': Hasterok2018_Sedimentary,
     'Nb vs Y (Pearce et al. 1984)': Pearce1984_YNb,
     'Rb vs (Y+Nb) (Pearce et al. 1984)': Pearce1984_YNbRb,
     'Ti vs Zr (Pearce & Cann 1973)': PearceCann1973_ZrTi
+}
+
+# Mineral classification plots, shown in the Minerals tab's plot-type dropdown.
+# Currently a single entry; more classification schemes can be added here
+# without any other code changes.
+MINERALS_DIAGRAMS = {
+    'Detrital Apatite Classification (Sullivan, 2020)': ApatiteGroupPlot,
 }
 
 
@@ -1856,18 +2651,10 @@ class GeochemistryDockWidget(QDockWidget):
         super().__init__("Geochemistry Plotting Tools", parent)
         self.iface = iface
         self.current_fig = None
-        self.style_map = {}
-        self.style_file_path = None
-        self.last_category_colors = {}
-        self.last_category_markers = {}
+        self._category_controls = None
         self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
-
-        # Reload last-used style file
-        saved_path = QSettings('geochem_plots', 'geochem_plots').value('style_file', '')
-        if saved_path and os.path.isfile(saved_path):
-            self.load_style_from_file(saved_path)
 
         # Connect to layer registry for updates
         QgsProject.instance().layersAdded.connect(self.load_layers)
@@ -1877,6 +2664,165 @@ class GeochemistryDockWidget(QDockWidget):
         """Handle close event."""
         self.closingPlugin.emit()
         event.accept()
+
+    def _label_row(self, label_text, *controls, spacing=20, trailing_stretch=False, expand_index=-1):
+        """Build a QHBoxLayout: a label sized to its own text, a fixed
+        `spacing`-px gap, then `controls` in order.
+
+        The control at `expand_index` (default: the last one) is given an
+        Expanding size policy and all the layout stretch, so it grows to
+        fill the row's remaining width instead of leaving a gap between it
+        and the label, or leaving it stranded away from the label. Other
+        controls keep their natural content-sized width. Pass
+        `trailing_stretch=True` instead for rows of same-sized controls
+        (e.g. checkboxes) that should hug the label with unused space left
+        at the row's right edge.
+        """
+        row = QHBoxLayout()
+        row.setSpacing(spacing)
+        label = QLabel(label_text)
+        label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        row.addWidget(label, 0)
+        if expand_index < 0:
+            expand_index = len(controls) + expand_index
+        for i, control in enumerate(controls):
+            if not trailing_stretch and i == expand_index:
+                control.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+                row.addWidget(control, 1)
+            else:
+                control.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
+                row.addWidget(control, 0)
+        if trailing_stretch:
+            row.addStretch()
+        return row
+
+    def _checkbox_row(self, *checkboxes, spacing=12):
+        """Build a QHBoxLayout that packs `checkboxes` tightly on the left
+        (each already carries its own text as a label), leaving unused
+        space at the row's right edge instead of spreading them out."""
+        row = QHBoxLayout()
+        row.setSpacing(spacing)
+        for checkbox in checkboxes:
+            checkbox.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+            row.addWidget(checkbox, 0)
+        row.addStretch()
+        return row
+
+    def _create_bubble_size_group(self, prefix, field_items, editable=False):
+        """Build a reusable 'Bubble Size (optional)' control group.
+
+        Widgets are stored as self.<prefix>_bubble_field_combo,
+        self.<prefix>_bubble_scale_combo, self.<prefix>_bubble_min_size_spin,
+        self.<prefix>_bubble_max_size_spin and self.<prefix>_bubble_range_label,
+        so each plot tab keeps an independent set of bubble-size controls.
+        Returns the QGroupBox to add to the tab's layout.
+        """
+        group = QGroupBox("Bubble Size (optional)")
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(3)
+
+        size_by_label = QLabel("Size by:")
+        size_by_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        grid.addWidget(size_by_label, 0, 0)
+        field_combo = QComboBox()
+        field_combo.addItems(field_items)
+        field_combo.setEditable(editable)
+        field_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+        if editable:
+            field_combo.setToolTip("Pick a field, or type an exact layer field name.")
+        grid.addWidget(field_combo, 0, 1, 1, 3)
+        setattr(self, f'{prefix}_bubble_field_combo', field_combo)
+
+        scaling_label = QLabel("Scaling:")
+        scaling_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        grid.addWidget(scaling_label, 1, 0)
+        scale_combo = QComboBox()
+        scale_combo.addItems(["Linear", "Log10", "Exponential"])
+        scale_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+        grid.addWidget(scale_combo, 1, 1, 1, 3)
+        setattr(self, f'{prefix}_bubble_scale_combo', scale_combo)
+
+        min_label = QLabel("Min size:")
+        min_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        grid.addWidget(min_label, 2, 0)
+        min_spin = QDoubleSpinBox()
+        min_spin.setRange(1.0, 5000.0)
+        min_spin.setDecimals(0)
+        min_spin.setSingleStep(10.0)
+        min_spin.setValue(20.0)
+        min_spin.setToolTip("Symbol area (pt²) for the smallest value in the data.")
+        grid.addWidget(min_spin, 2, 1)
+        setattr(self, f'{prefix}_bubble_min_size_spin', min_spin)
+
+        max_label = QLabel("Max size:")
+        max_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        grid.addWidget(max_label, 2, 2)
+        max_spin = QDoubleSpinBox()
+        max_spin.setRange(1.0, 5000.0)
+        max_spin.setDecimals(0)
+        max_spin.setSingleStep(10.0)
+        max_spin.setValue(400.0)
+        max_spin.setToolTip("Symbol area (pt²) for the largest value in the data.")
+        grid.addWidget(max_spin, 2, 3)
+        setattr(self, f'{prefix}_bubble_max_size_spin', max_spin)
+
+        range_label = QLabel("Data range: (select a field to enable bubble sizing)")
+        range_label.setWordWrap(True)
+        range_label.setStyleSheet("color: gray; font-style: italic;")
+        grid.addWidget(range_label, 3, 0, 1, 4)
+        setattr(self, f'{prefix}_bubble_range_label', range_label)
+
+        return group
+
+    def _read_bubble_controls(self, prefix):
+        """Return (size_field, bubble_active, min_size, max_size, method) for a
+        tab's bubble-size controls created by _create_bubble_size_group()."""
+        size_field = getattr(self, f'{prefix}_bubble_field_combo').currentText().strip()
+        bubble_active = bool(size_field) and size_field != '1 (none)'
+        min_size = getattr(self, f'{prefix}_bubble_min_size_spin').value()
+        max_size = getattr(self, f'{prefix}_bubble_max_size_spin').value()
+        method = BUBBLE_SCALE_METHODS.get(getattr(self, f'{prefix}_bubble_scale_combo').currentText(), 'linear')
+        return size_field, bubble_active, min_size, max_size, method
+
+    def _compute_bubble_range(self, prefix, size_data, valid_mask, method):
+        """Compute (vmin, vmax) from size_data at positions where valid_mask is
+        True, update the tab's range label, and return (vmin, vmax, active)."""
+        range_label = getattr(self, f'{prefix}_bubble_range_label')
+        values = [v for v, valid in zip(size_data, valid_mask)
+                 if valid and v is not None and (method != 'log10' or v > 0)]
+        if not values:
+            range_label.setText("Data range: (no usable values for the selected field)")
+            range_label.setStyleSheet("color: gray; font-style: italic;")
+            return None, None, False
+        vmin, vmax = min(values), max(values)
+        min_size = getattr(self, f'{prefix}_bubble_min_size_spin').value()
+        max_size = getattr(self, f'{prefix}_bubble_max_size_spin').value()
+        method_label = getattr(self, f'{prefix}_bubble_scale_combo').currentText()
+        range_label.setText(
+            f"Data range: {vmin:.4g} – {vmax:.4g}  →  size {min_size:.0f} – {max_size:.0f} pt² ({method_label})")
+        range_label.setStyleSheet("color: black;")
+        return vmin, vmax, True
+
+    def _resize_tab_widget_to_current(self, index, tab_widget=None):
+        """Shrink `tab_widget` (self.tab_widget by default) to the height of
+        its currently visible tab.
+
+        QTabWidget otherwise sizes itself to fit the tallest tab, so every
+        other (shorter) tab shows a block of empty space below its content.
+        Giving hidden pages an Ignored size policy excludes them from the
+        stacked widget's size hint, leaving only the current page's height.
+        """
+        tab_widget = tab_widget or self.tab_widget
+        for i in range(tab_widget.count()):
+            page = tab_widget.widget(i)
+            if page is None:
+                continue
+            if i == index:
+                page.setSizePolicy(QSizePolicy_Preferred, QSizePolicy_Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy_Ignored, QSizePolicy_Ignored)
+        tab_widget.adjustSize()
 
     def setup_ui(self):
         """Setup the user interface."""
@@ -1891,49 +2837,30 @@ class GeochemistryDockWidget(QDockWidget):
         layer_layout = QVBoxLayout(layer_group)
         layer_layout.setSpacing(3)
 
-        layer_row = QHBoxLayout()
-        layer_row.addWidget(QLabel("Layer:"))
         self.layer_combo = QComboBox()
         self.layer_combo.currentIndexChanged.connect(self.on_layer_changed)
-        layer_row.addWidget(self.layer_combo)
-        layer_layout.addLayout(layer_row)
+        layer_layout.addLayout(self._label_row("Layer:", self.layer_combo))
 
-        id_row = QHBoxLayout()
-        id_row.addWidget(QLabel("Category:"))
         self.id_field_combo = QComboBox()
         self.id_field_combo.currentIndexChanged.connect(self.on_id_field_changed)
-        id_row.addWidget(self.id_field_combo)
-        layer_layout.addLayout(id_row)
+        layer_layout.addLayout(self._label_row("Category:", self.id_field_combo))
 
-        label_row = QHBoxLayout()
-        label_row.addWidget(QLabel("Add label:"))
         self.label_field_combo = QComboBox()
-        label_row.addWidget(self.label_field_combo)
         self.discrim_label = QCheckBox()
         self.discrim_label.setChecked(False)
         self.discrim_label.setToolTip("Label selected points using this field")
-        label_row.addWidget(self.discrim_label)
-        layer_layout.addLayout(label_row)
+        layer_layout.addLayout(
+            self._label_row("Add label:", self.label_field_combo, self.discrim_label, expand_index=0))
 
         main_layout.addWidget(layer_group)
 
-        # Style mapping row
-        style_row = QHBoxLayout()
-        style_row.addWidget(QLabel("Style:"))
-        self.style_file_label = QLabel("(none)")
-        self.style_file_label.setStyleSheet("color: gray; font-style: italic;")
-        style_row.addWidget(self.style_file_label, stretch=1)
-        load_style_btn = QPushButton("Load")
-        load_style_btn.setMaximumWidth(50)
-        load_style_btn.setToolTip("Load a colour/marker style JSON file")
-        load_style_btn.clicked.connect(lambda: self.load_style_from_file())
-        save_style_btn = QPushButton("Save")
-        save_style_btn.setMaximumWidth(50)
-        save_style_btn.setToolTip("Save current plot colours/markers to style file")
-        save_style_btn.clicked.connect(lambda: self.save_style_to_file())
-        style_row.addWidget(load_style_btn)
-        style_row.addWidget(save_style_btn)
-        main_layout.addLayout(style_row)
+        style_hint = QLabel(
+            "Category colours, markers and visibility can be edited from the "
+            "“Style…” panel that opens alongside each generated plot."
+        )
+        style_hint.setWordWrap(True)
+        style_hint.setStyleSheet("color: gray; font-style: italic;")
+        main_layout.addWidget(style_hint)
 
         # Tabs
         self.tab_widget = QTabWidget()
@@ -1943,29 +2870,22 @@ class GeochemistryDockWidget(QDockWidget):
         spider_layout = QVBoxLayout(spider_tab)
         spider_layout.setSpacing(5)
 
-        norm_row = QHBoxLayout()
-        norm_row.addWidget(QLabel("Normalize:"))
         self.norm_combo = QComboBox()
         for norm_name, norm_values in NORMALIZATION_OPTIONS:
             self.norm_combo.addItem(norm_name, norm_values)
-        norm_row.addWidget(self.norm_combo)
-        spider_layout.addLayout(norm_row)
+        spider_layout.addLayout(self._label_row("Normalize:", self.norm_combo))
 
-        order_row = QHBoxLayout()
-        order_row.addWidget(QLabel("Elements:"))
         self.order_combo = QComboBox()
         self.order_combo.addItems(["REE Only (La-Lu)", "Extended (Ba-Yb)", "Extended Alt (Cs-Lu)"])
-        order_row.addWidget(self.order_combo)
-        spider_layout.addLayout(order_row)
+        spider_layout.addLayout(self._label_row("Elements:", self.order_combo))
 
-        spider_opts = QHBoxLayout()
         self.spider_legend = QCheckBox("Legend")
         self.spider_legend.setChecked(True)
         self.spider_markers = QCheckBox("Markers")
         self.spider_markers.setChecked(True)
-        spider_opts.addWidget(self.spider_legend)
-        spider_opts.addWidget(self.spider_markers)
-        spider_layout.addLayout(spider_opts)
+        spider_layout.addLayout(self._checkbox_row(self.spider_legend, self.spider_markers))
+
+        spider_layout.addWidget(self._create_bubble_size_group('spider', CUSTOM_XY_ELEMENTS, editable=True))
         spider_layout.addStretch()
 
         self.tab_widget.addTab(spider_tab, "Spider")
@@ -1979,48 +2899,74 @@ class GeochemistryDockWidget(QDockWidget):
         self.diagram_combo.addItems(list(DISCRIMINATION_DIAGRAMS.keys()))
         discrim_layout.addWidget(self.diagram_combo)
 
-        discrim_opts = QHBoxLayout()
         self.discrim_legend = QCheckBox("Field Legend")
         self.discrim_legend.setChecked(True)
         self.discrim_category_legend = QCheckBox("Category Legend")
         self.discrim_category_legend.setChecked(True)
-        discrim_opts.addWidget(self.discrim_legend)
-        discrim_opts.addWidget(self.discrim_category_legend)
-        discrim_layout.addLayout(discrim_opts)
+        discrim_layout.addLayout(self._checkbox_row(self.discrim_legend, self.discrim_category_legend))
+
+        self.discrim_bdl_as_zero = QCheckBox("Treat below-LOD (negative-coded) oxide values as 0")
+        self.discrim_bdl_as_zero.setChecked(False)
+        self.discrim_bdl_as_zero.setToolTip(
+            "Applies to diagrams that support it (e.g. Hasterok et al. 2018).\n"
+            "Unchecked (default): points with a negative-coded oxide value are discarded.\n"
+            "Checked: negative-coded oxide values are substituted with 0 instead.")
+        discrim_layout.addWidget(self.discrim_bdl_as_zero)
+
+        discrim_layout.addWidget(self._create_bubble_size_group('discrim', CUSTOM_XY_ELEMENTS, editable=True))
         discrim_layout.addStretch()
 
         self.tab_widget.addTab(discrim_tab, "Discrimination/Classification")
 
         # Tab 3: Custom XY Plot
         custom_xy_tab = QWidget()
-        custom_xy_layout = QVBoxLayout(custom_xy_tab)
+        custom_xy_outer_layout = QVBoxLayout(custom_xy_tab)
+        custom_xy_outer_layout.setContentsMargins(0, 0, 0, 0)
+        custom_xy_subtabs = QTabWidget()
+
+        plot_setup_tab = QWidget()
+        custom_xy_layout = QVBoxLayout(plot_setup_tab)
         custom_xy_layout.setSpacing(5)
 
         # X-axis
         x_group = QGroupBox("X-Axis")
         x_grid = QGridLayout(x_group)
-        x_grid.setSpacing(3)
-        x_grid.addWidget(QLabel("Num:"), 0, 0)
+        x_grid.setHorizontalSpacing(20)
+        x_grid.setVerticalSpacing(3)
+        x_num_label = QLabel("Num:")
+        x_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        x_grid.addWidget(x_num_label, 0, 0)
         self.x_num_combo = QComboBox()
         self.x_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
+        self.x_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
         x_grid.addWidget(self.x_num_combo, 0, 1)
-        x_grid.addWidget(QLabel("Denom:"), 0, 2)
+        x_denom_label = QLabel("Denom:")
+        x_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        x_grid.addWidget(x_denom_label, 0, 2)
         self.x_denom_combo = QComboBox()
         self.x_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
+        self.x_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         x_grid.addWidget(self.x_denom_combo, 0, 3)
         custom_xy_layout.addWidget(x_group)
 
         # Y-axis
         y_group = QGroupBox("Y-Axis")
         y_grid = QGridLayout(y_group)
-        y_grid.setSpacing(3)
-        y_grid.addWidget(QLabel("Num:"), 0, 0)
+        y_grid.setHorizontalSpacing(20)
+        y_grid.setVerticalSpacing(3)
+        y_num_label = QLabel("Num:")
+        y_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        y_grid.addWidget(y_num_label, 0, 0)
         self.y_num_combo = QComboBox()
         self.y_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
+        self.y_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
         y_grid.addWidget(self.y_num_combo, 0, 1)
-        y_grid.addWidget(QLabel("Denom:"), 0, 2)
+        y_denom_label = QLabel("Denom:")
+        y_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        y_grid.addWidget(y_denom_label, 0, 2)
         self.y_denom_combo = QComboBox()
         self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
+        self.y_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         y_grid.addWidget(self.y_denom_combo, 0, 3)
         custom_xy_layout.addWidget(y_group)
 
@@ -2030,41 +2976,111 @@ class GeochemistryDockWidget(QDockWidget):
         self.custom_show_all_fields.toggled.connect(self.refresh_custom_xy_combos)
         custom_xy_layout.addWidget(self.custom_show_all_fields)
 
+        # Bubble size (optional third variable, scaled by symbol size)
+        custom_xy_layout.addWidget(self._create_bubble_size_group('custom', CUSTOM_XY_ELEMENTS))
+
         # REE Normalization
         ree_group = QGroupBox("REE Normalization")
-        ree_layout = QHBoxLayout(ree_group)
-        ree_layout.setSpacing(5)
-        ree_layout.addWidget(QLabel("Normalization:"))
+        ree_layout = QVBoxLayout(ree_group)
         self.ree_norm_combo = QComboBox()
         self.ree_norm_combo.addItem("None")
         for norm_name, norm_values in NORMALIZATION_OPTIONS:
             self.ree_norm_combo.addItem(norm_name)
         self.ree_norm_combo.setCurrentIndex(0)
-        ree_layout.addWidget(self.ree_norm_combo)
+        ree_layout.addLayout(self._label_row("Normalization:", self.ree_norm_combo))
         ree_group.setMaximumHeight(70)
         custom_xy_layout.addWidget(ree_group)
 
         # Axis scales
         scale_row = QHBoxLayout()
-        scale_row.addWidget(QLabel("X:"))
+        scale_row.setSpacing(20)
+        x_scale_label = QLabel("X:")
+        x_scale_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        scale_row.addWidget(x_scale_label, 0)
         self.x_scale_combo = QComboBox()
         self.x_scale_combo.addItems(["Linear", "Log"])
-        scale_row.addWidget(self.x_scale_combo)
-        scale_row.addWidget(QLabel("Y:"))
+        self.x_scale_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
+        scale_row.addWidget(self.x_scale_combo, 0)
+        y_scale_label = QLabel("Y:")
+        y_scale_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        scale_row.addWidget(y_scale_label, 0)
         self.y_scale_combo = QComboBox()
         self.y_scale_combo.addItems(["Linear", "Log"])
-        scale_row.addWidget(self.y_scale_combo)
+        self.y_scale_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+        scale_row.addWidget(self.y_scale_combo, 1)
         custom_xy_layout.addLayout(scale_row)
 
-        custom_opts = QHBoxLayout()
         self.custom_legend = QCheckBox("Legend")
         self.custom_legend.setChecked(True)
         self.custom_markers = QCheckBox("Markers")
         self.custom_markers.setChecked(True)
-        custom_opts.addWidget(self.custom_legend)
-        custom_opts.addWidget(self.custom_markers)
-        custom_xy_layout.addLayout(custom_opts)
+        custom_xy_layout.addLayout(self._checkbox_row(self.custom_legend, self.custom_markers))
         custom_xy_layout.addStretch()
+
+        custom_xy_subtabs.addTab(plot_setup_tab, "Plot Setup")
+
+        # Sub-tab: Data Preprocessing (below-detection-limit handling)
+        preprocess_tab = QWidget()
+        preprocess_layout = QVBoxLayout(preprocess_tab)
+        preprocess_layout.setSpacing(5)
+
+        bdl_intro = QLabel(
+            "Exploration datasets often code values below detection as negative "
+            "numbers (e.g. -5 means “below detection limit of 5”). By "
+            "default these plot as literal negative values. Enable below to "
+            "substitute them with a positive proxy instead."
+        )
+        bdl_intro.setWordWrap(True)
+        preprocess_layout.addWidget(bdl_intro)
+
+        self.custom_bdl_enabled = QCheckBox("Treat negative values as below-detection-limit codes")
+        self.custom_bdl_enabled.setChecked(False)
+        preprocess_layout.addWidget(self.custom_bdl_enabled)
+
+        self.custom_bdl_method_combo = QComboBox()
+        self.custom_bdl_method_combo.addItems([
+            "Half of detection limit",
+            "Detection limit",
+            "Random value (0 to detection limit)",
+            "Fixed value",
+        ])
+        preprocess_layout.addLayout(self._label_row("Substitution:", self.custom_bdl_method_combo))
+
+        self.custom_bdl_fixed_spin = QDoubleSpinBox()
+        self.custom_bdl_fixed_spin.setRange(0.0, 1e9)
+        self.custom_bdl_fixed_spin.setDecimals(6)
+        self.custom_bdl_fixed_spin.setSingleStep(0.001)
+        self.custom_bdl_fixed_spin.setValue(0.001)
+        self.custom_bdl_fixed_spin.setEnabled(False)
+        preprocess_layout.addLayout(self._label_row("Fixed value:", self.custom_bdl_fixed_spin))
+
+        def _update_bdl_fixed_enabled(text):
+            self.custom_bdl_fixed_spin.setEnabled(text == "Fixed value")
+        self.custom_bdl_method_combo.currentTextChanged.connect(_update_bdl_fixed_enabled)
+
+        review_btn = QPushButton("Review Negative Values in Selected Fields")
+        review_btn.setToolTip(
+            "Scan the currently selected samples' X/Y fields for negative "
+            "(below-detection) values and show their detection-limit range, "
+            "plus a histogram, to help choose an appropriate substitution."
+        )
+        review_btn.clicked.connect(self._review_custom_xy_negatives)
+        preprocess_layout.addWidget(review_btn)
+
+        self.custom_bdl_review_label = QLabel("No review run yet.")
+        self.custom_bdl_review_label.setWordWrap(True)
+        self.custom_bdl_review_label.setStyleSheet("color: gray; font-style: italic;")
+        preprocess_layout.addWidget(self.custom_bdl_review_label)
+
+        preprocess_layout.addStretch()
+
+        custom_xy_subtabs.addTab(preprocess_tab, "Data Preprocessing")
+
+        custom_xy_subtabs.currentChanged.connect(
+            lambda idx: self._resize_tab_widget_to_current(idx, custom_xy_subtabs))
+        self._resize_tab_widget_to_current(custom_xy_subtabs.currentIndex(), custom_xy_subtabs)
+
+        custom_xy_outer_layout.addWidget(custom_xy_subtabs)
 
         self.tab_widget.addTab(custom_xy_tab, "Custom XY")
 
@@ -2080,14 +3096,21 @@ class GeochemistryDockWidget(QDockWidget):
         ]:
             grp = QGroupBox(apex_label)
             grid = QGridLayout(grp)
-            grid.setSpacing(3)
-            grid.addWidget(QLabel("Num:"), 0, 0)
+            grid.setHorizontalSpacing(20)
+            grid.setVerticalSpacing(3)
+            num_label = QLabel("Num:")
+            num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+            grid.addWidget(num_label, 0, 0)
             num_combo = QComboBox()
             num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
+            num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
             grid.addWidget(num_combo, 0, 1)
-            grid.addWidget(QLabel("Denom:"), 0, 2)
+            denom_label = QLabel("Denom:")
+            denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+            grid.addWidget(denom_label, 0, 2)
             denom_combo = QComboBox()
             denom_combo.addItems(CUSTOM_XY_ELEMENTS)
+            denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
             grid.addWidget(denom_combo, 0, 3)
             setattr(self, num_attr, num_combo)
             setattr(self, denom_attr, denom_combo)
@@ -2098,31 +3121,33 @@ class GeochemistryDockWidget(QDockWidget):
         self.tern_show_all_fields.toggled.connect(self.refresh_custom_ternary_combos)
         custom_tern_layout.addWidget(self.tern_show_all_fields)
 
-        tern_opts = QHBoxLayout()
         self.tern_legend = QCheckBox("Legend")
         self.tern_legend.setChecked(True)
         self.tern_markers = QCheckBox("Markers")
         self.tern_markers.setChecked(True)
-        tern_opts.addWidget(self.tern_legend)
-        tern_opts.addWidget(self.tern_markers)
-        custom_tern_layout.addLayout(tern_opts)
+        custom_tern_layout.addLayout(self._checkbox_row(self.tern_legend, self.tern_markers))
+
+        custom_tern_layout.addWidget(self._create_bubble_size_group('tern', CUSTOM_XY_ELEMENTS))
         custom_tern_layout.addStretch()
 
         self.tab_widget.addTab(custom_tern_tab, "Custom Ternary")
 
-        # Tab 5: Minerals (Apatite Group Classification)
+        # Tab 5: Minerals (mineral classification plots)
         minerals_tab = QWidget()
         minerals_layout = QVBoxLayout(minerals_tab)
         minerals_layout.setSpacing(5)
 
-        minerals_opts = QHBoxLayout()
+        self.minerals_combo = QComboBox()
+        self.minerals_combo.addItems(list(MINERALS_DIAGRAMS.keys()))
+        minerals_layout.addWidget(self.minerals_combo)
+
         self.minerals_legend = QCheckBox("Field Legend")
         self.minerals_legend.setChecked(True)
         self.minerals_category_legend = QCheckBox("Category Legend")
         self.minerals_category_legend.setChecked(True)
-        minerals_opts.addWidget(self.minerals_legend)
-        minerals_opts.addWidget(self.minerals_category_legend)
-        minerals_layout.addLayout(minerals_opts)
+        minerals_layout.addLayout(self._checkbox_row(self.minerals_legend, self.minerals_category_legend))
+
+        minerals_layout.addWidget(self._create_bubble_size_group('minerals', CUSTOM_XY_ELEMENTS, editable=True))
         minerals_layout.addStretch()
 
         self.tab_widget.addTab(minerals_tab, "Minerals")
@@ -2135,28 +3160,41 @@ class GeochemistryDockWidget(QDockWidget):
         # X Axis (Density)
         petro_x_group = QGroupBox("X-Axis (Density)")
         petro_x_grid = QGridLayout(petro_x_group)
-        petro_x_grid.setSpacing(3)
-        petro_x_grid.addWidget(QLabel("Field:"), 0, 0)
+        petro_x_grid.setHorizontalSpacing(20)
+        petro_x_grid.setVerticalSpacing(3)
+        petro_x_field_label = QLabel("Field:")
+        petro_x_field_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        petro_x_grid.addWidget(petro_x_field_label, 0, 0)
         self.petro_x_field_combo = QComboBox()
+        self.petro_x_field_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_x_grid.addWidget(self.petro_x_field_combo, 0, 1, 1, 3)
-        petro_x_grid.addWidget(QLabel("Units:"), 1, 0)
+        petro_x_units_label = QLabel("Units:")
+        petro_x_units_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        petro_x_grid.addWidget(petro_x_units_label, 1, 0)
         self.petro_x_unit_combo = QComboBox()
         self.petro_x_unit_combo.addItems([
             "No Scaling",
             "CGS (no scaling)",
             "SI (÷ 1000)",
         ])
+        self.petro_x_unit_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_x_grid.addWidget(self.petro_x_unit_combo, 1, 1, 1, 3)
         petro_layout.addWidget(petro_x_group)
 
         # Y Axis (Magnetic Susceptibility)
         petro_y_group = QGroupBox("Y-Axis (Magnetic Susceptibility)")
         petro_y_grid = QGridLayout(petro_y_group)
-        petro_y_grid.setSpacing(3)
-        petro_y_grid.addWidget(QLabel("Field:"), 0, 0)
+        petro_y_grid.setHorizontalSpacing(20)
+        petro_y_grid.setVerticalSpacing(3)
+        petro_y_field_label = QLabel("Field:")
+        petro_y_field_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        petro_y_grid.addWidget(petro_y_field_label, 0, 0)
         self.petro_y_field_combo = QComboBox()
+        self.petro_y_field_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_y_grid.addWidget(self.petro_y_field_combo, 0, 1, 1, 3)
-        petro_y_grid.addWidget(QLabel("Units:"), 1, 0)
+        petro_y_units_label = QLabel("Units:")
+        petro_y_units_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+        petro_y_grid.addWidget(petro_y_units_label, 1, 0)
         self.petro_y_unit_combo = QComboBox()
         self.petro_y_unit_combo.addItems([
             "No Scaling",
@@ -2164,20 +3202,26 @@ class GeochemistryDockWidget(QDockWidget):
             "SI (no scaling)",
             "SI ×10⁻³",
         ])
+        self.petro_y_unit_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_y_grid.addWidget(self.petro_y_unit_combo, 1, 1, 1, 3)
         petro_layout.addWidget(petro_y_group)
 
-        petro_opts = QHBoxLayout()
         self.petro_legend = QCheckBox("Legend")
         self.petro_legend.setChecked(True)
         self.petro_markers = QCheckBox("Markers")
         self.petro_markers.setChecked(True)
-        petro_opts.addWidget(self.petro_legend)
-        petro_opts.addWidget(self.petro_markers)
-        petro_layout.addLayout(petro_opts)
+        petro_layout.addLayout(self._checkbox_row(self.petro_legend, self.petro_markers))
+
+        petro_layout.addWidget(self._create_bubble_size_group('petro', ['1 (none)']))
         petro_layout.addStretch()
 
         self.tab_widget.addTab(petro_tab, "Petrophysics")
+
+        # Shrink the tab widget to each tab's own content height instead of
+        # always reserving space for the tallest tab, so short tabs don't
+        # show a block of empty space above the "Samples" section below.
+        self.tab_widget.currentChanged.connect(self._resize_tab_widget_to_current)
+        self._resize_tab_widget_to_current(self.tab_widget.currentIndex())
 
         main_layout.addWidget(self.tab_widget)
 
@@ -2211,6 +3255,21 @@ class GeochemistryDockWidget(QDockWidget):
         classify_btn.clicked.connect(self.add_classification_field)
         sample_layout.addWidget(classify_btn)
 
+        filter_row = QHBoxLayout()
+        filter_to_selection_btn = QPushButton("Filter Layer to Selected")
+        filter_to_selection_btn.setToolTip(
+            "Restrict the layer to only the samples currently selected in QGIS\n"
+            "(e.g. via lasso/rectangle-select on a plot), so the sample list,\n"
+            "plots and the attribute table only see those features."
+        )
+        filter_to_selection_btn.clicked.connect(self.filter_layer_to_selection)
+        clear_filter_btn = QPushButton("Clear Filter")
+        clear_filter_btn.setToolTip("Remove the filter and show all features in the layer again.")
+        clear_filter_btn.clicked.connect(self.clear_layer_filter)
+        filter_row.addWidget(filter_to_selection_btn)
+        filter_row.addWidget(clear_filter_btn)
+        sample_layout.addLayout(filter_row)
+
         main_layout.addWidget(sample_group)
 
         # Action buttons
@@ -2227,7 +3286,11 @@ class GeochemistryDockWidget(QDockWidget):
         scroll_area = QScrollArea()
         scroll_area.setWidget(main_widget)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt_ScrollBarAlwaysOff)        
+        # Horizontal scrolling was previously disabled outright, so content
+        # wider than the docked panel (long layer/field names, etc.) was
+        # simply clipped with no way to see the rest. A scrollbar that only
+        # appears when needed fixes that without changing the normal layout.
+        scroll_area.setHorizontalScrollBarPolicy(Qt_ScrollBarAsNeeded)
         self.setWidget(scroll_area)
         self.setMinimumWidth(320)
 
@@ -2323,29 +3386,31 @@ class GeochemistryDockWidget(QDockWidget):
         
         self.id_field_combo.clear()
         self.label_field_combo.clear()
+        self.id_field_combo.addItem(NO_CATEGORY_OPTION)
         field_names = [field.name() for field in layer.fields()]
         for field_name in field_names:
             self.id_field_combo.addItem(field_name)
             self.label_field_combo.addItem(field_name)
 
-        # Auto-select ID field
+        # Auto-select ID field. Default to "no category" (single shared
+        # symbol) unless a recognisable sample/category field is found.
         preferred_names = ['sample_id', 'sampleid', 'sample', 'name', 'id', 'sample_name',
                         'samplename', 'label', 'station', 'site', 'sample_no', 'samp_id',
                         'hole_id', 'holeid', 'drillhole', 'core_id', 'spec_id', 'specimen']
-        best_index = 0
-        
+        best_index = 0  # NO_CATEGORY_OPTION
+
         for pref in preferred_names:
             for i, fn in enumerate(field_names):
                 if fn.lower() == pref.lower():
-                    best_index = i
+                    best_index = i + 1  # +1 for the leading NO_CATEGORY_OPTION entry
                     break
             else:
                 continue
             break
-        
+
         self.id_field_combo.setCurrentIndex(best_index)
         self.update_feature_list(layer)
-        
+
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
         self.refresh_petrophysics_combos()
@@ -2392,6 +3457,13 @@ class GeochemistryDockWidget(QDockWidget):
         layer = QgsProject.instance().mapLayer(layer_id)
         if layer:
             self.update_feature_list(layer)
+
+    def _category_field_label(self):
+        """Return a clean template-key label for the current 'Category:' selection."""
+        id_field = self.id_field_combo.currentText()
+        if not id_field or id_field == NO_CATEGORY_OPTION:
+            return NO_CATEGORY_LABEL
+        return id_field
 
     def update_feature_list(self, layer):
         """Update the feature list."""
@@ -2454,6 +3526,86 @@ class GeochemistryDockWidget(QDockWidget):
         if layer:
             self.update_feature_list(layer)
 
+    def _build_fid_subset_string(self, layer, feature_ids):
+        """Build a data-provider WHERE clause selecting exactly `feature_ids`.
+
+        Prefers the layer's declared primary key field (robust for PostGIS/
+        Spatialite/GeoPackage layers); falls back to OGR's special FID
+        pseudo-column, which file-based providers (Shapefile, GeoPackage,
+        CSV, ...) accept even without a declared primary key.
+        """
+        try:
+            pk_indexes = layer.dataProvider().pkAttributeIndexes()
+        except Exception:
+            pk_indexes = []
+
+        if pk_indexes:
+            pk_field = layer.fields()[pk_indexes[0]].name()
+            values = []
+            for fid in feature_ids:
+                feature = layer.getFeature(fid)
+                if not feature.isValid():
+                    continue
+                val = feature[pk_field]
+                if isinstance(val, (int, float)):
+                    values.append(str(val))
+                else:
+                    values.append("'{}'".format(str(val).replace("'", "''")))
+            if values:
+                return '"{}" IN ({})'.format(pk_field, ','.join(values))
+
+        id_list = ','.join(str(fid) for fid in feature_ids)
+        return f"FID IN ({id_list})"
+
+    def filter_layer_to_selection(self):
+        """Restrict the current layer to only its currently-selected features.
+
+        Uses the layer's own selection (e.g. set by lasso/rectangle-select on
+        a plot), so subsequent plots, the sample list and the attribute table
+        only see the selected samples.
+        """
+        layer_id = self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+
+        selected_ids = layer.selectedFeatureIds()
+        if not selected_ids:
+            QMessageBox.warning(self, "Warning",
+                "No features are selected. Select samples in QGIS first "
+                "(e.g. lasso/rectangle-select on a plot), then filter.")
+            return
+
+        subset = self._build_fid_subset_string(layer, selected_ids)
+        if not layer.setSubsetString(subset):
+            QMessageBox.warning(self, "Filter failed",
+                "Could not filter this layer's data source to the selection.\n"
+                "This can happen with some data providers. As an alternative, "
+                "use QGIS's Export > Save Selected Features As... to create a "
+                "new layer from the selection.")
+            return
+
+        self.update_feature_list(layer)
+        QMessageBox.information(self, "Filter applied",
+            f"Layer filtered to {len(selected_ids)} selected sample(s).\n"
+            "Use \"Clear Filter\" to show all features again.")
+
+    def clear_layer_filter(self):
+        """Remove any filter applied by "Filter Layer to Selected", restoring all features."""
+        layer_id = self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+        if not layer.subsetString():
+            QMessageBox.information(self, "No filter", "This layer isn't currently filtered.")
+            return
+        if not layer.setSubsetString(''):
+            QMessageBox.warning(self, "Error", "Could not clear the filter on this layer.")
+            return
+        self.update_feature_list(layer)
+
     def get_element_order(self):
         """Get the element order for spider diagrams."""
         index = self.order_combo.currentIndex()
@@ -2493,16 +3645,17 @@ class GeochemistryDockWidget(QDockWidget):
             return
 
         id_field = self.id_field_combo.currentText()
+        use_category_field = bool(id_field) and id_field != NO_CATEGORY_OPTION
         features = []
         sample_names = []
         for item in selected_items:
             fid = item.data(Qt_UserRole)
             feature = layer.getFeature(fid)
             features.append(feature)
-            if id_field:
+            if use_category_field:
                 sample_names.append(str(feature[id_field]))
             else:
-                sample_names.append(f"Sample {fid}")
+                sample_names.append(NO_CATEGORY_LABEL)
 
         plt.ion()
         
@@ -2524,6 +3677,15 @@ class GeochemistryDockWidget(QDockWidget):
         element_order = self.get_element_order()
         norm_name, norm_values = self.get_normalization_info()
 
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('spider')
+        size_data = [get_custom_element_value(feature, layer, size_field) if bubble_active else None
+                    for feature in features]
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'spider', size_data, [True] * len(size_data), bubble_method)
+
         missing_from_normalisation = [
             element for element in element_order
             if element not in norm_values or norm_values.get(element) is None or norm_values.get(element, 0) <= 0
@@ -2536,30 +3698,17 @@ class GeochemistryDockWidget(QDockWidget):
             normalized_values = []
             for element in element_order:
                 value = np.nan
-                field_name = find_element_field(layer, element)
-                if not field_name:
+                if find_element_field(layer, element) is None:
                     if element not in missing_from_dataset:
                         missing_from_dataset.append(element)
                     normalized_values.append(value)
                     continue
 
-                try:
-                    raw_value = feature[field_name]
-                    if raw_value is not None and raw_value != NULL:
-                        raw_value = float(raw_value)
-
-                        field_upper = field_name.upper()
-                        if element == 'K' and 'K2O' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'K2O'):
-                            raw_value = raw_value * 8301
-                        elif element == 'P' and 'P2O5' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'P2O5'):
-                            raw_value = raw_value * 4364
-                        elif element == 'Ti' and 'TIO2' in field_upper and ('PCT' in field_upper or 'WT' in field_upper or field_upper == 'TIO2'):
-                            raw_value = raw_value * 5995
-
-                        if raw_value > 0 and element in norm_values and norm_values[element] > 0:
-                            value = raw_value / norm_values[element]
-                except (ValueError, TypeError):
-                    pass
+                # Auto-converts ppb/pct/oxide-wt% to elemental ppm as needed,
+                # regardless of which unit or elemental/oxide form is present.
+                raw_value = get_element_ppm(feature, layer, element)
+                if raw_value is not None and raw_value > 0 and element in norm_values and norm_values[element] > 0:
+                    value = raw_value / norm_values[element]
                 normalized_values.append(value)
             plot_data.append(normalized_values)
 
@@ -2599,11 +3748,14 @@ class GeochemistryDockWidget(QDockWidget):
         fig, ax = plt.subplots(figsize=(12, 8))
         x_positions = np.arange(len(element_order))
 
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
-        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
+        category_styles, unique_categories = self._build_default_category_styles(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self._category_arrays_from_styles(category_styles, sample_names)
 
         plotted_categories = set()
         line_to_fid = {}
+        artist_registry = {}
+        sample_line_markersizes = []
 
         for i, (values, name, feature) in enumerate(zip(plot_data, sample_names, features)):
             marker = sample_markers[i] if self.spider_markers.isChecked() else None
@@ -2611,10 +3763,21 @@ class GeochemistryDockWidget(QDockWidget):
             label = name if name not in plotted_categories else None
             plotted_categories.add(name)
 
-            lines = ax.plot(x_positions, values, marker=marker, markersize=8, linewidth=1.5,
+            if bubble_active:
+                sv = size_data[i]
+                area = (bubble_symbol_size(sv, bubble_vmin, bubble_vmax, bubble_min_size,
+                                           bubble_max_size, bubble_method)
+                        if sv is not None else bubble_min_size)
+                line_markersize = math.sqrt(area)
+            else:
+                line_markersize = 8
+            sample_line_markersizes.append(line_markersize)
+
+            lines = ax.plot(x_positions, values, marker=marker, markersize=line_markersize, linewidth=1.5,
                    label=label, color=color, markerfacecolor='white' if marker else None,
                    markeredgecolor=color, markeredgewidth=1.5)
             line_to_fid[lines[0]] = feature.id()
+            artist_registry.setdefault(name, []).append({'artist': lines[0], 'role': 'marker'})
 
         ax.set_yscale('log')
         ax.set_xlim(-0.5, len(element_order) - 0.5)
@@ -2631,17 +3794,67 @@ class GeochemistryDockWidget(QDockWidget):
         n_samples = len(plot_data)
         ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalised to {norm_name}', fontsize=14)
 
+        stats_registry, envelope_registry = _build_spider_stat_artists(
+            ax, x_positions, plot_data, sample_names, category_colors, category_markers,
+            markers_enabled=self.spider_markers.isChecked(),
+            sample_markersizes=sample_line_markersizes if bubble_active else None)
+
+        category_counts = Counter(sample_names)
+        export_legend_artists = {}
+        category_legend_obj = None
         if self.spider_legend.isChecked():
-            n_categories = len(unique_categories)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=9,
-                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+            export_legend_artists = self._build_category_legend(
+                ax, unique_categories, category_styles, category_counts,
+                bbox_to_anchor=(0.5, -0.12), fontsize=9)
+            category_legend_obj = ax.get_legend()
+
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                self._field_display_label(size_field), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
         plt.show()
         self._attach_spider_selection(fig, line_to_fid, layer.id())
+        self._open_category_panel(
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Spider Diagram Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
+
+    def _prepare_diagram_for_run(self, diagram_class, layer):
+        """First-screening + option wiring shared by 'Generate Diagram' and
+        'Classify Layer' for discrimination-diagram classes.
+
+        Sets `diagram_class.bdl_as_zero` from the Discrimination tab's
+        checkbox for diagram classes that support it, and, for diagram
+        classes that declare `check_data_availability`, warns up front if
+        any required oxide has no usable field anywhere in the layer
+        (as an oxide wt% field or a convertible elemental/ppm field) - such
+        oxides make every point on the diagram unclassifiable, not just some.
+
+        Returns False if the user cancels after seeing the warning (run
+        should be aborted), True otherwise.
+        """
+        if hasattr(diagram_class, 'bdl_as_zero'):
+            diagram_class.bdl_as_zero = self.discrim_bdl_as_zero.isChecked()
+
+        if hasattr(diagram_class, 'check_data_availability'):
+            missing = diagram_class.check_data_availability(layer)
+            if missing:
+                reply = QMessageBox.warning(
+                    self, "Missing Required Geochemical Data",
+                    f"Layer '{layer.name()}' has no usable field (as oxide wt% or a "
+                    f"convertible elemental/ppm field) for the following oxide(s) "
+                    f"required by '{diagram_class.name}':\n\n" + "\n".join(missing) +
+                    "\n\nEvery point will be excluded from this diagram until these "
+                    "are available. Continue anyway?",
+                    QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+                if reply != QMessageBox_Ok:
+                    return False
+        return True
 
     def add_classification_field(self):
         """Add or update a classification field on the layer for the current discrimination diagram."""
@@ -2652,11 +3865,14 @@ class GeochemistryDockWidget(QDockWidget):
             return
 
         if self.tab_widget.currentIndex() == 4:
-            diagram_class = ApatiteGroupPlot
+            diagram_class = MINERALS_DIAGRAMS[self.minerals_combo.currentText()]
         else:
             diagram_name = self.diagram_combo.currentText()
             diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
         field_name = diagram_class.field_name
+
+        if not self._prepare_diagram_for_run(diagram_class, layer):
+            return
 
         if not layer.isEditable():
             if not layer.startEditing():
@@ -2706,52 +3922,103 @@ class GeochemistryDockWidget(QDockWidget):
         diagram_name = self.diagram_combo.currentText()
         diagram_class = DISCRIMINATION_DIAGRAMS[diagram_name]
 
+        if not self._prepare_diagram_for_run(diagram_class, layer):
+            return
+
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('discrim')
+
         data = []
+        size_data = []
         for feature in features:
             coords = diagram_class.calculate_coordinates(feature, layer)
             data.append(coords)
+            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
 
         # Build pts_data and fid_list for selection (handles both binary and ternary)
         pts_data = []
         fid_list = []
+        valid_mask = []
         for coords, feature in zip(data, features):
             if coords[0] is None:
+                valid_mask.append(False)
                 continue
             if len(coords) == 3:
                 if coords[2] is None:
+                    valid_mask.append(False)
                     continue
                 x, y = ternary_to_cartesian(*coords)
             else:
                 if coords[1] is None:
+                    valid_mask.append(False)
                     continue
                 x, y = coords[0], coords[1]
+            valid_mask.append(True)
             pts_data.append((x, y))
             fid_list.append(feature.id())
 
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
-        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'discrim', size_data, valid_mask, bubble_method)
+        sample_sizes = None
+        if bubble_active:
+            sample_sizes = [
+                bubble_symbol_size(v, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method)
+                if v is not None else bubble_min_size
+                for v in size_data
+            ]
+
+        category_styles, unique_categories = self._build_default_category_styles(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self._category_arrays_from_styles(category_styles, sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        fid_to_scatter = diagram_class.plot(ax, data, sample_names,
+        fid_to_scatter, category_artists = diagram_class.plot(ax, data, sample_names,
                           show_legend=self.discrim_legend.isChecked(),
                           show_category_legend=self.discrim_category_legend.isChecked(),
                           sample_colors=sample_colors, category_colors=category_colors,
                           sample_markers=sample_markers, category_markers=category_markers,
-                          n_samples=valid_count, fids=fid_list)
+                          n_samples=valid_count, fids=fid_list, sample_sizes=sample_sizes)
+        artist_registry = {cat: [{'artist': a, 'role': 'scatter'} for a in arts]
+                           for cat, arts in category_artists.items()}
+        export_legend_artists = self._extract_legend_artists(ax.get_legend())
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                self._field_display_label(size_field), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
+        valid_sizes = [s for s, valid in zip(sample_sizes, valid_mask) if valid] if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
+        self._open_category_panel(
+            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Discrimination Diagram Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def generate_minerals_plot(self, layer, features, sample_names):
-        """Generate apatite group classification plot (Sr/Y vs Sum LREE)."""
+        """Generate the selected mineral classification plot."""
+        minerals_name = self.minerals_combo.currentText()
+        minerals_class = MINERALS_DIAGRAMS[minerals_name]
+
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('minerals')
+
         data = []
+        size_data = []
         for feature in features:
-            coords = ApatiteGroupPlot.calculate_coordinates(feature, layer)
+            coords = minerals_class.calculate_coordinates(feature, layer)
             data.append(coords)
+            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
         if valid_count == 0:
@@ -2761,29 +4028,60 @@ class GeochemistryDockWidget(QDockWidget):
 
         pts_data = []
         fid_list = []
+        valid_mask = []
         for coords, feature in zip(data, features):
             if coords[0] is None or coords[1] is None:
+                valid_mask.append(False)
                 continue
+            valid_mask.append(True)
             pts_data.append((coords[0], coords[1]))
             fid_list.append(feature.id())
 
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
-            create_categorical_color_map(sample_names)
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'minerals', size_data, valid_mask, bubble_method)
+        sample_sizes = None
+        if bubble_active:
+            sample_sizes = [
+                bubble_symbol_size(v, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method)
+                if v is not None else bubble_min_size
+                for v in size_data
+            ]
+
+        category_styles, unique_categories = self._build_default_category_styles(sample_names)
         category_colors, category_markers, sample_colors, sample_markers = \
-            self.apply_style_overrides(category_colors, category_markers, sample_names)
+            self._category_arrays_from_styles(category_styles, sample_names)
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        fid_to_scatter = ApatiteGroupPlot.plot(
+        fid_to_scatter, category_artists = minerals_class.plot(
             ax, data, sample_names,
             show_legend=self.minerals_legend.isChecked(),
             show_category_legend=self.minerals_category_legend.isChecked(),
             sample_colors=sample_colors, category_colors=category_colors,
             sample_markers=sample_markers, category_markers=category_markers,
-            n_samples=valid_count, fids=fid_list)
+            n_samples=valid_count, fids=fid_list, sample_sizes=sample_sizes)
+        artist_registry = {cat: [{'artist': a, 'role': 'scatter'} for a in arts]
+                           for cat, arts in category_artists.items()}
+        export_legend_artists = self._extract_legend_artists(ax.get_legend())
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                self._field_display_label(size_field), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
+        valid_sizes = [s for s, valid in zip(sample_sizes, valid_mask) if valid] if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
+        self._open_category_panel(
+            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Mineral Classification Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def generate_petrophysics_plot(self, layer, features, sample_names):
@@ -2818,7 +4116,10 @@ class GeochemistryDockWidget(QDockWidget):
             y_factor = 1.0
             y_unit_label = " (SI)" if y_unit_idx == 2 else ""
 
-        x_data, y_data = [], []
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('petro')
+
+        x_data, y_data, size_data = [], [], []
         valid_count = 0
         for feature in features:
             try:
@@ -2833,6 +4134,15 @@ class GeochemistryDockWidget(QDockWidget):
                 yv = None
             x_data.append(xv)
             y_data.append(yv)
+            if bubble_active:
+                try:
+                    sv = feature[size_field]
+                    sv = float(sv) if sv is not None and sv != NULL else None
+                except (ValueError, TypeError):
+                    sv = None
+            else:
+                sv = None
+            size_data.append(sv)
             if xv is not None and yv is not None:
                 valid_count += 1
 
@@ -2840,10 +4150,15 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.warning(self, "Warning", "No valid data points to plot.")
             return
 
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
-            create_categorical_color_map(sample_names)
+        valid_mask = [x is not None and y is not None for x, y in zip(x_data, y_data)]
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'petro', size_data, valid_mask, bubble_method)
+
+        category_styles, unique_categories = self._build_default_category_styles(sample_names)
         category_colors, category_markers, sample_colors, sample_markers = \
-            self.apply_style_overrides(category_colors, category_markers, sample_names)
+            self._category_arrays_from_styles(category_styles, sample_names)
 
         fig, ax = plt.subplots(figsize=(12, 9))
 
@@ -2853,6 +4168,7 @@ class GeochemistryDockWidget(QDockWidget):
         plotted_categories = set()
         pts_data, fid_list = [], []
         fid_to_scatter = {}
+        artist_registry = {}
 
         cat_groups = {}
         for i, (x, y, name, feature) in enumerate(zip(x_data, y_data, sample_names, features)):
@@ -2862,11 +4178,19 @@ class GeochemistryDockWidget(QDockWidget):
             marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
             cat_key = (name, marker) if self.petro_markers.isChecked() else name
             if cat_key not in cat_groups:
-                cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+                cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [], 'sizes': [],
                                        'marker': marker, 'name': name}
             g = cat_groups[cat_key]
             g['xs'].append(x); g['ys'].append(y)
             g['fids'].append(feature.id()); g['colors'].append(color)
+            if bubble_active:
+                sv = size_data[i]
+                size = (bubble_symbol_size(sv, bubble_vmin, bubble_vmax, bubble_min_size,
+                                           bubble_max_size, bubble_method)
+                        if sv is not None else bubble_min_size)
+            else:
+                size = 80
+            g['sizes'].append(size)
             pts_data.append((x, y))
             fid_list.append(feature.id())
 
@@ -2875,30 +4199,125 @@ class GeochemistryDockWidget(QDockWidget):
             if self.petro_legend.isChecked() and g['name'] not in plotted_categories:
                 label = g['name']
                 plotted_categories.add(g['name'])
-            scatter_kw = dict(s=80, c=g['colors'], edgecolors='black',
+            scatter_kw = dict(s=g['sizes'], c=g['colors'], edgecolors='black',
                               linewidths=0.5, zorder=10, label=label)
             if self.petro_markers.isChecked():
                 scatter_kw['marker'] = g['marker']
             sc = ax.scatter(g['xs'], g['ys'], **scatter_kw)
+            artist_registry.setdefault(g['name'], []).append({'artist': sc, 'role': 'scatter'})
             for local_idx, fid in enumerate(g['fids']):
                 fid_to_scatter[fid] = (sc, local_idx)
+
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, cat_groups)
 
         ax.set_xlabel(f"{x_field}{x_unit_label}", fontsize=12)
         ax.set_ylabel(f"{y_field}{y_unit_label}", fontsize=12)
         ax.set_title(f"{y_field} vs {x_field} (n={valid_count})", fontsize=14)
         ax.grid(True, alpha=0.3)
 
+        export_legend_artists = {}
+        category_legend_obj = None
         if self.petro_legend.isChecked() and unique_categories:
-            n_categories = len(unique_categories)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
-                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
+            export_legend_artists = self._build_category_legend(
+                ax, unique_categories, category_styles, Counter(sample_names),
+                bbox_to_anchor=(0.5, -0.12), fontsize=8)
+            category_legend_obj = ax.get_legend()
+
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                self._field_display_label(size_field), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        self._open_category_panel(
+            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Petrophysics Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
+
+    def _apply_bdl_substitution(self, value):
+        """Substitute a below-detection-limit code (a negative value) with a
+        positive proxy, per the Custom XY tab's Data Preprocessing settings.
+
+        Returns `value` unchanged if it's None, non-negative, or the
+        "Treat negative values..." checkbox is off - i.e. by default
+        negative values pass through untouched rather than being discarded,
+        so plots can show them as literal (negative) numbers if desired.
+        """
+        if value is None or value >= 0:
+            return value
+        if not self.custom_bdl_enabled.isChecked():
+            return value
+        detection_limit = abs(value)
+        method = self.custom_bdl_method_combo.currentText()
+        if method == 'Half of detection limit':
+            return detection_limit / 2.0
+        if method == 'Detection limit':
+            return detection_limit
+        if method == 'Random value (0 to detection limit)':
+            return random.uniform(0.0, detection_limit)  # nosec B311 - statistical substitution for BDL values, not security-sensitive
+        if method == 'Fixed value':
+            return self.custom_bdl_fixed_spin.value()
+        return value
+
+    def _review_custom_xy_negatives(self):
+        """Summarise negative (below-detection-limit-coded) values found in
+        the currently selected samples, for the X/Y fields chosen in the
+        Plot Setup sub-tab, and plot a histogram of their magnitudes
+        (i.e. the encoded detection limits) to help choose a substitution.
+        """
+        layer_id = self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+
+        selected_items = self.feature_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return
+        features = [layer.getFeature(item.data(Qt_UserRole)) for item in selected_items]
+
+        fields = [f for f in dict.fromkeys([
+            self.x_num_combo.currentText(), self.x_denom_combo.currentText(),
+            self.y_num_combo.currentText(), self.y_denom_combo.currentText(),
+        ]) if f not in ('1 (none)', 'Mg#')]
+
+        if not fields:
+            self.custom_bdl_review_label.setText("No fields selected to review.")
+            return
+
+        summary_lines = []
+        detection_limits_by_field = {}
+        for field in fields:
+            values = [get_custom_element_value(feature, layer, field) for feature in features]
+            negatives = [v for v in values if v is not None and v < 0]
+            if negatives:
+                dls = [abs(v) for v in negatives]
+                summary_lines.append(
+                    f"{field}: {len(negatives)} of {len(features)} sample(s) negative, "
+                    f"detection limit range {min(dls):.4g}–{max(dls):.4g}")
+                detection_limits_by_field[field] = dls
+            else:
+                summary_lines.append(f"{field}: no negative values found")
+
+        self.custom_bdl_review_label.setText("\n".join(summary_lines))
+        self.custom_bdl_review_label.setStyleSheet("color: black;")
+
+        if detection_limits_by_field:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            for field, dls in detection_limits_by_field.items():
+                ax.hist(dls, bins=min(20, max(5, len(dls))), alpha=0.6, label=field, edgecolor='black')
+            ax.set_xlabel("Detection limit (|value|)")
+            ax.set_ylabel("Sample count")
+            ax.set_title("Detection limits encoded by negative values")
+            ax.legend()
+            plt.tight_layout()
+            plt.show()
 
     def generate_custom_xy_plot(self, layer, features, sample_names):
         """Generate custom XY plot."""
@@ -2906,7 +4325,9 @@ class GeochemistryDockWidget(QDockWidget):
         x_denom = self.x_denom_combo.currentText()
         y_num = self.y_num_combo.currentText()
         y_denom = self.y_denom_combo.currentText()
-        
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('custom')
+
         ree_norm_id = self.ree_norm_combo.currentIndex()
         norm_values = None
         norm_name = ""
@@ -2927,14 +4348,16 @@ class GeochemistryDockWidget(QDockWidget):
                     norm_suffix = "ₙ"
             
             def get_unit(elem):
-                if elem == '1 (none)':
+                # A field picked via "show all numeric fields" isn't a
+                # recognised symbol - its raw name already carries its own
+                # unit (e.g. "S_ppm"), so don't add a redundant suffix.
+                if elem not in CUSTOM_XY_ELEMENTS:
                     return ''
-                elif elem == 'Mg#':
+                if elem in ('1 (none)', 'Mg#'):
                     return ''
-                elif any(elem.endswith(ox) for ox in ['O', 'O2', '2O', '2O3', '2O5']):
+                if elem in OXIDE_COMPOSITION:
                     return ' (wt%)'
-                else:
-                    return ' (ppm)'
+                return ' (ppm)'
             
             if denom == '1 (none)':
                 unit = get_unit(num)
@@ -2951,7 +4374,7 @@ class GeochemistryDockWidget(QDockWidget):
         
         # Check required elements
         elements_needed = set()
-        for elem in [x_num, x_denom, y_num, y_denom]:
+        for elem in [x_num, x_denom, y_num, y_denom] + ([size_field] if bubble_active else []):
             if elem != '1 (none)':
                 if elem == 'Mg#':
                     elements_needed.add('MgO')
@@ -2972,59 +4395,81 @@ class GeochemistryDockWidget(QDockWidget):
         
         x_data = []
         y_data = []
+        size_data = []
         valid_count = 0
-        
+
         for feature in features:
-            x_num_val = get_custom_element_value(feature, layer, x_num, 
-                                                  normalize=(norm_values is not None and x_num in REE_ELEMENTS),
-                                                  norm_values=norm_values)
-            x_denom_val = get_custom_element_value(feature, layer, x_denom,
-                                                    normalize=(norm_values is not None and x_denom in REE_ELEMENTS),
-                                                    norm_values=norm_values)
-            
-            y_num_val = get_custom_element_value(feature, layer, y_num,
-                                                  normalize=(norm_values is not None and y_num in REE_ELEMENTS),
-                                                  norm_values=norm_values)
-            y_denom_val = get_custom_element_value(feature, layer, y_denom,
-                                                    normalize=(norm_values is not None and y_denom in REE_ELEMENTS),
-                                                    norm_values=norm_values)
-            
+            # Negative values (commonly used to code "below detection
+            # limit" in exploration datasets) are substituted per the Data
+            # Preprocessing tab if enabled, otherwise passed through as
+            # literal negative numbers rather than being discarded.
+            x_num_val = self._apply_bdl_substitution(get_custom_element_value(
+                feature, layer, x_num,
+                normalize=(norm_values is not None and x_num in REE_ELEMENTS),
+                norm_values=norm_values))
+            x_denom_val = self._apply_bdl_substitution(get_custom_element_value(
+                feature, layer, x_denom,
+                normalize=(norm_values is not None and x_denom in REE_ELEMENTS),
+                norm_values=norm_values))
+
+            y_num_val = self._apply_bdl_substitution(get_custom_element_value(
+                feature, layer, y_num,
+                normalize=(norm_values is not None and y_num in REE_ELEMENTS),
+                norm_values=norm_values))
+            y_denom_val = self._apply_bdl_substitution(get_custom_element_value(
+                feature, layer, y_denom,
+                normalize=(norm_values is not None and y_denom in REE_ELEMENTS),
+                norm_values=norm_values))
+
             x_val = None
             y_val = None
-            
-            if (x_num_val is not None and x_denom_val is not None and 
-                x_num_val > 0 and x_denom_val > 0):
+
+            if x_num_val is not None and x_denom_val:
                 x_val = x_num_val / x_denom_val
-            
-            if (y_num_val is not None and y_denom_val is not None and 
-                y_num_val > 0 and y_denom_val > 0):
+
+            if y_num_val is not None and y_denom_val:
                 y_val = y_num_val / y_denom_val
-            
+
             x_data.append(x_val)
             y_data.append(y_val)
-            
+            size_val = self._apply_bdl_substitution(
+                get_custom_element_value(feature, layer, size_field)) if bubble_active else None
+            size_data.append(size_val)
+
             if x_val is not None and y_val is not None:
                 valid_count += 1
-        
+
         if valid_count == 0:
             QMessageBox.warning(self, "Warning", "No valid data points to plot.")
             return
-        
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = create_categorical_color_map(sample_names)
-        category_colors, category_markers, sample_colors, sample_markers = self.apply_style_overrides(category_colors, category_markers, sample_names)
+
+        # Compute the data range that will drive bubble sizing, from points
+        # that will actually be plotted (valid x and y). Log10 scaling needs
+        # strictly positive values, so those are excluded from the range
+        # (individual non-positive points still plot, at bubble_min_size).
+        valid_mask = [x is not None and y is not None for x, y in zip(x_data, y_data)]
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'custom', size_data, valid_mask, bubble_method)
+
+        category_styles, unique_categories = self._build_default_category_styles(sample_names)
+        category_colors, category_markers, sample_colors, sample_markers = \
+            self._category_arrays_from_styles(category_styles, sample_names)
 
         fig, ax = plt.subplots(figsize=(12, 9))
-        
+
         if self.x_scale_combo.currentIndex() == 1:
             ax.set_xscale('log')
         if self.y_scale_combo.currentIndex() == 1:
             ax.set_yscale('log')
-        
+
         default_markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', '*']
         plotted_categories = set()
         pts_data = []
         fid_list = []
         fid_to_scatter = {}  # fid -> (PathCollection, local_index within that collection)
+        artist_registry = {}
 
         # Group points by category so we make one ax.scatter() call per group instead
         # of one per point, eliminating the O(n_points) PathCollection overhead.
@@ -3035,13 +4480,21 @@ class GeochemistryDockWidget(QDockWidget):
                 marker = sample_markers[i] if sample_markers else default_markers[i % len(default_markers)]
                 cat_key = (name, marker) if self.custom_markers.isChecked() else name
                 if cat_key not in cat_groups:
-                    cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [],
+                    cat_groups[cat_key] = {'xs': [], 'ys': [], 'fids': [], 'colors': [], 'sizes': [],
                                            'marker': marker, 'name': name}
                 g = cat_groups[cat_key]
                 g['xs'].append(x)
                 g['ys'].append(y)
                 g['fids'].append(feature.id())
                 g['colors'].append(color)
+                if bubble_active:
+                    sv = size_data[i]
+                    size = (bubble_symbol_size(sv, bubble_vmin, bubble_vmax, bubble_min_size,
+                                               bubble_max_size, bubble_method)
+                            if sv is not None else bubble_min_size)
+                else:
+                    size = 80
+                g['sizes'].append(size)
                 pts_data.append((x, y))
                 fid_list.append(feature.id())
 
@@ -3050,13 +4503,16 @@ class GeochemistryDockWidget(QDockWidget):
             if self.custom_legend.isChecked() and g['name'] not in plotted_categories:
                 label = g['name']
                 plotted_categories.add(g['name'])
-            scatter_kw = dict(s=80, c=g['colors'], edgecolors='black',
+            scatter_kw = dict(s=g['sizes'], c=g['colors'], edgecolors='black',
                               linewidths=0.5, zorder=10, label=label)
             if self.custom_markers.isChecked():
                 scatter_kw['marker'] = g['marker']
             sc = ax.scatter(g['xs'], g['ys'], **scatter_kw)
+            artist_registry.setdefault(g['name'], []).append({'artist': sc, 'role': 'scatter'})
             for local_idx, fid in enumerate(g['fids']):
                 fid_to_scatter[fid] = (sc, local_idx)
+
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, cat_groups)
 
         ax.set_xlabel(x_label, fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
@@ -3068,16 +4524,28 @@ class GeochemistryDockWidget(QDockWidget):
 
         ax.grid(True, alpha=0.3)
 
+        export_legend_artists = {}
+        category_legend_obj = None
         if self.custom_legend.isChecked() and len(unique_categories) > 0:
-            n_categories = len(unique_categories)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
-                     ncol=ncol, framealpha=0.9, borderaxespad=0.)
+            export_legend_artists = self._build_category_legend(
+                ax, unique_categories, category_styles, Counter(sample_names),
+                bbox_to_anchor=(0.5, -0.12), fontsize=8)
+            category_legend_obj = ax.get_legend()
+
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                build_label(size_field, '1 (none)', None), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
+        self._open_category_panel(
+            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Custom XY Plot Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
 
     def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, fid_to_scatter, layer_id):
@@ -3114,7 +4582,7 @@ class GeochemistryDockWidget(QDockWidget):
             for ann in current_labels:
                 try:
                     ann.remove()
-                except Exception:
+                except Exception:  # nosec B110 - best-effort label cleanup, must never block reselection
                     pass
             current_labels.clear()
 
@@ -3124,7 +4592,12 @@ class GeochemistryDockWidget(QDockWidget):
             for fid, (sc, local_idx) in fid_to_scatter.items():
                 if sc not in coll_edge:
                     n = len(sc.get_offsets())
-                    coll_edge[sc] = ['black'] * n
+                    # Hollow-styled categories have a coloured (not black)
+                    # outline - _apply_style_to_matplotlib_artist() stashes
+                    # that as _geochem_base_edgecolor so it survives being
+                    # the "not selected" baseline here.
+                    base_edge = getattr(sc, '_geochem_base_edgecolor', 'black')
+                    coll_edge[sc] = [base_edge] * n
                     coll_lw[sc]   = [0.5] * n
                 if fid in selected_set:
                     coll_edge[sc][local_idx] = 'red'
@@ -3146,10 +4619,17 @@ class GeochemistryDockWidget(QDockWidget):
                             continue
                         val = feature[label_field]
                         if val is not None and val != NULL:
+                            # zorder=20 matches the hover tooltip so labels
+                            # always render above the scatter points (zorder=10)
+                            # instead of being hidden behind them. The white
+                            # bbox masks whatever is underneath so the text
+                            # stays legible over busy plot areas.
                             ann = ax.annotate(
                                 str(val), xy=(x, y),
                                 xytext=(6, 0), textcoords='offset points',
-                                fontsize=8, va='center'
+                                fontsize=8, va='center', zorder=20,
+                                bbox=dict(boxstyle='round,pad=0.15', fc='white',
+                                         ec='none', alpha=0.75)
                             )
                             current_labels.append(ann)
 
@@ -3170,7 +4650,7 @@ class GeochemistryDockWidget(QDockWidget):
                     renderer.setOrderBy(order_by)
                     renderer.setOrderByEnabled(True)
                     _layer_init.triggerRepaint()
-            except Exception:
+            except Exception:  # nosec B110 - best-effort draw-order tweak, must not block selection/plotting
                 pass
 
         _rect_used = [False]
@@ -3410,70 +4890,942 @@ class GeochemistryDockWidget(QDockWidget):
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
 
     # ------------------------------------------------------------------
-    # Style file management
+    # Interactive category styling (colour / marker / size / legend panel)
     # ------------------------------------------------------------------
 
-    def apply_style_overrides(self, category_colors, category_markers, sample_names):
-        """Override auto-generated colors/markers with any entries in style_map.
-        Returns updated (category_colors, category_markers, sample_colors, sample_markers).
+    def _default_category_style(self, index, color=None, marker=None):
+        """Return a default style dict for a category.
+
+        When color/marker are supplied (typically from the auto colour map)
+        they are used as-is; otherwise a fixed fallback palette is used, e.g.
+        when resetting a category style back to its default.
         """
-        for cat, style in self.style_map.items():
-            if cat not in category_colors:
-                continue
-            if 'color' in style:
-                try:
-                    category_colors[cat] = mcolors.to_rgba(style['color'])
-                except ValueError:
-                    pass
-            if 'marker' in style:
-                category_markers[cat] = style['marker']
+        palette = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
+                   'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+        markers = [m for _, m in STYLE_MARKER_OPTIONS]
+        if color is None:
+            color = palette[index % len(palette)]
+        if marker is None:
+            marker = markers[index % len(markers)]
+        return {
+            'color': mcolors.to_hex(color),
+            'marker': marker,
+            'markersize': 8.0,
+            'linewidth': 1.5,
+            'alpha': 1.0,
+            'fill': 'full',
+        }
+
+    def _style_templates_path(self):
+        """Return the project-level JSON file used for category style templates."""
+        project_file = QgsProject.instance().fileName()
+        if project_file:
+            config_dir = os.path.join(
+                os.path.dirname(os.path.abspath(project_file)), '99_COMMAND_FILES_PLUGIN')
+            return os.path.join(config_dir, 'geochem_plot_styles.json')
+        return os.path.join(os.path.expanduser('~'), 'geochem_plot_styles.json')
+
+    def _load_style_templates(self):
+        """Load saved category style templates from JSON."""
+        path = self._style_templates_path()
+        if not path or not os.path.exists(path):
+            return {'version': 1, 'templates': {}}
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            return {'version': 1, 'templates': {}}
+        if not isinstance(data, dict):
+            return {'version': 1, 'templates': {}}
+        data.setdefault('version', 1)
+        data.setdefault('templates', {})
+        if not isinstance(data['templates'], dict):
+            data['templates'] = {}
+        return data
+
+    def _save_style_templates(self, data):
+        """Persist category style templates to JSON."""
+        path = self._style_templates_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=4)
+        return path
+
+    def _normalise_category_style(self, style, fallback_index=0):
+        """Return a complete, JSON-safe category style dictionary."""
+        fallback = self._default_category_style(fallback_index)
+        if not isinstance(style, dict):
+            style = {}
+        result = dict(fallback)
+        result.update({k: v for k, v in style.items() if k in result})
+        for key in ('markersize', 'linewidth', 'alpha'):
+            try:
+                result[key] = float(result.get(key, fallback[key]))
+            except Exception:
+                result[key] = float(fallback[key])
+        result['alpha'] = max(0.05, min(1.0, result['alpha']))
+        for key in ('color', 'marker'):
+            result[key] = str(result.get(key, fallback[key]))
+        if result.get('fill') not in ('full', 'hollow'):
+            result['fill'] = fallback['fill']
+        return result
+
+    def _set_artist_visible(self, artist, visible):
+        """Set visibility on a Matplotlib artist, or a dict/list of artists."""
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._set_artist_visible(artist.get('artist'), visible)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._set_artist_visible(item, visible)
+            return
+        if hasattr(artist, 'set_visible'):
+            artist.set_visible(visible)
+
+    def _set_artist_alpha(self, artist, alpha):
+        """Set alpha on a Matplotlib artist, or a dict/list of artists.
+
+        Used to fade a category's raw points/lines when the interactive
+        panel's "Show mean +/- 2 sigma" overlay is active, independently of
+        the artist's stored category-style alpha (which _apply_category_style
+        restores whenever a style is (re)applied).
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._set_artist_alpha(artist.get('artist'), alpha)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._set_artist_alpha(item, alpha)
+            return
+        if hasattr(artist, 'set_alpha'):
+            artist.set_alpha(alpha)
+
+    def _set_artist_linewidth(self, artist, linewidth):
+        """Set linewidth on a Matplotlib artist, or a dict/list/tuple of
+        artists - including an ErrorbarContainer, whose nested data
+        line/caplines/error-bar LineCollections this recurses into (it is
+        itself tuple-like: `tuple(container) == container.lines`).
+
+        Used by the interactive panel's "Error bar thickness" control.
+        Error-bar caps render via their marker glyph (linestyle='None',
+        marker='_'/'|'), not an actual line, so their visible stroke width
+        comes from markeredgewidth, not linewidth - set both so the caps
+        thicken along with the whiskers and the mean marker's own outline.
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._set_artist_linewidth(artist.get('artist'), linewidth)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._set_artist_linewidth(item, linewidth)
+            return
+        if hasattr(artist, 'set_linewidth'):
+            artist.set_linewidth(linewidth)
+        if hasattr(artist, 'set_markeredgewidth'):
+            artist.set_markeredgewidth(linewidth)
+
+    def _bump_artist_zorder(self, artist, base_cache, bonus):
+        """Offset a Matplotlib artist's (or dict/list/tuple's) z-order by
+        `bonus`, relative to its own original z-order at construction time.
+
+        The original z-order is cached in `base_cache` (keyed by id(artist))
+        the first time each leaf artist is seen, so repeated calls with a
+        different `bonus` always offset from the same baseline instead of
+        compounding. This lets the interactive panel's category ordering
+        control reorder which category's points/lines/mean-marker/envelope
+        draw on top of another's, while preserving each layer's own
+        raw/stats/envelope stacking tier (they get different base z-orders
+        to begin with).
+        """
+        if artist is None:
+            return
+        if isinstance(artist, dict):
+            return self._bump_artist_zorder(artist.get('artist'), base_cache, bonus)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._bump_artist_zorder(item, base_cache, bonus)
+            return
+        if not hasattr(artist, 'set_zorder'):
+            return
+        key = id(artist)
+        if key not in base_cache:
+            base_cache[key] = artist.get_zorder() if hasattr(artist, 'get_zorder') else 1.0
+        artist.set_zorder(base_cache[key] + bonus)
+
+    def _build_default_category_styles(self, sample_names):
+        """Build fresh default per-category styles seeded from the auto colour map."""
+        category_colors, _, unique_categories, category_markers, _ = create_categorical_color_map(sample_names)
+        category_styles = {
+            cat: self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat])
+            for i, cat in enumerate(unique_categories)
+        }
+        return category_styles, unique_categories
+
+    def _category_arrays_from_styles(self, category_styles, sample_names):
+        """Expand a {category: style} dict into the flat colour/marker arrays plotting code expects."""
+        category_colors = {cat: mcolors.to_rgba(style['color']) for cat, style in category_styles.items()}
+        category_markers = {cat: style['marker'] for cat, style in category_styles.items()}
         sample_colors = [category_colors[n] for n in sample_names]
         sample_markers = [category_markers[n] for n in sample_names]
-        self.last_category_colors = dict(category_colors)
-        self.last_category_markers = dict(category_markers)
         return category_colors, category_markers, sample_colors, sample_markers
 
-    def load_style_from_file(self, path=None):
-        """Load colour/marker style mappings from a JSON file."""
-        if path is None:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Load Style File", "", "JSON Files (*.json);;All Files (*)")
-            if not path:
-                return
-        try:
-            with open(path) as f:
-                self.style_map = json.load(f)
-            self.style_file_path = path
-            QSettings('geochem_plots', 'geochem_plots').setValue('style_file', path)
-            self.style_file_label.setText(os.path.basename(path))
-            self.style_file_label.setStyleSheet("")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not load style file:\n{e}")
+    def _extract_legend_artists(self, legend):
+        """Return {category: [{'artist':handle,'role':...}, {'artist':text,'role':'legend_label'}]}
+        for an existing Matplotlib legend, so it can be kept in sync with live style edits.
+        """
+        export_legend_artists = {}
+        if legend is None:
+            return export_legend_artists
+        handles = getattr(legend, 'legend_handles', None)
+        if handles is None:
+            handles = getattr(legend, 'legendHandles', [])
+        for handle, text in zip(handles, legend.get_texts()):
+            # Legend labels may carry a " (n=123)" count suffix; strip it to
+            # recover the raw category name used as the artist_registry key.
+            category = re.sub(r'\s*\(n=\d+\)$', '', text.get_text())
+            text.set_color('black')
+            role = 'scatter' if hasattr(handle, 'set_paths') else 'marker'
+            export_legend_artists.setdefault(category, []).extend([
+                {'artist': handle, 'role': role},
+                {'artist': text, 'role': 'legend_label'},
+            ])
+        return export_legend_artists
 
-    def save_style_to_file(self):
-        """Merge current plot colours/markers into style_map and save to JSON."""
-        if not self.last_category_colors:
-            QMessageBox.information(self, "No plot yet",
-                "Generate a plot first so there are colours/markers to save.")
+    def _build_category_legend(self, ax, category_values, category_styles, category_counts,
+                               bbox_to_anchor=(0.5, -0.12), fontsize=8):
+        """Draw an explicit per-category legend and return its restylable artists.
+
+        Building the legend from category_styles directly (rather than letting
+        Matplotlib auto-generate it from plotted artists) means every category
+        gets exactly one legend entry, styled consistently, even when a
+        category is split across several point groups (e.g. mixed markers).
+        """
+        if not category_values:
+            return {}
+        n_categories = len(category_values)
+        ncol = max(1, min(6, (n_categories + 3) // 4))
+        legend_handles = []
+        legend_labels = []
+        for cat in category_values:
+            style = category_styles.get(cat, self._default_category_style(0))
+            legend_handles.append(Line2D(
+                [0], [0], linestyle='none',
+                marker=style.get('marker', 'o'),
+                markerfacecolor=style.get('color', '#000000'),
+                markeredgecolor=style.get('color', '#000000'),
+                markersize=max(4.0, float(style.get('markersize', 8)) * 0.7),
+                alpha=float(style.get('alpha', 1.0))))
+            legend_labels.append(f"{cat} (n={category_counts.get(cat, 0)})")
+        ax.legend(legend_handles, legend_labels, loc='upper center',
+                 bbox_to_anchor=bbox_to_anchor, fontsize=fontsize,
+                 ncol=ncol, framealpha=0.9, borderaxespad=0.)
+        return self._extract_legend_artists(ax.get_legend())
+
+    def _field_display_label(self, field):
+        """Human-readable label for a single element/oxide field, with unit."""
+        if field in OXIDE_COMPOSITION:
+            return f"{field} (wt%)"
+        if field in CUSTOM_XY_ELEMENTS and field not in ('1 (none)', 'Mg#'):
+            return f"{field} (ppm)"
+        return field
+
+    def _add_bubble_size_legend(self, ax, vmin, vmax, min_size, max_size, method, label,
+                                category_legend_obj=None):
+        """Draw a small reference-bubble legend (min/mid/max value -> size) on
+        `ax`, so the size-to-value mapping is readable directly off the plot.
+
+        Building a legend replaces any legend already on the axes, so a
+        previously-built category legend must be passed in as
+        `category_legend_obj` (its `ax.get_legend()` return value) to be
+        re-added via `ax.add_artist()` and shown alongside this one.
+        """
+        mid_value = math.sqrt(vmin * vmax) if vmin > 0 and vmax > 0 else (vmin + vmax) / 2.0
+        legend_values = sorted(set([vmin, mid_value, vmax]))
+        size_handles = [
+            ax.scatter([], [], s=bubble_symbol_size(v, vmin, vmax, min_size, max_size, method),
+                      facecolors='none', edgecolors='black', linewidths=1.0)
+            for v in legend_values
+        ]
+        size_labels = [f'{v:.3g}' for v in legend_values]
+        ax.legend(size_handles, size_labels, title=label, loc='upper left', fontsize=8,
+                 title_fontsize=9, framealpha=0.9, labelspacing=1.4, borderpad=1.1,
+                 handletextpad=1.2)
+        if category_legend_obj is not None:
+            ax.add_artist(category_legend_obj)
+
+    def _apply_style_to_matplotlib_artist(self, artist, role, style, lock_size=False):
+        """Push a category style dict onto a single plotted or legend artist.
+
+        `lock_size=True` leaves marker/point sizes untouched - used when a
+        plot has bubble sizing active, so restyling a category's colour,
+        marker shape or transparency never flattens its per-point sizes.
+        """
+        if artist is None:
             return
-        # Merge latest plot colors into style_map
-        for cat, color in self.last_category_colors.items():
-            self.style_map[cat] = {
-                'color': mcolors.to_hex(color),
-                'marker': self.last_category_markers.get(cat, 'o'),
-            }
-        # Ask for path if none set yet
-        if self.style_file_path is None:
-            path, _ = QFileDialog.getSaveFileName(
-                self, "Save Style File", "", "JSON Files (*.json);;All Files (*)")
-            if not path:
+        if isinstance(artist, dict):
+            return self._apply_style_to_matplotlib_artist(
+                artist.get('artist'), artist.get('role', role), style, lock_size=lock_size)
+        if isinstance(artist, (list, tuple)):
+            for item in artist:
+                self._apply_style_to_matplotlib_artist(item, role, style, lock_size=lock_size)
+            return
+
+        alpha = float(style.get('alpha', 1.0))
+        colour = style.get('color', '#000000')
+        line_width = float(style.get('linewidth', 1.0))
+        hollow = style.get('fill') == 'hollow'
+        face = 'white' if hollow else colour
+
+        if role == 'legend_label':
+            # Legend text stays plain black; only the marker swatch restyles.
+            return
+        if role == 'scatter':
+            # PathCollection (ax.scatter and its legend handle). Edge colour
+            # follows the category colour only in hollow mode - full mode
+            # keeps the original black outline, since that colour also
+            # doubles as the QGIS-selection highlight baseline (see
+            # apply_selection() in _attach_scatter_selection, which reads
+            # the same _geochem_base_edgecolor stashed here).
+            edge = colour if hollow else 'black'
+            if hasattr(artist, 'set_facecolor'):
+                artist.set_facecolor(face)
+            if hasattr(artist, 'set_edgecolor'):
+                n = max(1, len(artist.get_offsets())) if hasattr(artist, 'get_offsets') else 1
+                artist.set_edgecolor([edge] * n)
+                artist._geochem_base_edgecolor = edge
+            if not lock_size and hasattr(artist, 'set_sizes'):
+                n = max(1, len(artist.get_offsets()))
+                artist.set_sizes([float(style.get('markersize', 8)) ** 2] * n)
+            if hasattr(artist, 'set_paths'):
+                try:
+                    ms = MarkerStyle(style.get('marker', 'o'))
+                    artist.set_paths([ms.get_path().transformed(ms.get_transform())])
+                except Exception:  # nosec B110 - best-effort marker restyle, must not block the rest of the legend update
+                    pass
+            if hasattr(artist, 'set_alpha'):
+                artist.set_alpha(alpha)
+        else:
+            # Line2D (spider-diagram sample lines and their legend handles).
+            if hasattr(artist, 'set_marker'):
+                artist.set_marker(style.get('marker', 'o'))
+            if not lock_size and hasattr(artist, 'set_markersize'):
+                artist.set_markersize(float(style.get('markersize', 8)))
+            if hasattr(artist, 'set_markerfacecolor'):
+                artist.set_markerfacecolor(face)
+            if hasattr(artist, 'set_markeredgecolor'):
+                artist.set_markeredgecolor(colour)
+            if hasattr(artist, 'set_color'):
+                artist.set_color(colour)
+            if hasattr(artist, 'set_linewidth'):
+                artist.set_linewidth(line_width)
+            if hasattr(artist, 'set_alpha'):
+                artist.set_alpha(alpha)
+
+    def _open_category_panel(self, fig, artist_registry, category_counts=None,
+                             category_styles=None, title='Plot Categories',
+                             style_template_key=None, export_legend_artists=None,
+                             bubble_active=False, stats_registry=None, envelope_registry=None):
+        """Embed category visibility/style controls in a right-hand Qt panel.
+
+        The panel is attached to the Matplotlib figure's own Qt window as a
+        dock, so it never overlaps the plot axes and keeps working when the
+        plot window is resized. Falls back to on-axes CheckButtons/Button
+        widgets for non-Qt Matplotlib backends.
+
+        `bubble_active=True` disables per-category symbol-size editing here,
+        since the plot's marker sizes are already driven by its bubble-size
+        scaling and would otherwise be silently flattened by this panel.
+
+        `stats_registry`/`envelope_registry` are the hidden per-category mean
+        +/- 2-sigma and envelope artists built by _build_xy_stat_artists() /
+        _build_spider_stat_artists(). When either is non-empty, a
+        "Statistics" control is added that reveals them and fades the raw
+        points/lines, without needing to re-plot (Qt dock path only).
+        """
+        if not artist_registry:
+            return
+
+        category_counts = category_counts or {}
+        category_styles = category_styles or {}
+        export_legend_artists = export_legend_artists or {}
+        stats_registry = stats_registry or {}
+        envelope_registry = envelope_registry or {}
+        categories = sorted(artist_registry.keys(), key=lambda x: str(x))
+        visible_state = {category: True for category in categories}
+        _stats_display_ref = [lambda: None]
+        category_order = list(categories)
+        zorder_base_cache = {}
+        order_spin_by_category = {}
+
+        def _apply_category_order():
+            for rank, category in enumerate(category_order):
+                bonus = rank * 0.001
+                for entry in artist_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in stats_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in envelope_registry.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+                for entry in export_legend_artists.get(category, []):
+                    self._bump_artist_zorder(entry, zorder_base_cache, bonus)
+            fig.canvas.draw_idle()
+
+        def _reorder_category(category, new_rank_1indexed):
+            new_index = max(0, min(len(category_order) - 1, new_rank_1indexed - 1))
+            old_index = category_order.index(category)
+            if new_index == old_index:
                 return
-            self.style_file_path = path
-            QSettings('geochem_plots', 'geochem_plots').setValue('style_file', path)
-            self.style_file_label.setText(os.path.basename(path))
-            self.style_file_label.setStyleSheet("")
-        with open(self.style_file_path, 'w') as f:
-            json.dump(self.style_map, f, indent=2, sort_keys=True)
+            category_order.pop(old_index)
+            category_order.insert(new_index, category)
+            for cat in categories:
+                spin = order_spin_by_category.get(cat)
+                if spin is None:
+                    continue
+                spin.blockSignals(True)
+                spin.setValue(category_order.index(cat) + 1)
+                spin.blockSignals(False)
+            _apply_category_order()
+
+        def _apply_category_style(category):
+            style = category_styles.get(category, self._default_category_style(0))
+            for entry in artist_registry.get(category, []):
+                self._apply_style_to_matplotlib_artist(entry, 'marker', style, lock_size=bubble_active)
+            for legend_artist in export_legend_artists.get(category, []):
+                self._apply_style_to_matplotlib_artist(legend_artist, 'marker', style, lock_size=bubble_active)
+            # Keep the mean +/- 2 sigma overlay's colour/marker/size in sync
+            # with the individual points' style.
+            for stat_artist in stats_registry.get(category, []):
+                _restyle_stats_artist(stat_artist, style, lock_size=bubble_active)
+            for env_artist in envelope_registry.get(category, []):
+                _restyle_envelope_artist(env_artist, style)
+            # Re-applying a style resets the raw artist's alpha to the style's
+            # own value, which would undo any "Show mean +/- 2 sigma" fade -
+            # so reapply that fade on top, if the Statistics toggle is on.
+            _stats_display_ref[0]()
+            fig.canvas.draw_idle()
+
+        def _sync_legend_symbols():
+            for category in categories:
+                style = category_styles.get(category, self._default_category_style(0))
+                if category in legend_symbol_by_category:
+                    legend_symbol_by_category[category].set_symbol_style(
+                        style.get('marker', 'o'), style.get('color', '#000000'))
+                    legend_symbol_by_category[category].setToolTip(
+                        f"{style.get('marker', 'o')} / {style.get('color', '#000000')}")
+
+        def _refresh_category_visibility():
+            for category, visible in visible_state.items():
+                for artist in artist_registry.get(category, []):
+                    self._set_artist_visible(artist, visible)
+                for legend_artist in export_legend_artists.get(category, []):
+                    self._set_artist_visible(legend_artist, visible)
+            # The Statistics overlay's own visibility/fade also depends on
+            # which categories are shown/hidden here.
+            _stats_display_ref[0]()
+            fig.canvas.draw_idle()
+
+        def _apply_all_category_styles():
+            for category in categories:
+                _apply_category_style(category)
+            _sync_legend_symbols()
+            _refresh_category_visibility()
+
+        manager = getattr(fig.canvas, 'manager', None)
+        window = getattr(manager, 'window', None)
+
+        # Preferred path: a native Qt dock on the right of the Matplotlib window.
+        if window is not None and hasattr(window, 'addDockWidget'):
+            dock = QDockWidget(title, window)
+            dock.setObjectName('GeochemCategoryDock')
+            dock.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
+
+            panel = QWidget(dock)
+            panel_layout = QVBoxLayout(panel)
+            panel_layout.setContentsMargins(8, 8, 8, 8)
+            panel_layout.setSpacing(6)
+
+            if stats_registry or envelope_registry:
+                stats_group = QGroupBox('Statistics', panel)
+                stats_layout = QVBoxLayout(stats_group)
+                stats_caption = QLabel(
+                    "Show each category's mean ± 2σ, with individual samples "
+                    "faded behind it (or replaced by a shaded envelope).", stats_group)
+                stats_caption.setWordWrap(True)
+                stats_layout.addWidget(stats_caption)
+
+                stats_checkbox = QCheckBox('Show mean ± 2σ', stats_group)
+                envelope_checkbox = QCheckBox(
+                    'Individual data as envelope (instead of faint points/lines)', stats_group)
+                envelope_checkbox.setEnabled(False)
+                stats_layout.addWidget(stats_checkbox)
+                stats_layout.addWidget(envelope_checkbox)
+
+                opacity_row = QHBoxLayout()
+                opacity_label = QLabel('Background opacity:', stats_group)
+                opacity_spin = QDoubleSpinBox(stats_group)
+                opacity_spin.setRange(0.05, 1.0)
+                opacity_spin.setDecimals(2)
+                opacity_spin.setSingleStep(0.05)
+                opacity_spin.setValue(0.30)
+                opacity_spin.setEnabled(False)
+                opacity_spin.setToolTip(
+                    "Opacity of the individual points/lines (or envelope fill) shown "
+                    "behind the mean ± 2σ overlay.")
+                opacity_row.addWidget(opacity_label)
+                opacity_row.addWidget(opacity_spin)
+                stats_layout.addLayout(opacity_row)
+
+                width_row = QHBoxLayout()
+                width_label = QLabel('Error bar thickness:', stats_group)
+                width_spin = QDoubleSpinBox(stats_group)
+                width_spin.setRange(0.5, 6.0)
+                width_spin.setDecimals(1)
+                width_spin.setSingleStep(0.2)
+                width_spin.setValue(1.8)
+                width_spin.setEnabled(False)
+                width_spin.setToolTip("Line width of the mean ± 2σ marker/error bars.")
+                width_row.addWidget(width_label)
+                width_row.addWidget(width_spin)
+                stats_layout.addLayout(width_row)
+
+                panel_layout.addWidget(stats_group, 0)
+
+                def _apply_stats_display():
+                    enabled = stats_checkbox.isChecked()
+                    envelope = envelope_checkbox.isChecked()
+                    opacity = opacity_spin.value()
+                    line_width = width_spin.value()
+                    envelope_checkbox.setEnabled(enabled)
+                    opacity_spin.setEnabled(enabled)
+                    width_spin.setEnabled(enabled)
+                    for category in categories:
+                        cat_visible = visible_state.get(category, True)
+                        self._set_artist_visible(stats_registry.get(category, []), enabled and cat_visible)
+                        self._set_artist_visible(
+                            envelope_registry.get(category, []), enabled and envelope and cat_visible)
+                        self._set_artist_linewidth(stats_registry.get(category, []), line_width)
+                        for env_artist in envelope_registry.get(category, []):
+                            self._set_artist_alpha(env_artist, opacity)
+                        style = category_styles.get(category, self._default_category_style(0))
+                        base_alpha = float(style.get('alpha', 1.0))
+                        if enabled:
+                            effective_alpha = 0.0 if envelope else opacity
+                        else:
+                            effective_alpha = base_alpha
+                        for entry in artist_registry.get(category, []):
+                            self._set_artist_alpha(entry, effective_alpha)
+                    fig.canvas.draw_idle()
+
+                _stats_display_ref[0] = _apply_stats_display
+                stats_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                envelope_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                opacity_spin.valueChanged.connect(lambda _val: _apply_stats_display())
+                width_spin.valueChanged.connect(lambda _val: _apply_stats_display())
+
+            style_mgmt_group = QGroupBox('Style Management', panel)
+            style_mgmt_layout = QVBoxLayout(style_mgmt_group)
+            style_mgmt_caption = QLabel(
+                'Save, load, reset or delete reusable category style templates.', style_mgmt_group)
+            style_mgmt_caption.setWordWrap(True)
+            style_mgmt_layout.addWidget(style_mgmt_caption)
+
+            template_row = QHBoxLayout()
+            save_template_btn = QPushButton('Save')
+            load_template_btn = QPushButton('Load')
+            reset_styles_btn = QPushButton('Reset')
+            delete_template_btn = QPushButton('Delete')
+            save_template_btn.setToolTip('Save the current category styles as a reusable template.')
+            load_template_btn.setToolTip('Load a previously saved category style template.')
+            reset_styles_btn.setToolTip('Reset category styles to the default palette and markers.')
+            delete_template_btn.setToolTip('Delete an existing saved category style template.')
+            for btn in (save_template_btn, load_template_btn, reset_styles_btn, delete_template_btn):
+                template_row.addWidget(btn)
+            style_mgmt_layout.addLayout(template_row)
+            panel_layout.addWidget(style_mgmt_group, 0)
+
+            class_group = QGroupBox('Categories', panel)
+            class_layout = QVBoxLayout(class_group)
+            caption = QLabel(
+                'Toggle category visibility, edit its colour, marker, size and transparency, '
+                'or set its drawing order (higher number = drawn on top).')
+            caption.setWordWrap(True)
+            class_layout.addWidget(caption)
+
+            button_row = QHBoxLayout()
+            show_btn = QPushButton('All')
+            hide_btn = QPushButton('None')
+            invert_btn = QPushButton('Invert')
+            for btn in (show_btn, hide_btn, invert_btn):
+                button_row.addWidget(btn)
+            class_layout.addLayout(button_row)
+
+            checkbox_by_category = {}
+            controls_widget = QWidget(panel)
+            controls_layout = QVBoxLayout(controls_widget)
+            controls_layout.setContentsMargins(0, 0, 0, 0)
+            controls_layout.setSpacing(4)
+
+            style_button_by_category = {}
+
+            def _style_dialog(category):
+                style = category_styles.setdefault(category, self._default_category_style(0)).copy()
+                dlg = QDialog(panel)
+                dlg.setWindowTitle(f'Category style: {category}')
+                layout = QVBoxLayout(dlg)
+
+                form = QFormLayout()
+                marker_cb = QComboBox(dlg)
+                for label, marker in STYLE_MARKER_OPTIONS:
+                    marker_cb.addItem(label, marker)
+                marker_index = marker_cb.findData(style.get('marker', 'o'))
+                if marker_index >= 0:
+                    marker_cb.setCurrentIndex(marker_index)
+
+                marker_size = QDoubleSpinBox(dlg)
+                marker_size.setRange(1.0, 25.0)
+                marker_size.setDecimals(1)
+                marker_size.setSingleStep(0.5)
+                marker_size.setValue(float(style.get('markersize', 8)))
+                if bubble_active:
+                    marker_size.setEnabled(False)
+                    marker_size.setToolTip(
+                        "Size is controlled by this plot's bubble scaling and can't be overridden here.")
+
+                line_width = QDoubleSpinBox(dlg)
+                line_width.setRange(0.1, 10.0)
+                line_width.setDecimals(1)
+                line_width.setSingleStep(0.2)
+                line_width.setValue(float(style.get('linewidth', 1.5)))
+
+                alpha = QDoubleSpinBox(dlg)
+                alpha.setRange(0.05, 1.0)
+                alpha.setDecimals(2)
+                alpha.setSingleStep(0.05)
+                alpha.setValue(float(style.get('alpha', 1.0)))
+
+                colour_value = [mcolors.to_hex(style.get('color', '#000000'))]
+                colour_btn = QPushButton('Symbol colour', dlg)
+                colour_btn.setStyleSheet(f'background-color: {colour_value[0]};')
+
+                def _choose_colour():
+                    colour = QColorDialog.getColor(QColor(colour_value[0]), dlg, 'Symbol colour')
+                    if colour.isValid():
+                        colour_value[0] = colour.name()
+                        colour_btn.setStyleSheet(f'background-color: {colour_value[0]};')
+                colour_btn.clicked.connect(_choose_colour)
+
+                hollow_checkbox = QCheckBox('Hollow (white fill, coloured outline)', dlg)
+                hollow_checkbox.setChecked(style.get('fill') == 'hollow')
+
+                form.addRow('Symbol shape:', marker_cb)
+                form.addRow('Symbol size:', marker_size)
+                form.addRow('Symbol colour:', colour_btn)
+                form.addRow('Symbol fill:', hollow_checkbox)
+                form.addRow('Line width:', line_width)
+                form.addRow('Transparency:', alpha)
+                layout.addLayout(form)
+
+                buttons = QDialogButtonBox(QDialogButtonBox_Ok | QDialogButtonBox_Cancel, dlg)
+                layout.addWidget(buttons)
+                buttons.accepted.connect(dlg.accept)
+                buttons.rejected.connect(dlg.reject)
+
+                if dlg.exec() == QDialog_Accepted:
+                    style.update({
+                        'marker': marker_cb.currentData(),
+                        'markersize': float(marker_size.value()),
+                        'color': colour_value[0],
+                        'linewidth': float(line_width.value()),
+                        'alpha': float(alpha.value()),
+                        'fill': 'hollow' if hollow_checkbox.isChecked() else 'full',
+                    })
+                    category_styles[category] = style
+                    _apply_category_style(category)
+                    _sync_legend_symbols()
+
+            for category in categories:
+                row_widget = QWidget(controls_widget)
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(4)
+
+                checkbox = QCheckBox(f'{category} (n={category_counts.get(category, 0)})', row_widget)
+                checkbox.setChecked(True)
+                checkbox_by_category[category] = checkbox
+
+                order_spin = QSpinBox(row_widget)
+                order_spin.setRange(1, len(categories))
+                order_spin.setValue(category_order.index(category) + 1)
+                order_spin.setToolTip(
+                    'Drawing (z-stack) order: higher numbers draw on top of lower ones.')
+                order_spin.setFixedWidth(44)
+                order_spin_by_category[category] = order_spin
+
+                style_btn = QPushButton('Style…', row_widget)
+                style_btn.setToolTip(f'Edit plotting style for {category}')
+                style_button_by_category[category] = style_btn
+
+                def _make_state_callback(cat, cb):
+                    def _on_state_changed(state):
+                        visible_state[cat] = cb.isChecked()
+                        _refresh_category_visibility()
+                    return _on_state_changed
+
+                def _make_style_callback(cat):
+                    return lambda: _style_dialog(cat)
+
+                def _make_order_callback(cat):
+                    return lambda value: _reorder_category(cat, value)
+
+                checkbox.stateChanged.connect(_make_state_callback(category, checkbox))
+                style_btn.clicked.connect(_make_style_callback(category))
+                order_spin.valueChanged.connect(_make_order_callback(category))
+                row_layout.addWidget(checkbox, 1)
+                row_layout.addWidget(order_spin, 0)
+                row_layout.addWidget(style_btn, 0)
+                controls_layout.addWidget(row_widget)
+
+            controls_layout.addStretch(1)
+
+            scroll = QScrollArea(dock)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(controls_widget)
+            scroll.setMinimumHeight(120)
+            class_layout.addWidget(scroll, 1)
+            panel_layout.addWidget(class_group, 1)
+
+            legend_group = QGroupBox('Legend', panel)
+            legend_symbol_by_category = {}
+            legend_layout = QVBoxLayout(legend_group)
+            legend_layout.setSpacing(4)
+
+            for category in categories:
+                style = category_styles.get(category, self._default_category_style(0))
+                row_widget = QWidget(legend_group)
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(6)
+
+                marker = style.get('marker', 'o')
+                colour = style.get('color', '#000000')
+                marker_label = _MarkerSymbolWidget(marker, colour, row_widget)
+                marker_label.setToolTip(f'{marker} / {colour}')
+
+                category_label = QLabel(f'{category} (n={category_counts.get(category, 0)})', row_widget)
+                category_label.setWordWrap(True)
+
+                row_layout.addWidget(marker_label)
+                row_layout.addWidget(category_label, 1)
+                legend_layout.addWidget(row_widget)
+                legend_symbol_by_category[category] = marker_label
+
+            legend_scroll = QScrollArea(dock)
+            legend_scroll.setWidgetResizable(True)
+            legend_scroll.setWidget(legend_group)
+            legend_scroll.setMaximumHeight(180)
+            panel_layout.addWidget(legend_scroll, 0)
+
+            dock.setWidget(panel)
+            dock.setMinimumWidth(260)
+            dock.setFeatures(QDockWidget_Movable | QDockWidget_Floatable)
+            window.addDockWidget(RightDockWidgetArea, dock)
+
+            def _set_checkbox_state(category, state):
+                checkbox = checkbox_by_category[category]
+                if checkbox.isChecked() != state:
+                    checkbox.blockSignals(True)
+                    checkbox.setChecked(state)
+                    checkbox.blockSignals(False)
+
+            def _show_all():
+                for category in categories:
+                    visible_state[category] = True
+                    _set_checkbox_state(category, True)
+                _refresh_category_visibility()
+
+            def _hide_all():
+                for category in categories:
+                    visible_state[category] = False
+                    _set_checkbox_state(category, False)
+                _refresh_category_visibility()
+
+            def _invert():
+                for category in categories:
+                    visible_state[category] = not visible_state[category]
+                    _set_checkbox_state(category, visible_state[category])
+                _refresh_category_visibility()
+
+            def _template_key():
+                key = style_template_key or 'default'
+                return str(key) if str(key).strip() else 'default'
+
+            def _template_name(default_name=None):
+                default_name = default_name or _template_key()
+                name, ok = QInputDialog.getText(
+                    panel, 'Category style template', 'Template name:', text=str(default_name))
+                if not ok:
+                    return None
+                name = str(name).strip()
+                return name or None
+
+            def _save_template():
+                name = _template_name(_template_key())
+                if not name:
+                    return
+                data = self._load_style_templates()
+                templates = data.setdefault('templates', {})
+                templates[name] = {
+                    'categoryField': _template_key(),
+                    'styles': {
+                        str(category): self._normalise_category_style(
+                            category_styles.get(category, self._default_category_style(i)), i)
+                        for i, category in enumerate(categories)
+                    }
+                }
+                try:
+                    path = self._save_style_templates(data)
+                except Exception as exc:
+                    QMessageBox.critical(panel, 'Save styles', f'Could not save style template:\n{exc}')
+                    return
+                QMessageBox.information(panel, 'Save styles', f'Style template "{name}" saved to:\n{path}')
+
+            def _load_template():
+                data = self._load_style_templates()
+                templates = data.get('templates', {}) if isinstance(data, dict) else {}
+                if not templates:
+                    QMessageBox.information(panel, 'Load styles', 'No saved category style templates were found.')
+                    return
+                names = sorted(templates.keys(), key=lambda x: str(x).lower())
+                preferred = _template_key()
+                current_index = names.index(preferred) if preferred in names else 0
+                name, ok = QInputDialog.getItem(
+                    panel, 'Load styles', 'Select a style template:', names, current_index, False)
+                if not ok or not name:
+                    return
+                template = templates.get(str(name), {})
+                styles = template.get('styles', {}) if isinstance(template, dict) else {}
+                if not isinstance(styles, dict) or not styles:
+                    QMessageBox.warning(panel, 'Load styles',
+                                        'The selected style template does not contain any category styles.')
+                    return
+                for i, category in enumerate(categories):
+                    if str(category) in styles:
+                        category_styles[category] = self._normalise_category_style(styles[str(category)], i)
+                _apply_all_category_styles()
+
+            def _reset_styles():
+                reply = QMessageBox.question(
+                    panel, 'Reset styles', 'Reset all category styles to the default palette?',
+                    QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
+                if reply != QMessageBox_Yes:
+                    return
+                for i, category in enumerate(categories):
+                    category_styles[category] = self._default_category_style(i)
+                _apply_all_category_styles()
+
+            def _delete_template():
+                data = self._load_style_templates()
+                templates = data.get('templates', {}) if isinstance(data, dict) else {}
+                if not templates:
+                    QMessageBox.information(panel, 'Delete styles', 'No saved category style templates were found.')
+                    return
+                names = sorted(templates.keys(), key=lambda x: str(x).lower())
+                preferred = _template_key()
+                current_index = names.index(preferred) if preferred in names else 0
+                name, ok = QInputDialog.getItem(
+                    panel, 'Delete styles', 'Select a style template to delete:', names, current_index, False)
+                if not ok or not name:
+                    return
+                reply = QMessageBox.question(
+                    panel, 'Delete styles', f'Delete style template "{name}" permanently?',
+                    QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
+                if reply != QMessageBox_Yes:
+                    return
+                templates.pop(str(name), None)
+                data['templates'] = templates
+                try:
+                    path = self._save_style_templates(data)
+                except Exception as exc:
+                    QMessageBox.critical(panel, 'Delete styles', f'Could not delete style template:\n{exc}')
+                    return
+                QMessageBox.information(panel, 'Delete styles', f'Style template "{name}" deleted from:\n{path}')
+
+            show_btn.clicked.connect(_show_all)
+            hide_btn.clicked.connect(_hide_all)
+            invert_btn.clicked.connect(_invert)
+            save_template_btn.clicked.connect(_save_template)
+            load_template_btn.clicked.connect(_load_template)
+            reset_styles_btn.clicked.connect(_reset_styles)
+            delete_template_btn.clicked.connect(_delete_template)
+
+            self._category_controls = {
+                'dock': dock, 'panel': panel, 'checkboxes': checkbox_by_category,
+                'style_buttons': style_button_by_category, 'styles': category_styles,
+                'visible_state': visible_state,
+            }
+            return
+
+        # Fallback for non-Qt Matplotlib backends: on-axes CheckButtons/Button,
+        # visibility toggling only (no per-category style editing).
+        labels = [f'{category} (n={category_counts.get(category, 0)})' for category in categories]
+        label_to_category = dict(zip(labels, categories))
+        try:
+            fig.subplots_adjust(right=0.68)
+        except Exception:  # nosec B110 - best-effort layout tweak, must not block the fallback legend controls
+            pass
+
+        check_ax = fig.add_axes([0.72, 0.42, 0.25, 0.45])
+        check_ax.set_title('Categories', fontsize=9)
+        checks = CheckButtons(check_ax, labels, [True] * len(labels))
+
+        def _set_button_state(index, state):
+            if checks.get_status()[index] != state:
+                checks.set_active(index)
+
+        def _on_clicked(label):
+            category = label_to_category.get(label)
+            if category is None:
+                return
+            index = categories.index(category)
+            visible_state[category] = checks.get_status()[index]
+            _refresh_category_visibility()
+
+        checks.on_clicked(_on_clicked)
+        show_ax = fig.add_axes([0.72, 0.32, 0.075, 0.05])
+        hide_ax = fig.add_axes([0.81, 0.32, 0.075, 0.05])
+        invert_ax = fig.add_axes([0.90, 0.32, 0.075, 0.05])
+        show_btn = Button(show_ax, 'All')
+        hide_btn = Button(hide_ax, 'None')
+        invert_btn = Button(invert_ax, 'Invert')
+
+        def _show_all(event=None):
+            for i, category in enumerate(categories):
+                visible_state[category] = True
+                _set_button_state(i, True)
+            _refresh_category_visibility()
+
+        def _hide_all(event=None):
+            for i, category in enumerate(categories):
+                visible_state[category] = False
+                _set_button_state(i, False)
+            _refresh_category_visibility()
+
+        def _invert(event=None):
+            for i, category in enumerate(categories):
+                visible_state[category] = not visible_state[category]
+                _set_button_state(i, visible_state[category])
+            _refresh_category_visibility()
+
+        show_btn.on_clicked(_show_all)
+        hide_btn.on_clicked(_hide_all)
+        invert_btn.on_clicked(_invert)
+        self._category_controls = {
+            'checkbuttons': checks, 'buttons': (show_btn, hide_btn, invert_btn),
+            'visible_state': visible_state, 'axes': (check_ax, show_ax, hide_ax, invert_ax),
+        }
 
     def save_plot(self):
         """Save the current plot."""
@@ -3488,13 +5840,6 @@ class GeochemistryDockWidget(QDockWidget):
 
     def get_numeric_field_names(self):
         """Get numeric field names from the current layer."""
-        from qgis.core import QgsField
-        try:
-            from qgis.PyQt.QtCore import QVariant
-        except ImportError:
-            import sip
-            from PyQt5.QtCore import QVariant
-
         layer_id = self.layer_combo.currentData()
         if layer_id is None:
             return []
@@ -3524,7 +5869,7 @@ class GeochemistryDockWidget(QDockWidget):
                 combo.setCurrentIndex(idx if idx >= 0 else 0)
                 combo.blockSignals(False)
 
-            for combo in [self.x_denom_combo, self.y_denom_combo]:
+            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
                 prev = combo.currentText()
                 combo.blockSignals(True)
                 combo.clear()
@@ -3543,7 +5888,7 @@ class GeochemistryDockWidget(QDockWidget):
                 combo.setCurrentIndex(idx if idx >= 0 else 0)
                 combo.blockSignals(False)
 
-            for combo in [self.x_denom_combo, self.y_denom_combo]:
+            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
                 prev = combo.currentText()
                 combo.blockSignals(True)
                 combo.clear()
@@ -3571,7 +5916,7 @@ class GeochemistryDockWidget(QDockWidget):
             idx = combo.findText(prev)
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
-        for combo in denom_combos:
+        for combo in denom_combos + [self.tern_bubble_field_combo]:
             prev = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
@@ -3594,6 +5939,14 @@ class GeochemistryDockWidget(QDockWidget):
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
 
+        prev = self.petro_bubble_field_combo.currentText()
+        self.petro_bubble_field_combo.blockSignals(True)
+        self.petro_bubble_field_combo.clear()
+        self.petro_bubble_field_combo.addItems(['1 (none)'] + field_names)
+        idx = self.petro_bubble_field_combo.findText(prev)
+        self.petro_bubble_field_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.petro_bubble_field_combo.blockSignals(False)
+
     def generate_custom_ternary_plot(self, layer, features, sample_names):
         """Generate a custom ternary (triangle) diagram."""
         def apex_label(num, denom):
@@ -3612,9 +5965,12 @@ class GeochemistryDockWidget(QDockWidget):
         b_label = apex_label(b_num, b_denom)
         c_label = apex_label(c_num, c_denom)
 
+        size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
+            self._read_bubble_controls('tern')
+
         # Check that all required fields exist in the layer
         elements_needed = set()
-        for elem in [a_num, a_denom, b_num, b_denom, c_num, c_denom]:
+        for elem in [a_num, a_denom, b_num, b_denom, c_num, c_denom] + ([size_field] if bubble_active else []):
             if elem != '1 (none)':
                 elements_needed.add(elem)
         missing = [e for e in sorted(elements_needed) if find_element_field(layer, e) is None]
@@ -3628,6 +5984,7 @@ class GeochemistryDockWidget(QDockWidget):
         valid_features = []
         valid_names = []
         fid_list = []
+        size_data = []
 
         for feature, name in zip(features, sample_names):
             def val(num, denom):
@@ -3652,15 +6009,27 @@ class GeochemistryDockWidget(QDockWidget):
             valid_features.append(feature)
             valid_names.append(name)
             fid_list.append(feature.id())
+            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
 
         if not raw_data:
             QMessageBox.warning(self, "Warning", "No valid data points to plot.")
             return
 
-        category_colors, sample_colors, unique_categories, category_markers, sample_markers = \
-            create_categorical_color_map(valid_names)
+        bubble_vmin = bubble_vmax = None
+        if bubble_active:
+            bubble_vmin, bubble_vmax, bubble_active = self._compute_bubble_range(
+                'tern', size_data, [True] * len(size_data), bubble_method)
+        sample_sizes = None
+        if bubble_active:
+            sample_sizes = [
+                bubble_symbol_size(v, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method)
+                if v is not None else bubble_min_size
+                for v in size_data
+            ]
+
+        category_styles, unique_categories = self._build_default_category_styles(valid_names)
         category_colors, category_markers, sample_colors, sample_markers = \
-            self.apply_style_overrides(category_colors, category_markers, valid_names)
+            self._category_arrays_from_styles(category_styles, valid_names)
 
         fig, ax = plt.subplots(figsize=(10, 9))
         # labels: bottom-left = A, bottom-right = B, top = C
@@ -3668,12 +6037,14 @@ class GeochemistryDockWidget(QDockWidget):
 
         # Build pts_data (cartesian) and fid_to_scatter via _scatter_grouped
         # Pass ternary coords as 3-tuples: _scatter_grouped normalises internally
-        fid_to_scatter = _scatter_grouped(
+        fid_to_scatter, category_artists = _scatter_grouped(
             ax, raw_data, fid_list, valid_names, sample_colors,
             sample_markers if self.tern_markers.isChecked() else [],
             show_category_legend=self.tern_legend.isChecked(),
-            category_colors=category_colors,
+            category_colors=category_colors, sample_sizes=sample_sizes,
         )
+        artist_registry = {cat: [{'artist': a, 'role': 'scatter'} for a in arts]
+                           for cat, arts in category_artists.items()}
 
         # Build pts_data list in the same fid order for _attach_scatter_selection
         pts_data = []
@@ -3684,16 +6055,35 @@ class GeochemistryDockWidget(QDockWidget):
                 pts_data.append((x, y))
                 ordered_fids.append(fid)
 
+        fid_to_name = dict(zip(fid_list, valid_names))
+        fid_to_size = dict(zip(fid_list, sample_sizes)) if sample_sizes else None
+        stat_groups = _build_cat_groups_from_points(
+            pts_data, [fid_to_name[f] for f in ordered_fids], category_colors, category_markers,
+            sizes=([fid_to_size[f] for f in ordered_fids] if fid_to_size else None))
+        stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
+
         title = f"{a_label}  –  {b_label}  –  {c_label}  (n={len(raw_data)})"
         ax.set_title(title, fontsize=11, pad=12)
 
+        export_legend_artists = {}
+        category_legend_obj = None
         if self.tern_legend.isChecked() and len(unique_categories) > 0:
-            n_cat = len(unique_categories)
-            ncol = max(1, min(6, (n_cat + 3) // 4))
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),
-                      fontsize=8, ncol=ncol, framealpha=0.9, borderaxespad=0.)
+            export_legend_artists = self._build_category_legend(
+                ax, unique_categories, category_styles, Counter(valid_names),
+                bbox_to_anchor=(0.5, -0.05), fontsize=8)
+            category_legend_obj = ax.get_legend()
+
+        if bubble_active:
+            self._add_bubble_size_legend(
+                ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
+                self._field_display_label(size_field), category_legend_obj)
 
         plt.tight_layout()
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, ordered_fids, fid_to_scatter, layer.id())
+        self._open_category_panel(
+            fig, artist_registry, category_counts=Counter(valid_names), category_styles=category_styles,
+            style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
+            title='Ternary Plot Categories', bubble_active=bubble_active,
+            stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig

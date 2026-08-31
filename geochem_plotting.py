@@ -6,10 +6,16 @@ Handles plugin initialization, toolbar/menu creation, and dock widget management
 
 import os
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtWidgets import QAction, QDockWidget
+from qgis.PyQt.QtWidgets import QDockWidget
 from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsApplication
 from qgis.PyQt.QtWidgets import  QMessageBox
+
+# Qt5/Qt6 compatibility: QAction moved from QtWidgets to QtGui in Qt6.
+try:
+    from qgis.PyQt.QtWidgets import QAction  # Qt5
+except ImportError:
+    from qgis.PyQt.QtGui import QAction  # Qt6
 
 # Qt5/Qt6 Compatibility Layer
 try:
