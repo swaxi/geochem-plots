@@ -4,7 +4,6 @@ qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
 version=0.0.5
-supportsQt6=True
 author=Mark Jessell, Julien Perret (University of Western Australia)
 email=mark.jessell@uwa.edu.au; julien.perret@uwa.edu.au
 
