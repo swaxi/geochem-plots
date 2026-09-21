@@ -3,7 +3,7 @@ name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
-version=0.0.5
+version=0.0.6
 author=Mark Jessell, Julien Perret (University of Western Australia)
 email=mark.jessell@uwa.edu.au; julien.perret@uwa.edu.au
 
@@ -12,7 +12,24 @@ about=A simple geochemistry plotting tool for QGIS that creates spider diagrams,
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=0.0.5
+changelog=0.0.6
+     0.0.6 2026-09
+       **Bug Fixes**
+       * Recognise element fields named by isotope mass number (Sr88, Y89, La139, Ce140, Pr141, Nd146, 88Sr, Sr_88, Sr88_ppm ...), preferring the most abundant isotope when several are present
+       * Never treat normalised, ratio, error or detection-limit fields (Sr_ChondriteNorm, La_N, Y_2SE, Nb_LOD ...) as a raw element concentration; they could previously be picked up in place of the real field and give wrong Sr/Y, sum LREE, etc.
+       * Winchester & Floyd (1977) diagram now plots Zr/TiO2 with both terms in ppm (TiO2 wt pct x 10000, or Ti ppm x 1.6685 when only Ti is available) and the axis is labelled accordingly; a measured TiO2 (or Ti, for Zr/Ti diagrams) field is preferred over a converted one
+       * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
+
+       **Improvements**
+       * Rename the Minerals-tab apatite scheme to "Apatite - Sr/Y vs sum LREE (La+Ce+Pr+Nd) - O'Sullivan et al. (2020)"
+       * Select Samples list shows each category once (with its sample count) instead of repeating it for every sample; selecting a category selects all of its samples
+       * Features selected on the QGIS map are now highlighted on every open plot (map to plot selection, as well as plot to map)
+       * Style panel in the plot window can now be collapsed/expanded with a button, docked to any side of the plot window (or floated), and resized by dragging the bars between it and the plot and between its Categories and Legend sections
+       * Each section of the style panel (Statistics, Style Management, Categories, Legend) can be collapsed/expanded by clicking its header
+       * The options on every tab of the main plugin window are now grouped into collapsible sections, each with a drag bar to resize it (double-click to reset)
+       * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
+       * Apply the selected-on-top layer rendering order (is_selected()) when plotting from the Spider tab as well
+
      0.0.5 2026-07
        **Dependency Harmonisation & Qt6 Fixes**
        * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins (numpy>=1.26.4,<2.0 ; matplotlib>=3.7,<3.12), so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.

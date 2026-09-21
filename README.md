@@ -1,12 +1,27 @@
 ![icon](icon_sm.png) 
 # Geochemistry Plotting Tools
 
-_July 2026 - version 0.0.5_
+_September 2026 - version 0.0.6_
 
 A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. 
 Developed for UWA EART3343 Lab exercises.
 
 
+
+# Changelog 0.0.6
+
+      * Recognise element fields named by isotope mass number (`Sr88`, `Y89`, `La139`, `Ce140`, `Pr141`, `Nd146`, `88Sr`, `Sr_88`, `Sr88_ppm`...), preferring the most abundant isotope when several are present
+      * Never treat normalised, ratio, error or detection-limit fields (`Sr_ChondriteNorm`, `La_N`, `Y_2SE`, `Nb_LOD`...) as a raw element concentration - previously they could be picked up in place of the real field and give wrong Sr/Y, ΣLREE, etc.
+      * Winchester & Floyd (1977) diagram now plots Zr/TiO₂ with both terms in ppm (TiO₂ wt% × 10000, or Ti ppm × 1.6685 when only Ti is available), and the axis is labelled accordingly; a measured TiO₂ (or Ti, for Zr/Ti diagrams) field is used in preference to a converted one
+      * Rename the Minerals-tab apatite scheme to "Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020)"
+      * Select Samples list shows each category once (with its sample count) instead of repeating it for every sample; selecting a category selects all of its samples
+      * Selecting features on the QGIS map now highlights the corresponding points/lines on every open plot (previously only plot → map worked)
+      * The selected-on-top layer rendering order (`is_selected()`) is now also applied when plotting from the Spider tab
+      * Style panel in the plot window can now be collapsed/expanded with a button, docked to any side of the plot window (or floated), and resized by dragging the bars between it and the plot and between its Categories and Legend sections
+      * Each section of the style panel (Statistics, Style Management, Categories, Legend) can be collapsed/expanded by clicking its header
+      * The options on every tab of the main plugin window are now grouped into collapsible sections, each with a drag bar to resize it (double-click to reset)
+      * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
+      * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
 
 # Changelog 0.0.5
 
@@ -68,7 +83,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 ![Custom XY](tab3.png)
 
 6. Select samples to plot, using any of:
-   - The **Samples** list in the plugin (multi-select as usual)
+   - The **Samples** list in the plugin (multi-select as usual). When a **Category** field is chosen, each category is listed once with its sample count, and selecting it selects all of its samples
    - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (click **Refresh** in the plugin if the list doesn't update)
    - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first)
 
@@ -80,6 +95,10 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 
 ## Tabs
 
+On every tab the options are grouped into sections (e.g. **Normalization and Elements**, **Display**, **Bubble Size**, **X-Axis**). Click a section's header to collapse or expand it, which shortens the panel so the Samples list and buttons stay in view. Drag the thin bar under a section to change its height (the section scrolls if it becomes shorter than its contents), and double-click the bar to reset it to its natural size.
+
+The plugin window itself is made of three main groups - **Layer Selection**, **Plot Options** (the tabs) and **Samples** - each with a darker header you can click to collapse or expand it, separated by two draggable bars so you can trade height between them (each group scrolls if it is made smaller than its contents). The window automatically re-fits whenever you collapse, expand or resize a group or section, or switch tab: every open group gets just the height its contents need, and all the remaining space goes to the Samples list, which grows to show more samples (or to Plot Options if Samples is collapsed).
+
 ### Spider
 - **Normalize** - choose a reference composition to normalise against: 4 chondrite datasets (Sun & McDonough 1989, McDonough & Sun 1995, Boynton 1984, Nakamura 1974), 2 primitive mantle datasets (Sun & McDonough 1989, McDonough & Sun 1995), OIB and N-MORB/E-MORB (Sun & McDonough 1989), 2 depleted mantle datasets (Salters & Stracke 2004, Workman & Hart 2005), and 2 upper continental crust datasets (Rudnick & Gao 2003, Taylor & McLennan 1985)
 - **Elements** - REE only (La-Lu), Extended (Ba-Yb, 19 trace elements) or Extended Alt (Cs-Lu, 27 trace elements)
@@ -88,7 +107,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 - [Bubble Size](#bubble-size-all-tabs) section to scale each sample's line markers by an extra field
 
 ### Discrimination/Classification
-- Plot-type drop-down with 9 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996; Winchester & Floyd 1977), Zr/4-Nb×2-Y ternary (Meschede 1986), Geochemical Differentiation of Sedimentary Rocks ternary (Hasterok et al. 2018, after Mason 1966), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
+- Plot-type drop-down with 9 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996), Zr/TiO₂ vs Nb/Y (Winchester & Floyd 1977; Zr and TiO₂ both in ppm), Zr/4-Nb×2-Y ternary (Meschede 1986), Geochemical Differentiation of Sedimentary Rocks ternary (Hasterok et al. 2018, after Mason 1966), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
 - **Field Legend** shows the diagram's named fields; **Category Legend** shows sample categories
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** (in the Samples panel) writes the field name each point falls into (or void) back to the layer, for the currently selected diagram
@@ -105,7 +124,7 @@ Split into two sub-tabs:
 - [Bubble Size](#bubble-size-all-tabs) section
 
 ### Minerals
-- Plot-type drop-down (currently one scheme: Detrital Apatite Classification, Sullivan 2020; more classification schemes can be added here in future)
+- Plot-type drop-down (currently one scheme: Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020); more classification schemes can be added here in future)
 - **Field Legend** / **Category Legend** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** also works from this tab, for the selected classification scheme
@@ -124,6 +143,8 @@ Split into two sub-tabs:
 The **Category** field (Layer Selection) groups and colours samples. Choose `(none) - plot all points with one symbol` to skip categorisation and plot every selected sample identically.
 
 Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots. If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+
+**Making room for the plot:** the panel's title bar has a **collapse/expand arrow** button - collapsing shrinks the panel to a slim strip at the window edge (or to just its title bar when docked at the top/bottom) so the plot gets the space, and expanding restores its previous size. The panel can be docked to any side of the plot window (drag its title, or use the float button to detach it into its own window), and the highlighted **bars** between the plot and the panel, and between the **Categories** and **Legend** sections, can be dragged to change their width/height. The panel scrolls if it is made smaller than its contents. Each section of the panel (**Statistics**, **Style Management**, **Categories**, **Legend**) also has a clickable header that collapses or expands it; **Style Management** starts collapsed, and collapsing one of Categories/Legend gives its space to the other.
 
 ### Category mean ± 2σ statistics overlay
 
@@ -162,7 +183,9 @@ Substitution is computed per-row from each value's own encoded detection limit, 
 | Click a sample line | Select that feature in QGIS (replaces current selection) |
 | Shift + click a sample line | Add or remove that feature from the QGIS selection |
 
-Selected features are highlighted on the map using QGIS's standard selection colour, and rendered on top of other features in the layer. Hovering near a point/line shows a popup tooltip using the **Add label** field.
+Selected features are highlighted on the map using QGIS's standard selection colour, and rendered on top of other features in the layer (the plugin sets the layer's **Control feature rendering order** to `is_selected()` for you).
+
+Selection also works in the other direction: features you select on the QGIS map (Select Features tools, attribute table, etc.) are highlighted on every plot that is open for that layer, so you can, for example, select a lava flow or area on the map and see where it falls on a TAS or discrimination diagram. Hovering near a point/line shows a popup tooltip using the **Add label** field.
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
@@ -186,6 +209,8 @@ Your layer should have fields containing geochemical data. The plugin automatica
 - Plain element/oxide names: `La`, `Ce`, `Nb`, `Zr`, `TiO2`, `K2O`, etc.
 - With unit suffixes: `La_ppm`, `Zr_PPM`, `Nb (ppm)`, `TiO2_pct`, `K2O_wt`, etc.
 - `Symbol_Fullname` style: `Na_Sodium`, `K_Potassium`, `Cl_Chlorine`, etc.
+- Isotope-labelled element fields: `Sr88`, `Y89`, `La139`, `88Sr`, `Sr_88`, `Sr88_ppm`, etc. (if several isotopes of one element are present, the most abundant is used)
+- Normalised, ratio, error and detection-limit fields (names containing e.g. `Norm`, `Chondrite`, `Ratio`, `_N`, `_2SE`, `_LOD`) are never treated as raw concentrations, so you can keep chondrite-normalised columns next to the raw data
 - Units (ppm, ppb, wt%) and elemental/oxide forms are auto-detected per field and converted as needed for each plot (e.g. a layer with only `TiO2_pct` can still drive a Ti-in-ppm plot, and vice versa)
 - Negative values coded as below-detection-limit are supported in Custom XY plots - see [Below-detection-limit values](#below-detection-limit-values-custom-xy-only)
 
