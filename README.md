@@ -23,27 +23,6 @@ Developed for UWA EART3343 Lab exercises.
       * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
       * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
 
-# Changelog 0.0.5
-
-      * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins, so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.
-      * Fixed a bug where a missing matplotlib installation crashed at import time instead of degrading gracefully.
-      * Fixed a Qt6/QGIS4 compatibility bug affecting QAction, which moved from QtWidgets to QtGui in Qt6.
-      * Declared Qt6/QGIS4 support in metadata.txt, now that Qt6 compatibility has been verified.
-      * Add Geochemical Differentiation of Sedimentary Rocks ternary diagram (Hasterok et al. 2018, after Mason 1966), with a first-screening check for required oxide fields and a below-detection-limit (negative value) handling option   
-      * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
-      * Add per-category drawing (z-stack) order control to the interactive style panel   
-      * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel     
-      * Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
-      * Add "no category" option to plot all points with a single symbol   
-      * Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
-      * Add Filter Layer to Selected / Clear Filter buttons to turn a plot selection into a QGIS layer filter   
-      * Fix Ti vs Zr (Pearce & Cann 1973) diagram and add automatic ppm/ppb/wt%/oxide unit conversion across all plots   
-      * Recognise many more elements and oxides in Custom XY plots
-      * Add Data Preprocessing sub-tab to Custom XY for below-detection-limit (negative value) handling, with substitution options and a review/histogram tool   
-      * Add plot-type dropdown to the Minerals tab, ready for future classification schemes   
-      * Improve point label readability (white background) and stacking order (always drawn above points)   
-      * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
-
 Full changelog: <a href="https://github.com/swaxi/geochem-plots/blob/main/metadata.txt">Metadata</a>
 
 ## Installation
