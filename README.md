@@ -26,6 +26,7 @@ Developed for UWA EART3343 Lab exercises.
       * Ratio axis labels on the Zr/Ti and Zr/TiO₂ vs Nb/Y diagrams no longer carry a "(both in ppm)" suffix
       * Fix the automatic selected-on-top map rendering order (`is_selected()` ascending), which was silently not being applied; it is now set as soon as a layer is chosen in the plugin and restored after any symbology change, keeping any rendering order you had already defined as a secondary sort
       * Points selected on the map are now drawn above all unselected points on scatter-type plots, so they are no longer hidden in densely clustered data
+      * Custom XY and Custom Ternary: the "Show all numeric fields" option is renamed "Show all numeric fields (including data different from concentrations)" to make clear it also lists non-concentration numeric fields
       * Category sample counts in plot legends and the style panel now read `n=x/y`: x samples actually plotted out of the y selected samples in that category (samples missing a variable the plot needs are not plotted). Discrimination and Minerals legends now show these counts too, and the Spider diagram title counts only samples actually drawn
       * New opt-in "Use layer symbology" checkbox (Layer Selection): when the layer uses a Categorized symbology on the selected Category field, each category's colour, marker shape, size and label are taken from the map, and categories unchecked on the map start hidden in the plot; categories without a map style keep the default plot styling. A matching "Use layer symbology" toggle button in the plot style panel (Style Management) restyles the open plot live, and clicking it again restores the default plot styles. A data-defined symbol size on the layer (e.g. from the QGIS Size Assistant) fills in the tab's Bubble Size settings. See [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)
       * New "Apply to layer…" button (plot style panel > Style Management) sets the layer's symbology to a Categorized renderer matching the plot's category styles, after confirmation; the previous layer style is kept in the layer's style list so it can be restored. When the plot uses bubble sizing, the symbols get a matching data-defined size (same field, unit conversion, scaling and size range)
@@ -100,12 +101,12 @@ The plugin window itself is made of three main groups - **Layer Selection**, **P
 
 ### Custom XY
 Split into two sub-tabs:
-- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator), plus **Show all numeric fields** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
+- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator), plus **Show all numeric fields (including data different from concentrations)** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
 - **Data Preprocessing**: handling for negative, below-detection-limit-coded values - see [Below-detection-limit values](#below-detection-limit-values-custom-xy-only)
 
 ### Custom Ternary
 - Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY
-- **Show all numeric fields** toggle
+- **Show all numeric fields (including data different from concentrations)** toggle
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 

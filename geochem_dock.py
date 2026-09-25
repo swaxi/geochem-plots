@@ -3501,7 +3501,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         # Show all numeric fields checkbox
         custom_fields_layout = self._loose_section(custom_xy_layout, "Fields")
-        self.custom_show_all_fields = QCheckBox("Show all numeric fields")
+        self.custom_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
         self.custom_show_all_fields.setChecked(False)
         self.custom_show_all_fields.toggled.connect(self.refresh_custom_xy_combos)
         custom_fields_layout.addWidget(self.custom_show_all_fields)
@@ -3649,7 +3649,7 @@ class GeochemistryDockWidget(QDockWidget):
             self._group_section(custom_tern_layout, grp)
 
         tern_options_layout = self._loose_section(custom_tern_layout, "Fields and Display")
-        self.tern_show_all_fields = QCheckBox("Show all numeric fields")
+        self.tern_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
         self.tern_show_all_fields.setChecked(False)
         self.tern_show_all_fields.toggled.connect(self.refresh_custom_ternary_combos)
         tern_options_layout.addWidget(self.tern_show_all_fields)
