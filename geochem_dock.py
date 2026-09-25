@@ -839,6 +839,32 @@ ELEMENT_ISOTOPE_MASSES = {
     'Pb': (208, 206, 207, 204), 'Bi': (209,), 'Th': (232,), 'U': (238, 235, 234),
 }
 
+# Element symbol -> accepted English name(s), for "Symbol_Fullname" style
+# fields (Na_Sodium, Y_Yttrium). Only a real element name counts, so fields
+# like Y_UTM (a coordinate) or Sr_Anomaly are not mistaken for an element.
+ELEMENT_NAMES = {
+    'H': ('hydrogen',), 'Li': ('lithium',), 'Be': ('beryllium',), 'B': ('boron',),
+    'C': ('carbon',), 'N': ('nitrogen',), 'O': ('oxygen',), 'F': ('fluorine',),
+    'Na': ('sodium',), 'Mg': ('magnesium',), 'Al': ('aluminium', 'aluminum'),
+    'Si': ('silicon',), 'P': ('phosphorus', 'phosphorous'), 'S': ('sulfur', 'sulphur'),
+    'Cl': ('chlorine',), 'K': ('potassium',), 'Ca': ('calcium',), 'Sc': ('scandium',),
+    'Ti': ('titanium',), 'V': ('vanadium',), 'Cr': ('chromium',), 'Mn': ('manganese',),
+    'Fe': ('iron',), 'Co': ('cobalt',), 'Ni': ('nickel',), 'Cu': ('copper',),
+    'Zn': ('zinc',), 'Ga': ('gallium',), 'Ge': ('germanium',), 'As': ('arsenic',),
+    'Se': ('selenium',), 'Br': ('bromine',), 'Rb': ('rubidium',), 'Sr': ('strontium',),
+    'Y': ('yttrium',), 'Zr': ('zirconium',), 'Nb': ('niobium',), 'Mo': ('molybdenum',),
+    'Ru': ('ruthenium',), 'Rh': ('rhodium',), 'Pd': ('palladium',), 'Ag': ('silver',),
+    'Cd': ('cadmium',), 'In': ('indium',), 'Sn': ('tin',), 'Sb': ('antimony',),
+    'Te': ('tellurium',), 'I': ('iodine',), 'Cs': ('caesium', 'cesium'), 'Ba': ('barium',),
+    'La': ('lanthanum',), 'Ce': ('cerium',), 'Pr': ('praseodymium',), 'Nd': ('neodymium',),
+    'Sm': ('samarium',), 'Eu': ('europium',), 'Gd': ('gadolinium',), 'Tb': ('terbium',),
+    'Dy': ('dysprosium',), 'Ho': ('holmium',), 'Er': ('erbium',), 'Tm': ('thulium',),
+    'Yb': ('ytterbium',), 'Lu': ('lutetium',), 'Hf': ('hafnium',), 'Ta': ('tantalum',),
+    'W': ('tungsten', 'wolfram'), 'Re': ('rhenium',), 'Os': ('osmium',), 'Ir': ('iridium',),
+    'Pt': ('platinum',), 'Au': ('gold',), 'Hg': ('mercury',), 'Tl': ('thallium',),
+    'Pb': ('lead',), 'Bi': ('bismuth',), 'Th': ('thorium',), 'U': ('uranium',),
+}
+
 # Optional unit suffix on an isotope-labelled field, e.g. Sr88_ppm, Y89 (ppm).
 _ISOTOPE_UNIT_SUFFIX = r"(?:[_\s]?[(\[]?(?:wt_pct|wtpct|wt%|wt|ppm|ppb|pct|%)[)\]]?)?"
 
@@ -866,7 +892,19 @@ def _is_derived_field_name(field_name):
     tokens = [t for t in re.split(r'[^a-z0-9]+', lowered) if t]
     # The first token is the element/oxide itself (so a bare "N" or "Se" is
     # never mistaken for a qualifier); only later tokens can mark a field derived.
-    return any(t in _DERIVED_FIELD_TOKENS for t in tokens[1:])
+    if any(t in _DERIVED_FIELD_TOKENS for t in tokens[1:]):
+        return True
+    # A later token that is itself an element symbol (isotope mass numbers
+    # ignored) marks a ratio or anomaly: Sr_Y, Sr/Y, Sm_Nd, Eu_Eu*,
+    # Pb206_Pb204... Symbols are matched in their own case (or as a single
+    # capital letter, e.g. SR_Y), so words such as "in"/"as" or method codes
+    # like "LA" don't count.
+    raw_tokens = [t for t in re.split(r'[^A-Za-z0-9]+', field_name) if t]
+    for token in raw_tokens[1:]:
+        symbol = re.sub(r'\d+', '', token)
+        if symbol and symbol in ELEMENT_NAMES and symbol != 'O':
+            return True
+    return False
 
 
 def _find_isotope_field(field_names, element):
@@ -949,17 +987,25 @@ def _find_element_field_in_names(all_field_names, element, allow_oxide_forms):
     if allow_oxide_forms and element in oxide_forms:
         patterns.extend(oxide_forms[element])
 
+    # Symbol_Fullname style (Na_Sodium, Y_Yttrium, CA_Calcium): the suffix
+    # must be the element's actual name, so ratio/coordinate/qualifier
+    # fields sharing the symbol prefix (Sr_Y, Y_UTM, Sr_Anomaly) don't match.
+    element_names = ELEMENT_NAMES.get(element, ())
+    fullname_regex = re.compile(rf"^{re.escape(element)}_([A-Za-z]+)$", re.IGNORECASE)
+
+    def _fullname_field():
+        for field_name in field_names:
+            match = fullname_regex.match(field_name)
+            if match and match.group(1).lower() in element_names:
+                return field_name
+        return None
+
     # 0. For single-character elements (Y, V, U, B, etc.), prefer Symbol_Fullname
     #    style FIRST to avoid matching bare coordinate/metadata fields like 'y' or 'v'.
     if len(element) == 1:
-        pre_regex = re.compile(
-            rf"^{re.escape(element)}_[A-Za-z]+$|"
-            rf"^{re.escape(element.upper())}_[A-Za-z]+$",
-            re.IGNORECASE
-        )
-        for field_name in field_names:
-            if pre_regex.match(field_name):
-                return field_name
+        fullname_field = _fullname_field()
+        if fullname_field is not None:
+            return fullname_field
         # Isotope-labelled (Y89, 89Y...) also beats the bare-symbol patterns
         # below, which would otherwise match e.g. a lowercase 'y' coordinate.
         isotope_field = _find_isotope_field(field_names, element)
@@ -972,15 +1018,9 @@ def _find_element_field_in_names(all_field_names, element, allow_oxide_forms):
             return pattern
 
     # 2. Symbol_Fullname style match (e.g. Cl_Chlorine, K_Potassium, CA_Calcium)
-    symbol_name_regex = re.compile(
-        rf"^{re.escape(element)}_[A-Za-z]+$|"
-        rf"^{re.escape(element.upper())}_[A-Za-z]+$|"
-        rf"^{re.escape(element.lower())}_[A-Za-z]+$",
-        re.IGNORECASE
-    )
-    for field_name in field_names:
-        if symbol_name_regex.match(field_name):
-            return field_name
+    fullname_field = _fullname_field()
+    if fullname_field is not None:
+        return fullname_field
 
     # 2b. Isotope-labelled style match (e.g. Sr88, La139, 88Sr, Ce140_ppm)
     isotope_field = _find_isotope_field(field_names, element)
@@ -1000,6 +1040,16 @@ def _find_element_field_in_names(all_field_names, element, allow_oxide_forms):
         if field_upper.startswith(element_upper):
             remainder = field_upper[len(element_upper):]
             if remainder in allowed_remainders:
+                return field_name
+
+    # 3b. Last resort for multi-letter symbols: "Symbol_word" with any word
+    # (e.g. Sr_ICPMS), as accepted before element names were checked. Ratio
+    # fields are already filtered out above; single-letter symbols are
+    # excluded since Y_UTM, V_Coord... are far more likely to be metadata.
+    if len(element) > 1:
+        loose_regex = re.compile(rf"^{re.escape(element)}_[A-Za-z]+$", re.IGNORECASE)
+        for field_name in field_names:
+            if loose_regex.match(field_name):
                 return field_name
 
     if not allow_oxide_forms:
@@ -1087,6 +1137,17 @@ def _read_numeric_field(feature, field_name):
         return None
 
 
+# While a plot is being built, {element/oxide: {layer field, ...}} of the
+# fields its values were actually read from, reported in the QGIS log so the
+# field recognition can be checked (None when not recording).
+_FIELD_USAGE = None
+
+
+def _record_field_use(element, field_name):
+    if _FIELD_USAGE is not None and field_name:
+        _FIELD_USAGE.setdefault(element, set()).add(field_name)
+
+
 def get_element_ppm(feature, layer, element):
     """Return `element`'s concentration in ppm (trace-element basis).
 
@@ -1099,6 +1160,7 @@ def get_element_ppm(feature, layer, element):
     if field_name is not None:
         raw = _read_numeric_field(feature, field_name)
         if raw is not None:
+            _record_field_use(element, field_name)
             return _value_to_ppm(raw, field_name, default_unit='ppm')
 
     oxide = ELEMENT_TO_OXIDE.get(element)
@@ -1107,6 +1169,7 @@ def get_element_ppm(feature, layer, element):
         if oxide_field is not None:
             raw = _read_numeric_field(feature, oxide_field)
             if raw is not None:
+                _record_field_use(element, f'{oxide_field} (as {oxide})')
                 pct = _value_to_pct(raw, oxide_field, default_unit='pct')
                 return oxide_pct_to_element_ppm(oxide, pct)
     return None
@@ -1124,6 +1187,7 @@ def get_oxide_pct(feature, layer, oxide):
     if field_name is not None:
         raw = _read_numeric_field(feature, field_name)
         if raw is not None:
+            _record_field_use(oxide, field_name)
             return _value_to_pct(raw, field_name, default_unit='pct')
 
     composition = OXIDE_COMPOSITION.get(oxide)
@@ -1133,6 +1197,7 @@ def get_oxide_pct(feature, layer, oxide):
         if elem_field is not None:
             raw = _read_numeric_field(feature, elem_field)
             if raw is not None:
+                _record_field_use(oxide, f'{elem_field} (as {element})')
                 ppm = _value_to_ppm(raw, elem_field, default_unit='ppm')
                 return element_ppm_to_oxide_pct(oxide, ppm)
     return None
@@ -1160,6 +1225,7 @@ def get_element_value(feature, layer, element, convert_to_ppm=True):
         field_name = find_element_field(layer, element)
         if field_name is None:
             return None
+        _record_field_use(element, field_name)
         return _read_numeric_field(feature, field_name)
     if element in OXIDE_COMPOSITION:
         return get_oxide_pct(feature, layer, element)
@@ -1242,6 +1308,7 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
         field_name = find_element_field(layer, element_name)
         if field_name is None:
             return None
+        _record_field_use(element_name, field_name)
         value = _read_numeric_field(feature, field_name)
 
     if value is None:
@@ -4480,19 +4547,32 @@ class GeochemistryDockWidget(QDockWidget):
                 sample_names.append(NO_CATEGORY_LABEL)
 
         plt.ion()
-        
-        if self.tab_widget.currentIndex() == 0:
-            self.generate_spider_diagram(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 1:
-            self.generate_discrimination_diagram(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 2:
-            self.generate_custom_xy_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 3:
-            self.generate_custom_ternary_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 4:
-            self.generate_minerals_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 5:
-            self.generate_petrophysics_plot(layer, features, sample_names)
+
+        # Record which layer fields each element/oxide is read from, and
+        # report them in the QGIS log so the field recognition can be checked.
+        global _FIELD_USAGE
+        _FIELD_USAGE = {}
+        try:
+            if self.tab_widget.currentIndex() == 0:
+                self.generate_spider_diagram(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 1:
+                self.generate_discrimination_diagram(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 2:
+                self.generate_custom_xy_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 3:
+                self.generate_custom_ternary_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 4:
+                self.generate_minerals_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 5:
+                self.generate_petrophysics_plot(layer, features, sample_names)
+        finally:
+            usage, _FIELD_USAGE = _FIELD_USAGE, None
+            if usage:
+                plot_name = self.tab_widget.tabText(self.tab_widget.currentIndex())
+                symbology_bridge.log(
+                    f"{plot_name} plot of layer '{layer.name()}' - fields used: " +
+                    ', '.join(f"{element} ← {' / '.join(sorted(fields))}"
+                              for element, fields in sorted(usage.items())))
 
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""

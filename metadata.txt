@@ -24,6 +24,7 @@ changelog=0.0.6
        * Fix the automatic selected-on-top map rendering order (is_selected() ascending), which was silently not applied; it is now set as soon as a layer is chosen in the plugin and restored after any symbology change, keeping any existing rendering order as a secondary sort
        * Points selected on the map are now drawn above all unselected points on scatter-type plots, so they stay visible in densely clustered data
        * Custom XY and Custom Ternary: rename "Show all numeric fields" to "Show all numeric fields (including data different from concentrations)"
+       * Fix plots (notably the apatite Sr/Y vs sum LREE diagram) reading the wrong field for an element when the layer also holds ratio or coordinate columns: a precomputed ratio such as Sr_Y could be read as Sr and a Y_UTM coordinate as Y. Ratio/anomaly fields (Sr_Y, Sr/Y, Sm_Nd, Eu_Eu* ...) are never read as concentrations, Symbol_Fullname fields must use the element's real name, isotope fields (Sr88, Y89) take precedence over other Symbol_word fields, and the fields used for each plot are listed in the QGIS Log Messages panel
        * Category sample counts in plot legends and the style panel now read n=x/y (x plotted out of y selected samples in the category, as samples missing a required variable are not plotted); Discrimination and Minerals legends now show these counts, and the Spider diagram title counts only samples actually drawn
 
        **Improvements**
