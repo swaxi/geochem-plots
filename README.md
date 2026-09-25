@@ -28,6 +28,7 @@ Developed for UWA EART3343 Lab exercises.
       * Points selected on the map are now drawn above all unselected points on scatter-type plots, so they are no longer hidden in densely clustered data
       * Custom XY and Custom Ternary: the "Show all numeric fields" option is renamed "Show all numeric fields (including data different from concentrations)" to make clear it also lists non-concentration numeric fields
       * Fix apatite (and other) plots using the wrong field for an element when the layer also holds ratio or coordinate columns: a precomputed ratio such as `Sr_Y` (Sr/Y) could be read as Sr, and a `Y_UTM` coordinate as Y, pushing Sr/Y far too low. Ratio/anomaly fields (`Sr_Y`, `Sr/Y`, `Sm_Nd`, `Eu_Eu*`...) are now never read as concentrations, `Symbol_Fullname` fields must use the element's real name (`Y_Yttrium`), and isotope fields (`Sr88`, `Y89`) take precedence over other `Symbol_word` fields. The fields used for each plot are listed in the QGIS Log Messages panel
+      * Custom XY and Custom Ternary: the Numerator/Denominator lists are now tick lists, and several ticked entries are added together (e.g. Na2O + K2O), with built-in oxides/elements and unit-suffixed layer fields converted to a common unit; a warning is shown when the units of the added entries can't be reconciled. The bubble **Size by** list works the same way on every tab (a summed size is also exported to/imported from the map's data-defined size), and on the Spider, Discrimination and Minerals tabs it now lists the layer's numeric fields instead of accepting a typed field name. Drop-down lists open wide enough to show every entry in full
       * Category sample counts in plot legends and the style panel now read `n=x/y`: x samples actually plotted out of the y selected samples in that category (samples missing a variable the plot needs are not plotted). Discrimination and Minerals legends now show these counts too, and the Spider diagram title counts only samples actually drawn
       * New opt-in "Use layer symbology" checkbox (Layer Selection): when the layer uses a Categorized symbology on the selected Category field, each category's colour, marker shape, size and label are taken from the map, and categories unchecked on the map start hidden in the plot; categories without a map style keep the default plot styling. A matching "Use layer symbology" toggle button in the plot style panel (Style Management) restyles the open plot live, and clicking it again restores the default plot styles. A data-defined symbol size on the layer (e.g. from the QGIS Size Assistant) fills in the tab's Bubble Size settings. See [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)
       * New "Apply to layer…" button (plot style panel > Style Management) sets the layer's symbology to a Categorized renderer matching the plot's category styles, after confirmation; the previous layer style is kept in the layer's style list so it can be restored. When the plot uses bubble sizing, the symbols get a matching data-defined size (same field, unit conversion, scaling and size range)
@@ -102,11 +103,11 @@ The plugin window itself is made of three main groups - **Layer Selection**, **P
 
 ### Custom XY
 Split into two sub-tabs:
-- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator), plus **Show all numeric fields (including data different from concentrations)** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
+- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator) - see [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size), plus **Show all numeric fields (including data different from concentrations)** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
 - **Data Preprocessing**: handling for negative, below-detection-limit-coded values - see [Below-detection-limit values](#below-detection-limit-values-custom-xy-only)
 
 ### Custom Ternary
-- Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY
+- Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY (several entries can be ticked and added together - see [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size))
 - **Show all numeric fields (including data different from concentrations)** toggle
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
@@ -155,7 +156,18 @@ The Style panel's **Statistics** section adds a **Show mean ± 2σ** toggle to a
 
 ### Bubble Size (all tabs)
 
-Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by, choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point. Bubble sizing can be exported to, or read from, a data-defined symbol size on the QGIS layer - see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map).
+Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by (**Size by** is a tick list: tick several entries to size by their sum, with the same unit handling and warnings as described in [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size); on the Spider, Discrimination and Minerals tabs it also lists the layer's own numeric fields after the built-in elements/oxides), choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point. Bubble sizing can be exported to, or read from, a data-defined symbol size on the QGIS layer - see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map).
+
+### Adding fields together (Custom XY, Custom Ternary and Bubble Size)
+
+The Numerator and Denominator lists of Custom XY and Custom Ternary, and the **Size by** list of every tab's Bubble Size section, are tick lists: tick several entries to add them together, e.g. **Na2O + K2O** for a total-alkali axis, `(Na2O + K2O) / Al2O3` with Al2O3 as the denominator, or symbols sized by Na2O + K2O. Entries are added in the order you tick them, and the sum is shown in the list and in the axis/apex label or bubble-size legend. `1 (none)` can't be combined with other entries. The lists open wide enough to show every entry in full.
+
+Units are made consistent before adding:
+- Built-in oxides are added in wt%, built-in elements in ppm; a mix of oxides and elements is converted to ppm.
+- With **Show all numeric fields**, layer fields are used as stored; only a ppm/ppb/wt% suffix in a field name (e.g. `Rb_ppm`, `Ba_ppb`, `Na2O_pct`) lets the plugin convert them to a common unit.
+- If the units of the ticked entries can't be reconciled (unknown units, Mg#, or REE-normalised values mixed with others), a warning lists them before plotting and lets you cancel. **Make sure fields added together are concentrations reported in the same unit.**
+
+A sample is only plotted if every ticked entry has a value.
 
 ### Below-detection-limit values (Custom XY only)
 

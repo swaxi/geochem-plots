@@ -16,10 +16,12 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog, QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
-    QDialogButtonBox, QSizePolicy, QSplitter, QToolButton
+    QDialogButtonBox, QSizePolicy, QSplitter, QToolButton,
+    QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate
 )
-from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
-from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer
+from qgis.PyQt.QtGui import (QColor, QPainter, QPen, QBrush, QPolygonF,
+                             QStandardItem, QStandardItemModel)
+from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer, QEvent
 
 from . import symbology_bridge
 
@@ -94,6 +96,13 @@ try:
     QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
     QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
 
+    # Multi-select (checkable) combo box enums
+    Qt_Checked = Qt.CheckState.Checked
+    Qt_Unchecked = Qt.CheckState.Unchecked
+    QEvent_MouseButtonRelease = QEvent.Type.MouseButtonRelease
+    QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
+    QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
+
 except AttributeError:
     # Qt5 detected
     QT6 = False
@@ -132,6 +141,13 @@ except AttributeError:
     QDockWidget_Movable = QDockWidget.DockWidgetMovable
     QDockWidget_Floatable = QDockWidget.DockWidgetFloatable
     QPainter_Antialiasing = QPainter.Antialiasing
+
+    # Multi-select (checkable) combo box enums
+    Qt_Checked = Qt.Checked
+    Qt_Unchecked = Qt.Unchecked
+    QEvent_MouseButtonRelease = QEvent.MouseButtonRelease
+    QStyle_CC_ComboBox = QStyle.CC_ComboBox
+    QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
 
 
 # =============================================================================
@@ -360,6 +376,175 @@ class _CollapsibleSection(QWidget):
         self._use_scroll(False)
         self._refresh_layouts()
         self.resized.emit()
+
+
+def fit_popup_width(combo, extra=0):
+    """Widen `combo`'s drop-down list to its widest entry (plus `extra`
+    pixels, e.g. for a tick box) so entries are never cut to '...', even when
+    the closed box is narrow. The closed box keeps its own width."""
+    view = combo.view()
+    metrics = view.fontMetrics()
+    # horizontalAdvance (Qt >= 5.11, only option in Qt6) or the older width().
+    advance = metrics.horizontalAdvance if hasattr(metrics, 'horizontalAdvance') else metrics.width
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    widest = max((advance(text) for text in texts), default=0)
+    scrollbar = view.verticalScrollBar().sizeHint().width()
+    view.setMinimumWidth(widest + extra + scrollbar + 24)
+
+
+class _CheckableComboBox(QComboBox):
+    """Drop-down whose entries are ticked rather than picked, so several can
+    be selected at once - used for the custom plots' numerators and
+    denominators, where ticked entries are added together (Na2O + K2O).
+    The closed box shows the ticked entries joined by ' + ', and
+    currentText()/setCurrentText() use that same ' + ' form.
+
+    `exclusive_item` (e.g. '1 (none)') cannot be combined with other
+    entries: ticking it clears the others and vice versa. At least one entry
+    always stays ticked (the exclusive item if present, else the first).
+    """
+
+    checkedChanged = pyqtSignal()
+    SEPARATOR = ' + '
+    INDICATOR_SIZE = 12
+
+    def __init__(self, exclusive_item=None, parent=None):
+        super().__init__(parent)
+        self._exclusive_item = exclusive_item
+        self._updating = False
+        self._tick_order = []  # ticked entries in the order they were ticked
+        self.setModel(QStandardItemModel(self))
+        self.model().itemChanged.connect(self._on_item_changed)
+        # Toggle on click and keep the list open, so several entries can be
+        # ticked in one go.
+        self.view().viewport().installEventFilter(self)
+        # Draw rows as plain list items (the default combo delegate draws
+        # them as menu entries, with large menu-style check marks that
+        # ignore the indicator size), with compact tick boxes.
+        self.setItemDelegate(QStyledItemDelegate(self))
+        self.view().setStyleSheet(
+            f"QAbstractItemView::indicator {{ width: {self.INDICATOR_SIZE}px; "
+            f"height: {self.INDICATOR_SIZE}px; }}")
+
+    def addItems(self, texts):
+        self._updating = True
+        try:
+            for text in texts:
+                item = QStandardItem(str(text))
+                item.setCheckable(True)
+                item.setEditable(False)
+                item.setCheckState(Qt_Unchecked)
+                self.model().appendRow(item)
+        finally:
+            self._updating = False
+        # Room for the widest entry plus its tick box and spacing.
+        fit_popup_width(self, extra=self.INDICATOR_SIZE + 12)
+        self._ensure_one_checked()
+        self._after_change()
+
+    def addItem(self, text, *args):
+        self.addItems([text])
+
+    def set_items(self, texts):
+        """Replace the entries, keeping ticked entries that are still offered."""
+        previous = self.checked_items()
+        self.blockSignals(True)
+        self.clear()
+        self.addItems(texts)
+        self.blockSignals(False)
+        self.set_checked_items([text for text in previous if text in texts])
+
+    def checked_items(self):
+        """Ticked entries, in the order they were ticked (so a sum reads as
+        entered, e.g. Na2O + K2O)."""
+        model = self.model()
+        checked = [model.item(i).text() for i in range(model.rowCount())
+                   if model.item(i).checkState() == Qt_Checked]
+        self._tick_order = [t for t in self._tick_order if t in checked] + \
+            [t for t in checked if t not in self._tick_order]
+        return list(self._tick_order)
+
+    def set_checked_items(self, texts):
+        self._tick_order = [t for t in dict.fromkeys(texts)]
+        texts = set(texts)
+        self._updating = True
+        try:
+            model = self.model()
+            for i in range(model.rowCount()):
+                item = model.item(i)
+                item.setCheckState(Qt_Checked if item.text() in texts else Qt_Unchecked)
+        finally:
+            self._updating = False
+        self._ensure_one_checked()
+        self._after_change()
+
+    def currentText(self):
+        return self.SEPARATOR.join(self.checked_items())
+
+    def setCurrentText(self, text):
+        self.set_checked_items([part.strip() for part in str(text).split(self.SEPARATOR)])
+
+    def _ensure_one_checked(self):
+        model = self.model()
+        if model.rowCount() == 0 or self.checked_items():
+            return
+        fallback = model.item(0)
+        for i in range(model.rowCount()):
+            if model.item(i).text() == self._exclusive_item:
+                fallback = model.item(i)
+        self._updating = True
+        try:
+            fallback.setCheckState(Qt_Checked)
+        finally:
+            self._updating = False
+
+    def _on_item_changed(self, item):
+        if self._updating:
+            return
+        if item.checkState() == Qt_Checked:
+            self._tick_order = [t for t in self._tick_order if t != item.text()] + [item.text()]
+        self._updating = True
+        try:
+            if item.checkState() == Qt_Checked and self._exclusive_item is not None:
+                model = self.model()
+                for i in range(model.rowCount()):
+                    other = model.item(i)
+                    if other is item:
+                        continue
+                    # The exclusive entry clears everything else; any other
+                    # entry clears the exclusive one.
+                    if item.text() == self._exclusive_item or other.text() == self._exclusive_item:
+                        other.setCheckState(Qt_Unchecked)
+        finally:
+            self._updating = False
+        self._ensure_one_checked()
+        self._after_change()
+
+    def _after_change(self):
+        checked = self.checked_items()
+        self.setToolTip(
+            (self.currentText() + '\n\n' if len(checked) > 1 else '') +
+            'Tick several entries to add them together (e.g. Na2O + K2O).')
+        self.update()
+        self.checkedChanged.emit()
+
+    def eventFilter(self, obj, event):
+        if obj is self.view().viewport() and event.type() == QEvent_MouseButtonRelease:
+            pos = event.position().toPoint() if hasattr(event, 'position') else event.pos()
+            index = self.view().indexAt(pos)
+            if index.isValid():
+                item = self.model().itemFromIndex(index)
+                item.setCheckState(Qt_Unchecked if item.checkState() == Qt_Checked else Qt_Checked)
+            return True  # consume the release so the list stays open
+        return super().eventFilter(obj, event)
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = self.currentText()
+        painter.drawComplexControl(QStyle_CC_ComboBox, option)
+        painter.drawControl(QStyle_CE_ComboBoxLabel, option)
 
 
 class _MarkerSymbolWidget(QWidget):
@@ -1243,6 +1428,84 @@ def get_available_elements(layer, element_list):
         else:
             not_found.append(element)
     return found, not_found
+
+
+# -----------------------------------------------------------------------------
+# Summed terms (custom plots: several ticked numerator/denominator entries)
+# -----------------------------------------------------------------------------
+
+# Multipliers bringing each kind of value to ppm, for sums mixing units.
+_UNIT_TO_PPM = {'ppm': 1.0, 'wt%': 1e4, 'field:ppm': 1.0, 'field:ppb': 1e-3, 'field:pct': 1e4}
+_UNIT_DESCRIPTIONS = {
+    'ppm': 'ppm', 'wt%': 'wt%', 'normalised': 'normalised', 'Mg#': 'Mg#',
+    'field:ppm': 'ppm', 'field:ppb': 'ppb', 'field:pct': 'wt%', 'field:unknown': 'unit unknown',
+}
+
+
+def custom_term_unit(layer, term, norm_values=None):
+    """Unit of the value get_custom_element_value() returns for `term`:
+    'wt%' (oxide), 'ppm' (element), 'normalised' (REE with normalisation
+    on), 'Mg#', or 'field:<ppm|ppb|pct|unknown>' for a plain layer field,
+    whose unit can only be guessed from a suffix in its name."""
+    if term == 'Mg#':
+        return 'Mg#'
+    if norm_values and term in REE_ELEMENTS and norm_values.get(term):
+        return 'normalised'
+    if term in OXIDE_COMPOSITION:
+        return 'wt%'
+    if term in CUSTOM_XY_ELEMENTS:
+        return 'ppm'
+    field = find_element_field(layer, term)
+    hint = _field_unit_hint(field) if field else None
+    return f'field:{hint}' if hint else 'field:unknown'
+
+
+def custom_sum_plan(layer, terms, norm_values=None):
+    """Work out how to add `terms` together.
+
+    Returns (factors, unit_label, problem):
+      factors    {term: multiplier} bringing every term to a common unit,
+      unit_label ' (wt%)' / ' (ppm)' / '' for the axis label of a sum,
+      problem    None, or why the terms' units can't be reconciled (they are
+                 then added as stored).
+    Built-in oxides (wt%) and elements (ppm), and layer fields whose names
+    carry a ppm/ppb/wt% suffix, are converted to ppm when they differ; all
+    oxides stay in wt%.
+    """
+    units = {term: custom_term_unit(layer, term, norm_values) for term in terms}
+    kinds = set(units.values())
+    as_stored = {term: 1.0 for term in terms}
+    if len(terms) <= 1:
+        return as_stored, '', None
+    if len(kinds) == 1:
+        kind = next(iter(kinds))
+        problem = None
+        if kind == 'field:unknown':
+            problem = (f"the unit of {', '.join(terms)} cannot be read from the field names, "
+                       "so they are added as stored")
+        return as_stored, {'wt%': ' (wt%)', 'ppm': ' (ppm)'}.get(kind, ''), problem
+    if all(kind in _UNIT_TO_PPM for kind in kinds):
+        return {term: _UNIT_TO_PPM[units[term]] for term in terms}, ' (ppm)', None
+    return as_stored, '', 'different units that cannot be converted: ' + ', '.join(
+        f'{term} ({_UNIT_DESCRIPTIONS[units[term]]})' for term in terms)
+
+
+def custom_sum_value(feature, layer, terms, factors=None, norm_values=None, transform=None):
+    """Sum of the (unit-converted) values of `terms` for a feature, or None
+    if any term has no value. REE terms are normalised when `norm_values`
+    is given; `transform` (e.g. below-detection-limit substitution) is
+    applied to each raw term value first."""
+    total = 0.0
+    for term in terms:
+        value = get_custom_element_value(
+            feature, layer, term,
+            normalize=(norm_values is not None and term in REE_ELEMENTS), norm_values=norm_values)
+        if transform is not None:
+            value = transform(value)
+        if value is None:
+            return None
+        total += value * (factors or {}).get(term, 1.0)
+    return total
 
 
 def get_custom_element_value(feature, layer, element_name, normalize=False, norm_values=None):
@@ -3282,6 +3545,19 @@ class GeochemistryDockWidget(QDockWidget):
         row.addStretch()
         return row
 
+    def _sum_fields_hint(self, lists='a Num or Denom list'):
+        """Note under tick lists (custom plots' Num/Denom, bubble "Size by")
+        explaining how ticked entries are added together."""
+        hint = QLabel(
+            f"Tick several entries in {lists} to add them together "
+            "(e.g. Na2O + K2O). Built-in elements (ppm) and oxides (wt%) are converted "
+            "to a common unit automatically. For layer fields, only ppm/ppb/wt% suffixes "
+            "in field names can be converted, so make sure fields added together are "
+            "concentrations reported in the same unit.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-style: italic;")
+        return hint
+
     def _create_bubble_size_group(self, prefix, field_items, editable=False):
         """Build a reusable 'Bubble Size (optional)' control group.
 
@@ -3290,6 +3566,11 @@ class GeochemistryDockWidget(QDockWidget):
         self.<prefix>_bubble_max_size_spin and self.<prefix>_bubble_range_label,
         so each plot tab keeps an independent set of bubble-size controls.
         Returns the QGroupBox to add to the tab's layout.
+
+        "Size by" is a tick list: several ticked entries are added together.
+        `editable=True` tabs (whose list used to accept a typed field name)
+        also list the layer's own numeric fields, after the built-in ones
+        (see refresh_bubble_field_lists).
         """
         group = QGroupBox("Bubble Size (optional)")
         grid = QGridLayout(group)
@@ -3299,14 +3580,15 @@ class GeochemistryDockWidget(QDockWidget):
         size_by_label = QLabel("Size by:")
         size_by_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         grid.addWidget(size_by_label, 0, 0)
-        field_combo = QComboBox()
+        field_combo = _CheckableComboBox(exclusive_item='1 (none)')
         field_combo.addItems(field_items)
-        field_combo.setEditable(editable)
         field_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        if editable:
-            field_combo.setToolTip("Pick a field, or type an exact layer field name.")
         grid.addWidget(field_combo, 0, 1, 1, 3)
         setattr(self, f'{prefix}_bubble_field_combo', field_combo)
+        if editable:
+            self._bubble_lists_with_layer_fields = getattr(
+                self, '_bubble_lists_with_layer_fields', {})
+            self._bubble_lists_with_layer_fields[prefix] = list(field_items)
 
         scaling_label = QLabel("Scaling:")
         scaling_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
@@ -3347,13 +3629,89 @@ class GeochemistryDockWidget(QDockWidget):
         grid.addWidget(range_label, 3, 0, 1, 4)
         setattr(self, f'{prefix}_bubble_range_label', range_label)
 
+        grid.addWidget(self._sum_fields_hint('the "Size by" list'), 4, 0, 1, 4)
+
         return group
+
+    def refresh_bubble_field_lists(self):
+        """On tabs whose "Size by" list used to accept a typed field name,
+        offer the layer's numeric fields after the built-in entries."""
+        extra_fields = self.get_numeric_field_names()
+        for prefix, base_items in getattr(self, '_bubble_lists_with_layer_fields', {}).items():
+            self._repopulate_combo(
+                getattr(self, f'{prefix}_bubble_field_combo'),
+                base_items + [f for f in extra_fields if f not in base_items])
+
+    def _bubble_terms(self, prefix):
+        """The ticked "Size by" entries of a tab ([] when bubble sizing is off)."""
+        terms = getattr(self, f'{prefix}_bubble_field_combo').checked_items()
+        return [] if terms in ([], ['1 (none)']) else terms
+
+    def _bubble_value(self, feature, layer, prefix, transform=None, raw_fields=False):
+        """Bubble-size value of a feature: the ticked "Size by" entries added
+        together, converted to a common unit (see custom_sum_plan).
+        `raw_fields=True` reads the entries as plain layer fields (Petrophysics)."""
+        terms = self._bubble_terms(prefix)
+        if not terms:
+            return None
+        factors, _unit, _problem = self._bubble_plan(layer, prefix)
+        if not raw_fields:
+            return custom_sum_value(feature, layer, terms, factors, transform=transform)
+        total = 0.0
+        for term in terms:
+            try:
+                value = feature[term]
+                value = float(value) if value is not None and value != NULL else None
+            except (KeyError, ValueError, TypeError):
+                value = None
+            if value is None:
+                return None
+            total += value * factors.get(term, 1.0)
+        return total
+
+    def _bubble_plan(self, layer, prefix):
+        """custom_sum_plan() for a tab's ticked "Size by" entries (cached per plot)."""
+        terms = tuple(self._bubble_terms(prefix))
+        cache = getattr(self, '_bubble_plan_cache', None)
+        if cache is None:
+            cache = self._bubble_plan_cache = {}
+        key = (layer.id(), prefix, terms)
+        if key not in cache:
+            cache[key] = custom_sum_plan(layer, list(terms))
+        return cache[key]
+
+    def _bubble_label(self, layer, prefix):
+        """Legend title for the bubble sizes: the field (with its unit), or
+        the sum of ticked entries with their common unit."""
+        terms = self._bubble_terms(prefix)
+        if len(terms) == 1:
+            return self._field_display_label(terms[0])
+        return ' + '.join(terms) + self._bubble_plan(layer, prefix)[1]
+
+    def _confirm_bubble_units(self, layer, prefix):
+        """Warn, before plotting, when the ticked "Size by" entries can't be
+        brought to a common unit. Returns False if the user cancels."""
+        if prefix is None or len(self._bubble_terms(prefix)) < 2:
+            return True
+        _factors, _unit, problem = self._bubble_plan(layer, prefix)
+        if not problem:
+            return True
+        reply = QMessageBox.warning(
+            self, "Adding fields with different units",
+            "Some ticked \"Size by\" entries are added together although their units could "
+            f"not be brought to a common unit:\n\n{' + '.join(self._bubble_terms(prefix))}: "
+            f"{problem}\n\nMake sure that fields added together are concentrations reported "
+            "in the same unit. Plot anyway?",
+            QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+        return reply == QMessageBox_Ok
 
     def _read_bubble_controls(self, prefix):
         """Return (size_field, bubble_active, min_size, max_size, method) for a
-        tab's bubble-size controls created by _create_bubble_size_group()."""
+        tab's bubble-size controls created by _create_bubble_size_group().
+        `size_field` is the ticked entries joined by ' + ' (for labels); use
+        _bubble_value() to read a feature's value."""
         size_field = getattr(self, f'{prefix}_bubble_field_combo').currentText().strip()
-        bubble_active = bool(size_field) and size_field != '1 (none)'
+        bubble_active = bool(self._bubble_terms(prefix))
         min_size = getattr(self, f'{prefix}_bubble_min_size_spin').value()
         max_size = getattr(self, f'{prefix}_bubble_max_size_spin').value()
         method = BUBBLE_SCALE_METHODS.get(getattr(self, f'{prefix}_bubble_scale_combo').currentText(), 'linear')
@@ -3532,14 +3890,15 @@ class GeochemistryDockWidget(QDockWidget):
         x_num_label = QLabel("Num:")
         x_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         x_grid.addWidget(x_num_label, 0, 0)
-        self.x_num_combo = QComboBox()
+        # Tickable lists: several ticked entries are added together.
+        self.x_num_combo = _CheckableComboBox()
         self.x_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
         self.x_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
         x_grid.addWidget(self.x_num_combo, 0, 1)
         x_denom_label = QLabel("Denom:")
         x_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         x_grid.addWidget(x_denom_label, 0, 2)
-        self.x_denom_combo = QComboBox()
+        self.x_denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
         self.x_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
         self.x_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         x_grid.addWidget(self.x_denom_combo, 0, 3)
@@ -3553,18 +3912,19 @@ class GeochemistryDockWidget(QDockWidget):
         y_num_label = QLabel("Num:")
         y_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         y_grid.addWidget(y_num_label, 0, 0)
-        self.y_num_combo = QComboBox()
+        self.y_num_combo = _CheckableComboBox()
         self.y_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
         self.y_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
         y_grid.addWidget(self.y_num_combo, 0, 1)
         y_denom_label = QLabel("Denom:")
         y_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         y_grid.addWidget(y_denom_label, 0, 2)
-        self.y_denom_combo = QComboBox()
+        self.y_denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
         self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
         self.y_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         y_grid.addWidget(self.y_denom_combo, 0, 3)
         self._group_section(custom_xy_layout, y_group)
+        custom_xy_layout.addWidget(self._sum_fields_hint())
 
         # Show all numeric fields checkbox
         custom_fields_layout = self._loose_section(custom_xy_layout, "Fields")
@@ -3700,20 +4060,21 @@ class GeochemistryDockWidget(QDockWidget):
             num_label = QLabel("Num:")
             num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
             grid.addWidget(num_label, 0, 0)
-            num_combo = QComboBox()
+            num_combo = _CheckableComboBox()
             num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
             num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
             grid.addWidget(num_combo, 0, 1)
             denom_label = QLabel("Denom:")
             denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
             grid.addWidget(denom_label, 0, 2)
-            denom_combo = QComboBox()
+            denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
             denom_combo.addItems(CUSTOM_XY_ELEMENTS)
             denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
             grid.addWidget(denom_combo, 0, 3)
             setattr(self, num_attr, num_combo)
             setattr(self, denom_attr, denom_combo)
             self._group_section(custom_tern_layout, grp)
+        custom_tern_layout.addWidget(self._sum_fields_hint())
 
         tern_options_layout = self._loose_section(custom_tern_layout, "Fields and Display")
         self.tern_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
@@ -4069,6 +4430,7 @@ class GeochemistryDockWidget(QDockWidget):
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
         self.refresh_petrophysics_combos()
+        self.refresh_bubble_field_lists()
 
         
     def on_layer_changed_old(self, index):
@@ -4175,8 +4537,29 @@ class GeochemistryDockWidget(QDockWidget):
 
     def _bubble_value_expression(self, layer, size_field):
         """QGIS expression computing the value bubble sizing reads for
-        `size_field` (as get_custom_element_value() does: the same source
-        field(s) and ppm/ppb/pct and element/oxide conversions), or None."""
+        `size_field`: one entry, or several joined by ' + ' that are added
+        together with the same unit conversion as the plot (custom_sum_plan).
+        None if an entry can't be expressed."""
+        terms = [t.strip() for t in size_field.split(_CheckableComboBox.SEPARATOR)] \
+            if size_field else []
+        if len(terms) <= 1:
+            return self._bubble_term_expression(layer, size_field)
+        factors, _unit, _problem = custom_sum_plan(layer, terms)
+        parts = []
+        for term in terms:
+            expression = self._bubble_term_expression(layer, term)
+            if expression is None:
+                return None
+            factor = factors.get(term, 1.0)
+            parts.append(expression if factor == 1.0
+                         else f'({expression} * {symbology_bridge.expr_number(factor)})')
+        # '+' gives NULL when any entry is NULL, as the plot skips such sums.
+        return f"({' + '.join(parts)})"
+
+    def _bubble_term_expression(self, layer, size_field):
+        """QGIS expression computing the value bubble sizing reads for a
+        single `size_field` (as get_custom_element_value() does: the same
+        source field(s) and ppm/ppb/pct and element/oxide conversions), or None."""
         from qgis.core import QgsExpression
         q = QgsExpression.quotedColumnRef
         num = symbology_bridge.expr_number
@@ -4245,13 +4628,16 @@ class GeochemistryDockWidget(QDockWidget):
             return None
 
         field_combo = getattr(self, f'{prefix}_bubble_field_combo')
-        index = field_combo.findText(settings['size_field'])
-        if index < 0:
-            # A layer field not offered on this tab (e.g. only elements are
-            # listed): add it so it can be selected.
-            field_combo.addItem(settings['size_field'])
-            index = field_combo.findText(settings['size_field'])
-        field_combo.setCurrentIndex(index)
+        # One entry, or several joined by ' + ' (a sum exported by this plugin).
+        terms = [t.strip() for t in settings['size_field'].split(_CheckableComboBox.SEPARATOR)]
+        offered = [field_combo.itemText(i) for i in range(field_combo.count())]
+        for term in terms:
+            if term not in offered:
+                # A layer field not offered on this tab (e.g. only elements
+                # are listed): add it so it can be ticked.
+                field_combo.addItem(term)
+        field_combo.set_checked_items(terms)
+        fit_popup_width(field_combo, extra=field_combo.INDICATOR_SIZE + 12)
         if settings.get('method'):
             labels = {method: label for label, method in BUBBLE_SCALE_METHODS.items()}
             getattr(self, f'{prefix}_bubble_scale_combo').setCurrentText(labels[settings['method']])
@@ -4548,6 +4934,12 @@ class GeochemistryDockWidget(QDockWidget):
 
         plt.ion()
 
+        # Several ticked "Size by" entries are added together: warn first
+        # if their units can't be reconciled.
+        self._bubble_plan_cache = {}
+        if not self._confirm_bubble_units(layer, self._tab_bubble_prefix()):
+            return
+
         # Record which layer fields each element/oxide is read from, and
         # report them in the QGIS log so the field recognition can be checked.
         global _FIELD_USAGE
@@ -4581,7 +4973,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('spider')
-        size_data = [get_custom_element_value(feature, layer, size_field) if bubble_active else None
+        size_data = [self._bubble_value(feature, layer, 'spider') if bubble_active else None
                     for feature in features]
         bubble_vmin = bubble_vmax = None
         if bubble_active:
@@ -4725,7 +5117,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
@@ -4848,7 +5240,7 @@ class GeochemistryDockWidget(QDockWidget):
         for feature in features:
             coords = diagram_class.calculate_coordinates(feature, layer)
             data.append(coords)
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
 
@@ -4903,7 +5295,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), ax.get_legend())
+                self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -4934,7 +5326,7 @@ class GeochemistryDockWidget(QDockWidget):
         for feature in features:
             coords = minerals_class.calculate_coordinates(feature, layer)
             data.append(coords)
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
         if valid_count == 0:
@@ -4984,7 +5376,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), ax.get_legend())
+                self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -5052,14 +5444,7 @@ class GeochemistryDockWidget(QDockWidget):
                 yv = None
             x_data.append(xv)
             y_data.append(yv)
-            if bubble_active:
-                try:
-                    sv = feature[size_field]
-                    sv = float(sv) if sv is not None and sv != NULL else None
-                except (ValueError, TypeError):
-                    sv = None
-            else:
-                sv = None
+            sv = self._bubble_value(feature, layer, 'petro', raw_fields=True) if bubble_active else None
             size_data.append(sv)
             if xv is not None and yv is not None:
                 valid_count += 1
@@ -5146,7 +5531,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
@@ -5202,10 +5587,10 @@ class GeochemistryDockWidget(QDockWidget):
             return
         features = [layer.getFeature(fid) for fid in selected_fids]
 
-        fields = [f for f in dict.fromkeys([
-            self.x_num_combo.currentText(), self.x_denom_combo.currentText(),
-            self.y_num_combo.currentText(), self.y_denom_combo.currentText(),
-        ]) if f not in ('1 (none)', 'Mg#')]
+        fields = [f for f in dict.fromkeys(
+            self.x_num_combo.checked_items() + self.x_denom_combo.checked_items() +
+            self.y_num_combo.checked_items() + self.y_denom_combo.checked_items()
+        ) if f not in ('1 (none)', 'Mg#')]
 
         if not fields:
             self.custom_bdl_review_label.setText("No fields selected to review.")
@@ -5240,11 +5625,15 @@ class GeochemistryDockWidget(QDockWidget):
             plt.show()
 
     def generate_custom_xy_plot(self, layer, features, sample_names):
-        """Generate custom XY plot."""
-        x_num = self.x_num_combo.currentText()
-        x_denom = self.x_denom_combo.currentText()
-        y_num = self.y_num_combo.currentText()
-        y_denom = self.y_denom_combo.currentText()
+        """Generate custom XY plot.
+
+        Each numerator/denominator is a list of ticked entries, added
+        together (e.g. Na2O + K2O); see custom_sum_plan() for units.
+        """
+        x_num = self.x_num_combo.checked_items()
+        x_denom = self.x_denom_combo.checked_items()
+        y_num = self.y_num_combo.checked_items()
+        y_denom = self.y_denom_combo.checked_items()
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('custom')
 
@@ -5258,15 +5647,27 @@ class GeochemistryDockWidget(QDockWidget):
                 norm_values = None
                 norm_name = ""
         
-        def build_label(num, denom, norm_values):
-            num_is_ree = num in REE_ELEMENTS
-            denom_is_ree = denom in REE_ELEMENTS if denom != '1 (none)' else False
-            
-            norm_suffix = ""
-            if norm_values:
-                if num_is_ree or denom_is_ree:
-                    norm_suffix = "ₙ"
-            
+        # How each (possibly multi-entry) sum is added up, and whether its
+        # entries' units could not be reconciled.
+        sum_factors, sum_units, unit_problems = {}, {}, []
+        for key, terms in (('x_num', x_num), ('x_denom', x_denom),
+                           ('y_num', y_num), ('y_denom', y_denom)):
+            sum_factors[key], sum_units[key], problem = custom_sum_plan(layer, terms, norm_values)
+            if problem:
+                unit_problems.append(f"{' + '.join(terms)}: {problem}")
+
+        def build_label(num_terms, denom_terms, num_unit, norm_values):
+            none_denom = denom_terms == ['1 (none)']
+            norm_on = bool(norm_values) and any(
+                t in REE_ELEMENTS for t in num_terms + ([] if none_denom else denom_terms))
+
+            def term_str(term):
+                return f"{term}ₙ" if norm_on and term in REE_ELEMENTS else term
+
+            def sum_str(terms, bracket):
+                text = ' + '.join(term_str(t) for t in terms)
+                return f"({text})" if bracket and len(terms) > 1 else text
+
             def get_unit(elem):
                 # A field picked via "show all numeric fields" isn't a
                 # recognised symbol - its raw name already carries its own
@@ -5278,23 +5679,29 @@ class GeochemistryDockWidget(QDockWidget):
                 if elem in OXIDE_COMPOSITION:
                     return ' (wt%)'
                 return ' (ppm)'
-            
-            if denom == '1 (none)':
-                unit = get_unit(num)
-                if norm_suffix and num_is_ree:
-                    return f"{num}{norm_suffix}{unit}"
-                return f"{num}{unit}"
-            else:
-                num_str = f"{num}{norm_suffix}" if norm_suffix and num_is_ree else num
-                denom_str = f"{denom}{norm_suffix}" if norm_suffix and denom_is_ree else denom
-                return f"{num_str} / {denom_str}"
-        
-        x_label = build_label(x_num, x_denom, norm_values)
-        y_label = build_label(y_num, y_denom, norm_values)
-        
+
+            if none_denom:
+                unit = get_unit(num_terms[0]) if len(num_terms) == 1 else num_unit
+                return f"{sum_str(num_terms, False)}{unit}"
+            return f"{sum_str(num_terms, True)} / {sum_str(denom_terms, True)}"
+
+        x_label = build_label(x_num, x_denom, sum_units['x_num'], norm_values)
+        y_label = build_label(y_num, y_denom, sum_units['y_num'], norm_values)
+
+        if unit_problems:
+            reply = QMessageBox.warning(
+                self, "Adding fields with different units",
+                "Some ticked entries are added together although their units could not be "
+                "brought to a common unit:\n\n" + "\n".join(unit_problems) +
+                "\n\nMake sure that fields added together are concentrations reported in the "
+                "same unit. Plot anyway?",
+                QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+            if reply != QMessageBox_Ok:
+                return
+
         # Check required elements
         elements_needed = set()
-        for elem in [x_num, x_denom, y_num, y_denom] + ([size_field] if bubble_active else []):
+        for elem in x_num + x_denom + y_num + y_denom + self._bubble_terms('custom'):
             if elem != '1 (none)':
                 if elem == 'Mg#':
                     elements_needed.add('MgO')
@@ -5322,24 +5729,13 @@ class GeochemistryDockWidget(QDockWidget):
             # Negative values (commonly used to code "below detection
             # limit" in exploration datasets) are substituted per the Data
             # Preprocessing tab if enabled, otherwise passed through as
-            # literal negative numbers rather than being discarded.
-            x_num_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, x_num,
-                normalize=(norm_values is not None and x_num in REE_ELEMENTS),
-                norm_values=norm_values))
-            x_denom_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, x_denom,
-                normalize=(norm_values is not None and x_denom in REE_ELEMENTS),
-                norm_values=norm_values))
-
-            y_num_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, y_num,
-                normalize=(norm_values is not None and y_num in REE_ELEMENTS),
-                norm_values=norm_values))
-            y_denom_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, y_denom,
-                normalize=(norm_values is not None and y_denom in REE_ELEMENTS),
-                norm_values=norm_values))
+            # literal negative numbers rather than being discarded. Several
+            # ticked entries are added together (after unit conversion).
+            x_num_val, x_denom_val, y_num_val, y_denom_val = (
+                custom_sum_value(feature, layer, terms, sum_factors[key], norm_values,
+                                 transform=self._apply_bdl_substitution)
+                for key, terms in (('x_num', x_num), ('x_denom', x_denom),
+                                   ('y_num', y_num), ('y_denom', y_denom)))
 
             x_val = None
             y_val = None
@@ -5352,8 +5748,9 @@ class GeochemistryDockWidget(QDockWidget):
 
             x_data.append(x_val)
             y_data.append(y_val)
-            size_val = self._apply_bdl_substitution(
-                get_custom_element_value(feature, layer, size_field)) if bubble_active else None
+            size_val = self._bubble_value(
+                feature, layer, 'custom',
+                transform=self._apply_bdl_substitution) if bubble_active else None
             size_data.append(size_val)
 
             if x_val is not None and y_val is not None:
@@ -5457,7 +5854,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                build_label(size_field, '1 (none)', None), category_legend_obj)
+                self._bubble_label(layer, 'custom'), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
@@ -7319,46 +7716,16 @@ class GeochemistryDockWidget(QDockWidget):
         """Refresh custom XY combo boxes based on the show-all-fields checkbox."""
         if self.custom_show_all_fields.isChecked():
             field_names = self.get_numeric_field_names()
-            none_option = ['1 (none)']
-            num_items = field_names          # numerator: no '1 (none)'
-            denom_items = none_option + field_names  # denominator: '1 (none)' at top
-
-            for combo in [self.x_num_combo, self.y_num_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(num_items)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
-
-            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(denom_items)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
+            num_items = field_names                   # numerator: no '1 (none)'
+            denom_items = ['1 (none)'] + field_names  # denominator: '1 (none)' at top
         else:
             # Restore predefined lists
-            for combo in [self.x_num_combo, self.y_num_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
-
-            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(CUSTOM_XY_ELEMENTS)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
+            num_items = CUSTOM_XY_ELEMENTS[1:]
+            denom_items = CUSTOM_XY_ELEMENTS
+        for combo in [self.x_num_combo, self.y_num_combo]:
+            self._repopulate_combo(combo, num_items)
+        for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
+            self._repopulate_combo(combo, denom_items)
 
     def refresh_custom_ternary_combos(self):
         """Refresh ternary apex combo boxes based on the show-all-fields checkbox."""
@@ -7372,21 +7739,26 @@ class GeochemistryDockWidget(QDockWidget):
             num_items   = CUSTOM_XY_ELEMENTS[1:]
             denom_items = CUSTOM_XY_ELEMENTS
         for combo in num_combos:
-            prev = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(num_items)
-            idx = combo.findText(prev)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
+            self._repopulate_combo(combo, num_items)
         for combo in denom_combos + [self.tern_bubble_field_combo]:
-            prev = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(denom_items)
-            idx = combo.findText(prev)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
+            self._repopulate_combo(combo, denom_items)
+
+    @staticmethod
+    def _repopulate_combo(combo, items):
+        """Replace a combo's entries, keeping the current selection (all
+        ticked entries for a tickable list) where still offered, else the
+        first entry."""
+        if isinstance(combo, _CheckableComboBox):
+            combo.set_items(items)
+            return
+        prev = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(items)
+        idx = combo.findText(prev)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+        fit_popup_width(combo)
 
     def refresh_petrophysics_combos(self):
         """Populate petrophysics field dropdowns with all fields from the current layer."""
@@ -7402,27 +7774,28 @@ class GeochemistryDockWidget(QDockWidget):
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
 
-        prev = self.petro_bubble_field_combo.currentText()
-        self.petro_bubble_field_combo.blockSignals(True)
-        self.petro_bubble_field_combo.clear()
-        self.petro_bubble_field_combo.addItems(['1 (none)'] + field_names)
-        idx = self.petro_bubble_field_combo.findText(prev)
-        self.petro_bubble_field_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.petro_bubble_field_combo.blockSignals(False)
+        self._repopulate_combo(self.petro_bubble_field_combo, ['1 (none)'] + field_names)
 
     def generate_custom_ternary_plot(self, layer, features, sample_names):
-        """Generate a custom ternary (triangle) diagram."""
-        def apex_label(num, denom):
-            if denom == '1 (none)':
-                return num
-            return f"{num} / {denom}"
+        """Generate a custom ternary (triangle) diagram.
 
-        a_num   = self.tern_a_num_combo.currentText()
-        a_denom = self.tern_a_denom_combo.currentText()
-        b_num   = self.tern_b_num_combo.currentText()
-        b_denom = self.tern_b_denom_combo.currentText()
-        c_num   = self.tern_c_num_combo.currentText()
-        c_denom = self.tern_c_denom_combo.currentText()
+        Each apex numerator/denominator is a list of ticked entries, added
+        together (e.g. Na2O + K2O); see custom_sum_plan() for units.
+        """
+        def apex_label(num, denom):
+            def sum_str(terms, bracket):
+                text = ' + '.join(terms)
+                return f"({text})" if bracket and len(terms) > 1 else text
+            if denom == ['1 (none)']:
+                return sum_str(num, False)
+            return f"{sum_str(num, True)} / {sum_str(denom, True)}"
+
+        a_num   = self.tern_a_num_combo.checked_items()
+        a_denom = self.tern_a_denom_combo.checked_items()
+        b_num   = self.tern_b_num_combo.checked_items()
+        b_denom = self.tern_b_denom_combo.checked_items()
+        c_num   = self.tern_c_num_combo.checked_items()
+        c_denom = self.tern_c_denom_combo.checked_items()
 
         a_label = apex_label(a_num, a_denom)
         b_label = apex_label(b_num, b_denom)
@@ -7431,9 +7804,28 @@ class GeochemistryDockWidget(QDockWidget):
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('tern')
 
+        # How each (possibly multi-entry) sum is added up.
+        sum_factors, unit_problems = {}, []
+        for terms in (a_num, a_denom, b_num, b_denom, c_num, c_denom):
+            factors, _unit, problem = custom_sum_plan(layer, terms)
+            sum_factors[tuple(terms)] = factors
+            if problem:
+                unit_problems.append(f"{' + '.join(terms)}: {problem}")
+        if unit_problems:
+            reply = QMessageBox.warning(
+                self, "Adding fields with different units",
+                "Some ticked entries are added together although their units could not be "
+                "brought to a common unit:\n\n" + "\n".join(unit_problems) +
+                "\n\nMake sure that fields added together are concentrations reported in the "
+                "same unit. Plot anyway?",
+                QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+            if reply != QMessageBox_Ok:
+                return
+
         # Check that all required fields exist in the layer
         elements_needed = set()
-        for elem in [a_num, a_denom, b_num, b_denom, c_num, c_denom] + ([size_field] if bubble_active else []):
+        for elem in a_num + a_denom + b_num + b_denom + c_num + c_denom + \
+                self._bubble_terms('tern'):
             if elem != '1 (none)':
                 elements_needed.add(elem)
         missing = [e for e in sorted(elements_needed) if find_element_field(layer, e) is None]
@@ -7451,12 +7843,12 @@ class GeochemistryDockWidget(QDockWidget):
 
         for feature, name in zip(features, sample_names):
             def val(num, denom):
-                n = get_custom_element_value(feature, layer, num)
+                n = custom_sum_value(feature, layer, num, sum_factors[tuple(num)])
                 if num == denom:
                     return 1.0 if n is not None and n > 0 else None
-                if denom == '1 (none)':
+                if denom == ['1 (none)']:
                     return n if (n is not None and n > 0) else None
-                d = get_custom_element_value(feature, layer, denom)
+                d = custom_sum_value(feature, layer, denom, sum_factors[tuple(denom)])
                 if n is None or d is None or d == 0:
                     return None
                 return n / d
@@ -7472,7 +7864,7 @@ class GeochemistryDockWidget(QDockWidget):
             valid_features.append(feature)
             valid_names.append(name)
             fid_list.append(feature.id())
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         if not raw_data:
             QMessageBox.warning(self, "Warning", "No valid data points to plot.")
@@ -7545,7 +7937,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         plt.show()
