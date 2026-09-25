@@ -20,6 +20,8 @@ from qgis.PyQt.QtWidgets import (
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
 from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer
 
+from . import symbology_bridge
+
 try:
     import matplotlib
     import matplotlib.colors as mcolors
@@ -150,6 +152,13 @@ STYLE_MARKER_OPTIONS = [
     ('Triangle down', 'v'), ('Diamond', 'D'), ('Plus', 'P'),
     ('Cross', 'X'), ('Star', '*'), ('Triangle left', '<'),
     ('Triangle right', '>'),
+]
+
+# Further shapes offered by the style dialog but not used by the default
+# marker cycle - these match QGIS pentagon/hexagon/octagon simple markers
+# imported with "Use layer symbology".
+STYLE_MARKER_OPTIONS_ALL = STYLE_MARKER_OPTIONS + [
+    ('Pentagon', 'p'), ('Hexagon', 'h'), ('Octagon', '8'),
 ]
 
 
@@ -431,6 +440,15 @@ class _MarkerSymbolWidget(QWidget):
             painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
             painter.drawLine(QPointF(cx - r * 0.72, cy - r * 0.72), QPointF(cx + r * 0.72, cy + r * 0.72))
             painter.drawLine(QPointF(cx - r * 0.72, cy + r * 0.72), QPointF(cx + r * 0.72, cy - r * 0.72))
+        elif m in ('p', 'h', '8'):
+            sides = {'p': 5, 'h': 6, '8': 8}[m]
+            # Pentagon and hexagon point up (as in matplotlib); the octagon
+            # has flat top/bottom edges.
+            offset = -math.pi / 2 if m != '8' else math.pi / 8
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx + r * math.cos(offset + 2 * math.pi * k / sides),
+                        cy + r * math.sin(offset + 2 * math.pi * k / sides))
+                for k in range(sides)]))
         else:
             painter.drawEllipse(QPointF(cx, cy), r, r)
 
@@ -1267,10 +1285,21 @@ def ternary_to_cartesian(a, b, c):
     return x, y
 
 
+def subscript_formula(text, bold=False):
+    """Return text with chemical formula digits (e.g. the 2 in TiO2) written as
+    matplotlib mathtext subscripts. Only digits directly following a letter or
+    ')' are converted, so 'Zr/4', 'Nb×2' and '(n=12)' are left untouched.
+    Unicode subscript characters (₂) are avoided because the default plot font
+    has no glyph for them and renders a square instead."""
+    fmt = r'$_{\mathbf{%s}}$' if bold else r'$_{%s}$'
+    return re.sub(r'(?<=[A-Za-z)])(\d+)', lambda m: fmt % m.group(1), text)
+
+
 def plot_ternary_axes(ax, labels):
     """Draw ternary diagram axes with labels at apexes."""
     vertices = np.array([[0, 0], [1, 0], [0.5, np.sqrt(3)/2], [0, 0]])
     ax.plot(vertices[:, 0], vertices[:, 1], 'k-', linewidth=1.5)
+    labels = [subscript_formula(label, bold=True) for label in labels]
     ax.text(0, -0.05, labels[0], ha='center', va='top', fontsize=11, fontweight='bold')
     ax.text(1, -0.05, labels[1], ha='center', va='top', fontsize=11, fontweight='bold')
     ax.text(0.5, np.sqrt(3)/2 + 0.05, labels[2], ha='center', va='bottom', fontsize=11, fontweight='bold')
@@ -1781,7 +1810,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti (both in ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
         ax.set_ylim(0.001, 1)
         
@@ -1796,7 +1825,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
 class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
     """Nb/Y vs Zr/TiO2 diagram (Winchester & Floyd 1977), Zr and TiO2 both in ppm."""
 
-    name = "Zr/TiO₂ vs Nb/Y"
+    name = "Zr/TiO2 vs Nb/Y"
     reference = "Winchester & Floyd (1977)"
     field_name = "WF1977_NbY"
 
@@ -1916,9 +1945,9 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
 
         ax.set_xlabel('Nb/Y', fontsize=12)
-        ax.set_ylabel('Zr/TiO₂ (both in ppm)', fontsize=12)
+        ax.set_ylabel(subscript_formula('Zr/TiO2 (both in ppm)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
         ax.set_ylim(0.001, 1)
         
@@ -2013,7 +2042,7 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
         
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
             n_categories = len(category_colors)
@@ -2179,7 +2208,7 @@ class Hasterok2018_Sedimentary(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
 
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
 
         if show_category_legend and category_colors and len(category_colors) > 0:
             n_categories = len(category_colors)
@@ -2255,7 +2284,7 @@ class Pearce1984_YNb:
         ax.set_xlabel('Y (ppm)', fontsize=12)
         ax.set_ylabel('Nb (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 1000)
         ax.set_ylim(1, 2000)
         
@@ -2337,7 +2366,7 @@ class Pearce1984_YNbRb:
         ax.set_xlabel('Y + Nb (ppm)', fontsize=12)
         ax.set_ylabel('Rb (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 10000)
         ax.set_ylim(1, 10000)
         
@@ -2413,7 +2442,7 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0, 110)
         ax.set_ylim(0, 9000)
 
@@ -2588,10 +2617,10 @@ class Wilson1989_TAS(PolygonDiagramMixin):
                 [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.)  
         ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
         ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')    
-        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
-        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_xlabel(subscript_formula('SiO2 (wt%)'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Na2O + K2O (wt%)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(30, 80)
         ax.set_ylim(0, 17)
         
@@ -2728,10 +2757,10 @@ class Cox1979_TAS(PolygonDiagramMixin):
                                           show_category_legend, category_colors,
                                           sample_sizes=sample_sizes)
         
-        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
-        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_xlabel(subscript_formula('SiO2 (wt%)'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Na2O + K2O (wt%)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(40, 80)
         ax.set_ylim(0, 17)
         
@@ -2944,7 +2973,7 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
         ax.set_xlabel('Σ(La+Ce+Pr+Nd) (ppm)', fontsize=12)
         ax.set_ylabel('Sr/Y', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.1, 1e6)
         ax.set_ylim(0.001, 1000)
 
@@ -3252,6 +3281,11 @@ class GeochemistryDockWidget(QDockWidget):
         range_label.setText(
             f"Data range: {vmin:.4g} – {vmax:.4g}  →  size {min_size:.0f} – {max_size:.0f} pt² ({method_label})")
         range_label.setStyleSheet("color: black;")
+        # Remembered for the plot's "Apply to layer…" (data-defined size).
+        self._last_bubble_info = {
+            'prefix': prefix, 'size_field': self._read_bubble_controls(prefix)[0],
+            'vmin': vmin, 'vmax': vmax, 'min_size': min_size, 'max_size': max_size, 'method': method,
+        }
         return vmin, vmax, True
 
     def _resize_tab_widget_to_current(self, index, tab_widget=None):
@@ -3294,6 +3328,15 @@ class GeochemistryDockWidget(QDockWidget):
         self.id_field_combo = QComboBox()
         self.id_field_combo.currentIndexChanged.connect(self.on_id_field_changed)
         layer_layout.addLayout(self._label_row("Category:", self.id_field_combo))
+
+        # Opt-in: take category colours/markers/sizes/labels from the layer's
+        # Categorized renderer. Enabled only when that renderer classifies
+        # on the selected Category field (see _update_layer_symbology_option).
+        self.use_layer_symbology = QCheckBox("Use layer symbology")
+        self.use_layer_symbology.setChecked(False)
+        self.use_layer_symbology.setEnabled(False)
+        layer_layout.addWidget(self.use_layer_symbology)
+        self._symbology_watched_layer = None
 
         self.label_field_combo = QComboBox()
         self.discrim_label = QCheckBox()
@@ -3780,6 +3823,13 @@ class GeochemistryDockWidget(QDockWidget):
         self.tab_widget.currentChanged.connect(self._schedule_splitter_fit)
         custom_xy_subtabs.currentChanged.connect(self._schedule_splitter_fit)
 
+        # "Use layer symbology" also brings in any data-defined symbol size
+        # as the current tab's Bubble Size settings.
+        self.use_layer_symbology.toggled.connect(
+            lambda checked: checked and self._apply_layer_bubble_settings())
+        self.tab_widget.currentChanged.connect(
+            lambda _index: self.use_layer_symbology.isChecked() and self._apply_layer_bubble_settings())
+
         # Action buttons
         button_layout = QHBoxLayout()
         plot_btn = QPushButton("Generate Plot")
@@ -3918,6 +3968,8 @@ class GeochemistryDockWidget(QDockWidget):
 
         self.id_field_combo.setCurrentIndex(best_index)
         self.update_feature_list(layer)
+        self._watch_layer_renderer(layer)
+        self._update_layer_symbology_option()
 
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
@@ -3965,6 +4017,204 @@ class GeochemistryDockWidget(QDockWidget):
         layer = QgsProject.instance().mapLayer(layer_id)
         if layer:
             self.update_feature_list(layer)
+        self._update_layer_symbology_option()
+
+    # ------------------------------------------------------------------
+    # Layer symbology bridge (map <-> plot category styles)
+    # ------------------------------------------------------------------
+
+    def _current_category_field(self):
+        """The selected Category field name, or None for "no category"."""
+        id_field = self.id_field_combo.currentText()
+        if not id_field or id_field == NO_CATEGORY_OPTION:
+            return None
+        return id_field
+
+    def _watch_layer_renderer(self, layer):
+        """Re-check the "Use layer symbology" option whenever the selected
+        layer's renderer changes (e.g. the user re-classifies it)."""
+        previous = self._symbology_watched_layer
+        if previous is layer:
+            return
+        if previous is not None:
+            try:
+                previous.rendererChanged.disconnect(self._update_layer_symbology_option)
+            except (TypeError, RuntimeError):  # already disconnected or layer deleted
+                pass
+        self._symbology_watched_layer = layer
+        if layer is not None and hasattr(layer, 'rendererChanged'):
+            layer.rendererChanged.connect(self._update_layer_symbology_option)
+
+    def _update_layer_symbology_option(self):
+        """Enable "Use layer symbology" only when the layer's renderer is
+        Categorized on the selected Category field; the tooltip says why not."""
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData()) \
+            if self.layer_combo.currentData() else None
+        usable, reason = symbology_bridge.layer_symbology_status(layer, self._current_category_field())
+        self.use_layer_symbology.setEnabled(usable)
+        self.use_layer_symbology.setToolTip(reason)
+
+    def _layer_symbology_styles(self):
+        """Imported {category: partial style} for the next plot, or {} when
+        the option is off or not applicable."""
+        if not (self.use_layer_symbology.isEnabled() and self.use_layer_symbology.isChecked()):
+            return {}
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        return symbology_bridge.read_layer_category_styles(layer, self._current_category_field())
+
+    BUBBLE_TAB_PREFIXES = ('spider', 'discrim', 'custom', 'tern', 'minerals', 'petro')
+
+    def _tab_bubble_prefix(self, index=None):
+        """Bubble-size control prefix of a plot tab (current tab by default)."""
+        index = self.tab_widget.currentIndex() if index is None else index
+        return self.BUBBLE_TAB_PREFIXES[index] if 0 <= index < len(self.BUBBLE_TAB_PREFIXES) else None
+
+    def _bubble_value_expression(self, layer, size_field):
+        """QGIS expression computing the value bubble sizing reads for
+        `size_field` (as get_custom_element_value() does: the same source
+        field(s) and ppm/ppb/pct and element/oxide conversions), or None."""
+        from qgis.core import QgsExpression
+        q = QgsExpression.quotedColumnRef
+        num = symbology_bridge.expr_number
+
+        def term(field, factor):
+            return q(field) if factor == 1.0 else f'({q(field)} * {num(factor)})'
+
+        if not size_field or size_field == '1 (none)':
+            return None
+        if size_field == 'Mg#':
+            mgo = find_element_field(layer, 'MgO')
+            feo = find_element_field(layer, 'FeO') or find_element_field(layer, 'FeOT')
+            fe2o3 = None if feo else find_element_field(layer, 'Fe2O3')
+            feo_expr = q(feo) if feo else (f'({q(fe2o3)} * 0.8998)' if fe2o3 else None)
+            if not mgo or not feo_expr:
+                return None
+            mg = f'({q(mgo)} / {num(MW_MGO)})'
+            return f'(100 * {mg} / ({mg} + 0.9 * {feo_expr} / {num(MW_FEO)}))'
+
+        # (field, factor) candidates in the order get_*_value() tries them;
+        # coalesce() reproduces its per-feature fallback.
+        terms = []
+        if size_field in OXIDE_COMPOSITION:
+            field = find_element_field(layer, size_field, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, _value_to_pct(1.0, field, default_unit='pct')))
+            element = OXIDE_COMPOSITION[size_field][0]
+            field = find_element_field(layer, element, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, element_ppm_to_oxide_pct(
+                    size_field, _value_to_ppm(1.0, field, default_unit='ppm'))))
+        elif size_field in CUSTOM_XY_ELEMENTS:
+            field = find_element_field(layer, size_field, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, _value_to_ppm(1.0, field, default_unit='ppm')))
+            oxide = ELEMENT_TO_OXIDE.get(size_field)
+            field = find_element_field(layer, oxide, allow_oxide_forms=False) if oxide else None
+            if field:
+                terms.append(term(field, oxide_pct_to_element_ppm(
+                    oxide, _value_to_pct(1.0, field, default_unit='pct'))))
+        else:
+            field = find_element_field(layer, size_field)
+            if field:
+                terms.append(q(field))
+        if not terms:
+            return None
+        return terms[0] if len(terms) == 1 else f"coalesce({', '.join(terms)})"
+
+    def _apply_layer_bubble_settings(self, prefix=None):
+        """Copy a data-defined symbol size from the layer's Categorized
+        symbology into a tab's Bubble Size controls (current tab by default).
+
+        Returns the settings applied (see symbology_bridge.
+        bubble_settings_from_layer) or None when there was nothing to apply.
+        """
+        if not self.use_layer_symbology.isEnabled():
+            return None
+        prefix = prefix or self._tab_bubble_prefix()
+        if prefix is None:
+            return None
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        settings = symbology_bridge.bubble_settings_from_layer(layer, self._current_category_field())
+        if not settings or not settings.get('size_field'):
+            if settings and settings.get('note'):
+                symbology_bridge.log(settings['note'])
+            return None
+
+        field_combo = getattr(self, f'{prefix}_bubble_field_combo')
+        index = field_combo.findText(settings['size_field'])
+        if index < 0:
+            # A layer field not offered on this tab (e.g. only elements are
+            # listed): add it so it can be selected.
+            field_combo.addItem(settings['size_field'])
+            index = field_combo.findText(settings['size_field'])
+        field_combo.setCurrentIndex(index)
+        if settings.get('method'):
+            labels = {method: label for label, method in BUBBLE_SCALE_METHODS.items()}
+            getattr(self, f'{prefix}_bubble_scale_combo').setCurrentText(labels[settings['method']])
+        for key, spin_name in (('min_size', 'min_size_spin'), ('max_size', 'max_size_spin')):
+            if settings.get(key):
+                spin = getattr(self, f'{prefix}_bubble_{spin_name}')
+                spin.setValue(max(spin.minimum(), min(spin.maximum(), float(settings[key]))))
+        if settings.get('note'):
+            symbology_bridge.log(settings['note'])
+        return settings
+
+    def _export_styles_to_layer(self, parent, layer_id, field_name, categories,
+                                category_styles, visible_state, bubble=None):
+        """Apply a plot's category styles to its layer as a Categorized
+        renderer, after confirmation. The previous layer style is kept in
+        the layer's style manager so it can be restored.
+
+        `bubble` is the plot's bubble sizing (see _compute_bubble_range), if
+        any; it becomes a matching data-defined symbol size."""
+        layer = QgsProject.instance().mapLayer(layer_id) if layer_id else None
+        if layer is None:
+            QMessageBox.warning(parent, 'Apply styles to layer',
+                                'The layer this plot was made from is no longer available.')
+            return
+        if not field_name or layer.fields().indexOf(field_name) < 0:
+            QMessageBox.warning(
+                parent, 'Apply styles to layer',
+                'This plot has no Category field on the layer, so its styles cannot '
+                'be turned into a Categorized symbology.')
+            return
+        size_note = ''
+        bubble_export = None
+        if bubble:
+            value_expression = self._bubble_value_expression(layer, bubble['size_field'])
+            if value_expression:
+                bubble_export = dict(bubble, value_expression=value_expression)
+                size_note = (f"\n\nSymbol sizes will be data-defined from '{bubble['size_field']}', "
+                             "matching the plot's bubble sizing.")
+            else:
+                size_note = (f"\n\nNote: the plot's bubble size field '{bubble['size_field']}' "
+                             "could not be expressed on the layer, so symbol sizes are fixed.")
+        reply = QMessageBox.question(
+            parent, 'Apply styles to layer',
+            f"Replace the symbology of layer '{layer.name()}' with a Categorized "
+            f"symbology on '{field_name}', using the colours, markers and sizes of the "
+            f"{len(categories)} plot categories?{size_note}\n\n"
+            "The current layer style will be saved first, so you can switch back to it "
+            "from Layer Properties > Symbology > Style.",
+            QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
+        if reply != QMessageBox_Yes:
+            return
+        try:
+            backup_name = symbology_bridge.apply_plot_styles_to_layer(
+                layer, field_name, categories, category_styles, visible_state,
+                bubble=bubble_export)
+        except Exception as exc:
+            QMessageBox.critical(parent, 'Apply styles to layer',
+                                 f'Could not apply the plot styles to the layer:\n{exc}')
+            return
+        try:
+            self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        except Exception:  # nosec B110 - legend refresh is cosmetic only
+            pass
+        message = f"Plot styles applied to layer '{layer.name()}'."
+        if backup_name:
+            message += f"\n\nThe previous style was saved as \"{backup_name}\"."
+        QMessageBox.information(parent, 'Apply styles to layer', message)
 
     def _category_field_label(self):
         """Return a clean template-key label for the current 'Category:' selection."""
@@ -4180,6 +4430,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         id_field = self.id_field_combo.currentText()
         use_category_field = bool(id_field) and id_field != NO_CATEGORY_OPTION
+        self._last_bubble_info = None
         features = []
         sample_names = []
         for fid in selected_fids:
@@ -4303,7 +4554,9 @@ class GeochemistryDockWidget(QDockWidget):
                         if sv is not None else bubble_min_size)
                 line_markersize = math.sqrt(area)
             else:
-                line_markersize = 8
+                # 8 unless the category's size was imported from the layer.
+                line_markersize = float(category_styles[name].get('markersize', 8)) \
+                    if category_styles[name].get('source') == 'layer' else 8
             sample_line_markersizes.append(line_markersize)
 
             lines = ax.plot(x_positions, values, marker=marker, markersize=line_markersize, linewidth=1.5,
@@ -4354,7 +4607,8 @@ class GeochemistryDockWidget(QDockWidget):
             fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Spider Diagram Categories', bubble_active=bubble_active,
-            stats_registry=stats_registry, envelope_registry=envelope_registry)
+            stats_registry=stats_registry, envelope_registry=envelope_registry,
+            restyle_layer_categories=False)
         self.current_fig = fig
 
     def _prepare_diagram_for_run(self, diagram_class, layer):
@@ -5690,12 +5944,23 @@ class GeochemistryDockWidget(QDockWidget):
         artist.set_zorder(base_cache[key] + bonus)
 
     def _build_default_category_styles(self, sample_names):
-        """Build fresh default per-category styles seeded from the auto colour map."""
+        """Build fresh default per-category styles seeded from the auto colour map.
+
+        With "Use layer symbology" on, categories found in the layer's
+        Categorized renderer take its colour/marker/size/label/visibility
+        instead (marked 'source': 'layer'); the rest keep these defaults.
+        """
         category_colors, _, unique_categories, category_markers, _ = create_categorical_color_map(sample_names)
         category_styles = {
             cat: self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat])
             for i, cat in enumerate(unique_categories)
         }
+        # Kept for the plot panel's own "Use layer symbology" toggle, which
+        # restores these defaults when switched off.
+        self._last_default_category_styles = {cat: dict(style) for cat, style in category_styles.items()}
+        layer_styles = self._layer_symbology_styles()
+        if layer_styles:
+            category_styles = symbology_bridge.merge_layer_styles(category_styles, layer_styles)
         return category_styles, unique_categories
 
     def _category_arrays_from_styles(self, category_styles, sample_names):
@@ -5861,7 +6126,8 @@ class GeochemistryDockWidget(QDockWidget):
     def _open_category_panel(self, fig, artist_registry, category_counts=None,
                              category_styles=None, title='Plot Categories',
                              style_template_key=None, export_legend_artists=None,
-                             bubble_active=False, stats_registry=None, envelope_registry=None):
+                             bubble_active=False, stats_registry=None, envelope_registry=None,
+                             restyle_layer_categories=True):
         """Embed category visibility/style controls in a right-hand Qt panel.
 
         The panel is attached to the Matplotlib figure's own Qt window as a
@@ -5878,6 +6144,13 @@ class GeochemistryDockWidget(QDockWidget):
         _build_spider_stat_artists(). When either is non-empty, a
         "Statistics" control is added that reveals them and fades the raw
         points/lines, without needing to re-plot (Qt dock path only).
+
+        Styles imported from the layer ('source': 'layer', see
+        _build_default_category_styles) start hidden when their renderer
+        category is unchecked, show their renderer label, and - when
+        `restyle_layer_categories` is True - have their full style (incl.
+        size) pushed onto the plotted artists on open. Plots that already
+        draw with the imported size (spider diagram) pass False.
         """
         if not artist_registry:
             return
@@ -5888,7 +6161,72 @@ class GeochemistryDockWidget(QDockWidget):
         stats_registry = stats_registry or {}
         envelope_registry = envelope_registry or {}
         categories = sorted(artist_registry.keys(), key=lambda x: str(x))
-        visible_state = {category: True for category in categories}
+        visible_state = {category: bool(category_styles.get(category, {}).get('visible', True))
+                         for category in categories}
+        layer_categories = [category for category in categories
+                            if category_styles.get(category, {}).get('source') == 'layer']
+        # The plot was generated from the dock's current layer/Category
+        # selection, so capture them now for "Apply to layer" later on.
+        plot_layer_id = self.layer_combo.currentData()
+        plot_category_field = self._current_category_field()
+        plot_bubble_prefix = self._tab_bubble_prefix()
+        plot_bubble = dict(self._last_bubble_info) \
+            if bubble_active and getattr(self, '_last_bubble_info', None) else None
+
+        def _display_label(category):
+            return category_styles.get(category, {}).get('label') or str(category)
+
+        # Plugin default styles for this plot (before any layer styles were
+        # merged in), restored when the panel's "Use layer symbology" is unticked.
+        default_styles = {cat: dict(style) for cat, style in
+                          getattr(self, '_last_default_category_styles', {}).items()}
+
+        def _leaf_artists(entries):
+            for entry in entries:
+                artist = entry.get('artist') if isinstance(entry, dict) else entry
+                if isinstance(artist, (list, tuple)):
+                    yield from _leaf_artists(artist)
+                elif artist is not None:
+                    yield artist
+
+        # How each artist was first drawn, for the panel's "Use layer
+        # symbology" toggle: scatter sizes are restored when it is switched
+        # off (the default style's markersize is not the initial scatter
+        # size), and lines drawn without markers (spider diagram with
+        # markers off) stay marker-less either way.
+        drawn_state = {}
+        for category in categories:
+            for artist in _leaf_artists(artist_registry.get(category, []) +
+                                        export_legend_artists.get(category, [])):
+                if hasattr(artist, 'get_sizes'):
+                    drawn_state[id(artist)] = ('sizes', artist.get_sizes().copy())
+                elif hasattr(artist, 'get_marker') and artist.get_marker() in (None, 'None', '', ' '):
+                    drawn_state[id(artist)] = ('no_marker',)
+
+        def _restore_drawn_state(category, restore_sizes):
+            for artist in _leaf_artists(artist_registry.get(category, []) +
+                                        export_legend_artists.get(category, [])):
+                saved = drawn_state.get(id(artist))
+                if saved is None:
+                    continue
+                if saved[0] == 'no_marker':
+                    artist.set_marker('None')
+                elif restore_sizes:
+                    artist.set_sizes(saved[1])
+
+        def _apply_legend_labels():
+            # Imported renderer labels replace the raw category value in the
+            # plot legend (and the raw value comes back when they are removed),
+            # keeping any " (n=...)" count suffix.
+            for category in categories:
+                label = _display_label(category)
+                for entry in export_legend_artists.get(category, []):
+                    if entry.get('role') != 'legend_label':
+                        continue
+                    text = entry['artist'].get_text()
+                    suffix = re.search(r'\s*\(n=\d+\)$', text)
+                    entry['artist'].set_text(label + (suffix.group(0) if suffix else ''))
+
         _stats_display_ref = [lambda: None]
         category_order = list(categories)
         zorder_base_cache = {}
@@ -5965,6 +6303,16 @@ class GeochemistryDockWidget(QDockWidget):
             for category in categories:
                 _apply_category_style(category)
             _sync_legend_symbols()
+            _refresh_category_visibility()
+
+        def _apply_initial_layer_styles():
+            # No-op for default-styled plots, so their behaviour is unchanged.
+            if not layer_categories:
+                return
+            _apply_legend_labels()
+            if restyle_layer_categories:
+                for category in layer_categories:
+                    _apply_category_style(category)
             _refresh_category_visibility()
 
         manager = getattr(fig.canvas, 'manager', None)
@@ -6080,6 +6428,35 @@ class GeochemistryDockWidget(QDockWidget):
             for btn in (save_template_btn, load_template_btn, reset_styles_btn, delete_template_btn):
                 template_row.addWidget(btn)
             style_mgmt_layout.addLayout(template_row)
+
+            # Same option as the dock's "Use layer symbology", but applied
+            # live to this plot (and mirrored back to the dock for new plots).
+            plot_layer = QgsProject.instance().mapLayer(plot_layer_id) if plot_layer_id else None
+            symbology_usable, symbology_reason = symbology_bridge.layer_symbology_status(
+                plot_layer, plot_category_field)
+            # A toggle button (stays pressed while on), styled like "Apply to layer…".
+            layer_symbology_cb = QPushButton('Use layer symbology', style_mgmt_group)
+            layer_symbology_cb.setCheckable(True)
+            layer_symbology_cb.setChecked(bool(layer_categories))
+            layer_symbology_cb.setEnabled(symbology_usable or bool(layer_categories))
+            layer_symbology_cb.setToolTip(
+                symbology_reason + ' Click again to go back to the default plot styles.'
+                if symbology_usable else symbology_reason)
+            style_mgmt_layout.addWidget(layer_symbology_cb)
+
+            export_layer_btn = QPushButton('Apply to layer…')
+            if plot_category_field:
+                export_layer_btn.setToolTip(
+                    "Set the map layer's symbology to a Categorized renderer on "
+                    f"'{plot_category_field}' using these category colours, markers, sizes "
+                    "and visibility (asks for confirmation; the current layer style is kept "
+                    "so it can be restored).")
+            else:
+                export_layer_btn.setEnabled(False)
+                export_layer_btn.setToolTip(
+                    'This plot has no Category field, so there are no categories to '
+                    'apply to the layer.')
+            style_mgmt_layout.addWidget(export_layer_btn)
             style_mgmt_group.setTitle('')
             panel_layout.addWidget(_CollapsibleSection('Style Management', style_mgmt_group, False, panel), 0)
 
@@ -6115,7 +6492,7 @@ class GeochemistryDockWidget(QDockWidget):
 
                 form = QFormLayout()
                 marker_cb = QComboBox(dlg)
-                for label, marker in STYLE_MARKER_OPTIONS:
+                for label, marker in STYLE_MARKER_OPTIONS_ALL:
                     marker_cb.addItem(label, marker)
                 marker_index = marker_cb.findData(style.get('marker', 'o'))
                 if marker_index >= 0:
@@ -6189,8 +6566,9 @@ class GeochemistryDockWidget(QDockWidget):
                 row_layout.setContentsMargins(0, 0, 0, 0)
                 row_layout.setSpacing(4)
 
-                checkbox = QCheckBox(f'{category} (n={category_counts.get(category, 0)})', row_widget)
-                checkbox.setChecked(True)
+                checkbox = QCheckBox(
+                    f'{_display_label(category)} (n={category_counts.get(category, 0)})', row_widget)
+                checkbox.setChecked(visible_state[category])
                 checkbox_by_category[category] = checkbox
 
                 order_spin = QSpinBox(row_widget)
@@ -6248,6 +6626,7 @@ class GeochemistryDockWidget(QDockWidget):
 
             legend_group = QGroupBox('', panel)
             legend_symbol_by_category = {}
+            legend_text_by_category = {}
             legend_layout = QVBoxLayout(legend_group)
             legend_layout.setSpacing(4)
 
@@ -6263,13 +6642,15 @@ class GeochemistryDockWidget(QDockWidget):
                 marker_label = _MarkerSymbolWidget(marker, colour, row_widget)
                 marker_label.setToolTip(f'{marker} / {colour}')
 
-                category_label = QLabel(f'{category} (n={category_counts.get(category, 0)})', row_widget)
+                category_label = QLabel(
+                    f'{_display_label(category)} (n={category_counts.get(category, 0)})', row_widget)
                 category_label.setWordWrap(True)
 
                 row_layout.addWidget(marker_label)
                 row_layout.addWidget(category_label, 1)
                 legend_layout.addWidget(row_widget)
                 legend_symbol_by_category[category] = marker_label
+                legend_text_by_category[category] = category_label
 
             legend_scroll = QScrollArea(dock)
             legend_scroll.setWidgetResizable(True)
@@ -6559,17 +6940,100 @@ class GeochemistryDockWidget(QDockWidget):
             load_template_btn.clicked.connect(_load_template)
             reset_styles_btn.clicked.connect(_reset_styles)
             delete_template_btn.clicked.connect(_delete_template)
+            def _toggle_layer_symbology(_state):
+                use = layer_symbology_cb.isChecked()
+                changed = set(layer_categories)
+                if use:
+                    layer = QgsProject.instance().mapLayer(plot_layer_id) if plot_layer_id else None
+                    usable, reason = symbology_bridge.layer_symbology_status(layer, plot_category_field)
+                    if not usable:
+                        QMessageBox.information(panel, 'Use layer symbology', reason)
+                        layer_symbology_cb.blockSignals(True)
+                        layer_symbology_cb.setChecked(False)
+                        layer_symbology_cb.blockSignals(False)
+                        layer_symbology_cb.setToolTip(reason)
+                        return
+                    # Re-read the renderer, in case the map was restyled since plotting.
+                    imported = symbology_bridge.read_layer_category_styles(layer, plot_category_field)
+                    new_layer_categories = []
+                    for category in categories:
+                        style = imported.get(str(category))
+                        if not style:
+                            continue
+                        merged = dict(category_styles.get(category) or default_styles.get(category)
+                                      or self._default_category_style(0))
+                        merged.update(style)
+                        category_styles[category] = merged
+                        visible_state[category] = bool(merged.get('visible', True))
+                        new_layer_categories.append(category)
+                else:
+                    # Back to the plugin defaults for every layer-styled category.
+                    for i, category in enumerate(categories):
+                        if category in changed:
+                            category_styles[category] = dict(
+                                default_styles.get(category) or self._default_category_style(i))
+                            visible_state[category] = True
+                    new_layer_categories = []
+                layer_categories[:] = new_layer_categories
+                changed.update(new_layer_categories)
+
+                for category in categories:
+                    text = f'{_display_label(category)} (n={category_counts.get(category, 0)})'
+                    checkbox_by_category[category].setText(text)
+                    _set_checkbox_state(category, visible_state[category])
+                    if category in legend_text_by_category:
+                        legend_text_by_category[category].setText(text)
+                _apply_legend_labels()
+                for category in categories:
+                    if category in changed:
+                        _apply_category_style(category)
+                        _restore_drawn_state(category, restore_sizes=not use)
+                _sync_legend_symbols()
+                _refresh_category_visibility()
+
+                # Keep the dock's option in step, so the next plot matches.
+                if self.use_layer_symbology.isEnabled():
+                    self.use_layer_symbology.blockSignals(True)
+                    self.use_layer_symbology.setChecked(use)
+                    self.use_layer_symbology.blockSignals(False)
+                    # A data-defined symbol size on the layer becomes this
+                    # plot tab's Bubble Size setting; bubble sizes need the
+                    # plot to be regenerated.
+                    bubble_settings = self._apply_layer_bubble_settings(plot_bubble_prefix) if use else None
+                    if bubble_settings:
+                        method_labels = {m: label for label, m in BUBBLE_SCALE_METHODS.items()}
+                        details = [f"Size by: {bubble_settings['size_field']}"]
+                        if bubble_settings.get('method'):
+                            details.append(f"Scaling: {method_labels[bubble_settings['method']]}")
+                        if bubble_settings.get('min_size') and bubble_settings.get('max_size'):
+                            details.append(f"Size: {bubble_settings['min_size']:.0f} – "
+                                           f"{bubble_settings['max_size']:.0f} pt²")
+                        message = ("The layer's symbology also sizes symbols by a field. Its "
+                                   "Bubble Size settings have been set in the plugin window:\n\n  " +
+                                   "\n  ".join(details) +
+                                   "\n\nGenerate the plot again to apply them.")
+                        if bubble_settings.get('note'):
+                            message += f"\n\n{bubble_settings['note']}"
+                        QMessageBox.information(panel, 'Use layer symbology', message)
+
+            layer_symbology_cb.toggled.connect(_toggle_layer_symbology)
+            export_layer_btn.clicked.connect(lambda: self._export_styles_to_layer(
+                panel, plot_layer_id, plot_category_field, categories,
+                category_styles, visible_state, bubble=plot_bubble))
+
+            _apply_initial_layer_styles()
 
             self._category_controls = {
                 'dock': dock, 'panel': panel, 'checkboxes': checkbox_by_category,
                 'style_buttons': style_button_by_category, 'styles': category_styles,
-                'visible_state': visible_state,
+                'visible_state': visible_state, 'layer_symbology': layer_symbology_cb,
             }
             return
 
         # Fallback for non-Qt Matplotlib backends: on-axes CheckButtons/Button,
         # visibility toggling only (no per-category style editing).
-        labels = [f'{category} (n={category_counts.get(category, 0)})' for category in categories]
+        labels = [f'{_display_label(category)} (n={category_counts.get(category, 0)})'
+                  for category in categories]
         label_to_category = dict(zip(labels, categories))
         try:
             fig.subplots_adjust(right=0.68)
@@ -6578,7 +7042,8 @@ class GeochemistryDockWidget(QDockWidget):
 
         check_ax = fig.add_axes([0.72, 0.42, 0.25, 0.45])
         check_ax.set_title('Categories', fontsize=9)
-        checks = CheckButtons(check_ax, labels, [True] * len(labels))
+        checks = CheckButtons(check_ax, labels, [visible_state[c] for c in categories])
+        _apply_initial_layer_styles()
 
         def _set_button_state(index, state):
             if checks.get_status()[index] != state:

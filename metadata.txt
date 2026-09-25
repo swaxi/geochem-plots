@@ -19,6 +19,7 @@ changelog=0.0.6
        * Never treat normalised, ratio, error or detection-limit fields (Sr_ChondriteNorm, La_N, Y_2SE, Nb_LOD ...) as a raw element concentration; they could previously be picked up in place of the real field and give wrong Sr/Y, sum LREE, etc.
        * Winchester & Floyd (1977) diagram now plots Zr/TiO2 with both terms in ppm (TiO2 wt pct x 10000, or Ti ppm x 1.6685 when only Ti is available) and the axis is labelled accordingly; a measured TiO2 (or Ti, for Zr/Ti diagrams) field is preferred over a converted one
        * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
+       * Fix chemical formulas in plot titles and axis labels (e.g. TiO2 shown with a square): formula digits (TiO2, SiO2, Na2O, Al2O3 ...) are now drawn as subscripts
 
        **Improvements**
        * Rename the Minerals-tab apatite scheme to "Apatite - Sr/Y vs sum LREE (La+Ce+Pr+Nd) - O'Sullivan et al. (2020)"
@@ -29,6 +30,8 @@ changelog=0.0.6
        * The options on every tab of the main plugin window are now grouped into collapsible sections, each with a drag bar to resize it (double-click to reset)
        * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
        * Apply the selected-on-top layer rendering order (is_selected()) when plotting from the Spider tab as well
+       * Add opt-in "Use layer symbology" option: take each category's colour, marker shape, size and label from the layer's Categorized symbology when it classifies on the selected Category field (map-unchecked categories start hidden; unstyled categories keep the default plot styling); also available as a toggle button in the plot style panel (Style Management) to restyle an open plot live (click again to restore the default styles); a data-defined symbol size on the layer fills in the tab's Bubble Size settings
+       * Add "Apply to layer..." button to the plot style panel, building a Categorized symbology for the layer from the plot's category styles (with confirmation; the previous layer style is kept in the layer's style list); bubble sizing is exported as a matching data-defined symbol size
 
      0.0.5 2026-07
        **Dependency Harmonisation & Qt6 Fixes**

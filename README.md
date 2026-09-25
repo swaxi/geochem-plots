@@ -22,6 +22,9 @@ Developed for UWA EART3343 Lab exercises.
       * The options on every tab of the main plugin window are now grouped into collapsible sections, each with a drag bar to resize it (double-click to reset)
       * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
       * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
+      * Fix chemical formulas in plot titles and axis labels (e.g. TiO₂ shown as a square): digits in formulas such as TiO2, SiO2, Na2O and Al2O3 are now drawn as proper subscripts
+      * New opt-in "Use layer symbology" checkbox (Layer Selection): when the layer uses a Categorized symbology on the selected Category field, each category's colour, marker shape, size and label are taken from the map, and categories unchecked on the map start hidden in the plot; categories without a map style keep the default plot styling. A matching "Use layer symbology" toggle button in the plot style panel (Style Management) restyles the open plot live, and clicking it again restores the default plot styles. A data-defined symbol size on the layer (e.g. from the QGIS Size Assistant) fills in the tab's Bubble Size settings. See [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)
+      * New "Apply to layer…" button (plot style panel > Style Management) sets the layer's symbology to a Categorized renderer matching the plot's category styles, after confirmation; the previous layer style is kept in the layer's style list so it can be restored. When the plot uses bubble sizing, the symbols get a matching data-defined size (same field, unit conversion, scaling and size range)
 
 Full changelog: <a href="https://github.com/swaxi/geochem-plots/blob/main/metadata.txt">Metadata</a>
 
@@ -54,7 +57,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 
 ![Spider Plots](tab1.png)
 
-4. Under **Layer Selection**, choose your **Layer**, the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field
+4. Under **Layer Selection**, choose your **Layer**, the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field. Tick **Use layer symbology** to reuse the map's category colours and symbols (see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map))
 5. Pick a plot tab - **Spider, Discrimination/Classification, Custom XY, Custom Ternary, Minerals** or **Petrophysics** (see [Tabs](#tabs) below for what each one offers)
 
 ![Discrimination/Classification](tab2.png)
@@ -121,9 +124,22 @@ Split into two sub-tabs:
 
 The **Category** field (Layer Selection) groups and colours samples. Choose `(none) - plot all points with one symbol` to skip categorisation and plot every selected sample identically.
 
-Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots. If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots, and holds the **Use layer symbology** and **Apply to layer…** buttons that exchange styles with the QGIS map (see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)). If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
 
 **Making room for the plot:** the panel's title bar has a **collapse/expand arrow** button - collapsing shrinks the panel to a slim strip at the window edge (or to just its title bar when docked at the top/bottom) so the plot gets the space, and expanding restores its previous size. The panel can be docked to any side of the plot window (drag its title, or use the float button to detach it into its own window), and the highlighted **bars** between the plot and the panel, and between the **Categories** and **Legend** sections, can be dragged to change their width/height. The panel scrolls if it is made smaller than its contents. Each section of the panel (**Statistics**, **Style Management**, **Categories**, **Legend**) also has a clickable header that collapses or expands it; **Style Management** starts collapsed, and collapsing one of Categories/Legend gives its space to the other.
+
+### Sharing symbology with the QGIS map
+
+Plots and the map can use the same category colours, marker shapes, sizes and labels. Both directions are opt-in; without them plots keep the plugin's default styling.
+
+**Map → plot: Use layer symbology.** Style the layer in QGIS with a **Categorized** symbology on the same field as the plot's **Category**, then either tick **Use layer symbology** under Layer Selection (applies to the next plot) or click the **Use layer symbology** toggle button in an open plot's Style panel (**Style Management**), which restyles that plot straight away - click it again to return to the default plot styles. The two are kept in sync.
+- Each category takes its colour, marker shape, size and label from the map; categories unchecked in the QGIS Layers panel start hidden (untick them in the Style panel to show them).
+- Categories missing from the map symbology, and QGIS's "all other values" category, keep the default plot styling.
+- Map marker shapes without a plot equivalent (e.g. heart, arrow, SVG or font markers) are drawn as circles; a note is written to the QGIS **Log Messages** panel.
+- The option is greyed out, with a tooltip explaining why, when the layer's symbology isn't Categorized or classifies a different field than the plot's Category.
+- If the map symbols have a **data-defined size** (e.g. set with the QGIS **Size Assistant**), it fills in the current tab's [Bubble Size](#bubble-size-all-tabs) settings (field, scaling, min/max size). A size set by **Apply to layer…** comes back exactly; a Size Assistant setting is converted to the closest plugin scaling, and the plot scales between the minimum and maximum of the plotted data. From the Style panel button, generate the plot again to apply the bubble sizes.
+
+**Plot → map: Apply to layer….** In the Style panel's **Style Management** section, **Apply to layer…** replaces the layer's symbology, after confirmation, with a Categorized symbology on the plot's Category field that matches the plot: colour, marker shape, size, fill, transparency, labels and which categories are shown. Values not in the plot go to a grey "all other values" category so no features disappear from the map. If the plot uses bubble sizing, the map symbols get a matching data-defined size (same field, unit conversion, scaling and size range). The layer's previous style is saved first (named "Before plot style export …"), so you can switch back to it from **Layer Properties > Symbology > Style**.
 
 ### Category mean ± 2σ statistics overlay
 
@@ -131,7 +147,7 @@ The Style panel's **Statistics** section adds a **Show mean ± 2σ** toggle to a
 
 ### Bubble Size (all tabs)
 
-Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by, choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point.
+Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by, choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point. Bubble sizing can be exported to, or read from, a data-defined symbol size on the QGIS layer - see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map).
 
 ### Below-detection-limit values (Custom XY only)
 
