@@ -5,6 +5,7 @@ Contains the main dockable widget with all plotting functionality.
 """
 
 import os
+import re
 import json
 import random
 from collections import Counter
@@ -477,6 +478,32 @@ def create_categorical_color_map(sample_names):
     sample_markers = [category_markers[name] for name in sample_names]
     
     return category_colors, sample_colors, unique_categories, category_markers, sample_markers
+
+
+# Legend/panel labels end with a " (n=x/y)" count suffix (older plots used
+# " (n=x)"); this matches either, so it can be stripped or replaced.
+CATEGORY_COUNT_SUFFIX_RE = re.compile(r'\s*\(n=\d+(?:/\d+)?\)$')
+
+
+def category_count_pairs(selected_names, plotted_names):
+    """Return {category: (plotted, selected)} sample counts.
+
+    `selected_names` holds the category of every selected sample,
+    `plotted_names` the category of every sample actually drawn (i.e. with
+    all the variables the plot needs), so the two can differ.
+    """
+    selected = Counter(selected_names)
+    plotted = Counter(plotted_names)
+    return {category: (plotted.get(category, 0), n) for category, n in selected.items()}
+
+
+def format_category_count(category_counts, category):
+    """'n=x/y' (x plotted of y selected samples) for a category, or 'n=x'
+    when only a single count is known."""
+    count = category_counts.get(category, 0)
+    if isinstance(count, tuple):
+        return f'n={count[0]}/{count[1]}'
+    return f'n={count}'
 
 
 # =============================================================================
@@ -1808,7 +1835,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
         
         ax.set_xlabel('Nb/Y', fontsize=12)
-        ax.set_ylabel('Zr/Ti (both in ppm)', fontsize=12)
+        ax.set_ylabel('Zr/Ti', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
@@ -1945,7 +1972,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
 
         ax.set_xlabel('Nb/Y', fontsize=12)
-        ax.set_ylabel(subscript_formula('Zr/TiO2 (both in ppm)'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Zr/TiO2'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
@@ -4577,7 +4604,17 @@ class GeochemistryDockWidget(QDockWidget):
         ax.grid(True, which='major', axis='y', linestyle='-', alpha=0.3)
         ax.grid(True, which='minor', axis='y', linestyle=':', alpha=0.2)
 
-        n_samples = len(plot_data)
+        # A sample counts as plotted only if something of it is visible:
+        # missing elements leave gaps in its line, so it needs one usable
+        # value with markers on, or two adjacent ones (a line segment)
+        # without markers.
+        markers_on = self.spider_markers.isChecked()
+        plotted_names = []
+        for values, name in zip(plot_data, sample_names):
+            finite = np.isfinite(np.asarray(values, dtype=float))
+            if finite.any() if markers_on else np.any(finite[:-1] & finite[1:]):
+                plotted_names.append(name)
+        n_samples = len(plotted_names)
         ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalised to {norm_name}', fontsize=14)
 
         stats_registry, envelope_registry = _build_spider_stat_artists(
@@ -4585,7 +4622,7 @@ class GeochemistryDockWidget(QDockWidget):
             markers_enabled=self.spider_markers.isChecked(),
             sample_markersizes=sample_line_markersizes if bubble_active else None)
 
-        category_counts = Counter(sample_names)
+        category_counts = category_count_pairs(sample_names, plotted_names)
         export_legend_artists = {}
         category_legend_obj = None
         if self.spider_legend.isChecked():
@@ -4786,7 +4823,8 @@ class GeochemistryDockWidget(QDockWidget):
             pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
         stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_count_pairs(sample_names, valid_names),
+            category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Discrimination Diagram Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -4866,7 +4904,8 @@ class GeochemistryDockWidget(QDockWidget):
             pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
         stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_count_pairs(sample_names, valid_names),
+            category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Mineral Classification Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -5003,11 +5042,13 @@ class GeochemistryDockWidget(QDockWidget):
         ax.set_title(f"{y_field} vs {x_field} (n={valid_count})", fontsize=14)
         ax.grid(True, alpha=0.3)
 
+        category_counts = category_count_pairs(
+            sample_names, [name for name, valid in zip(sample_names, valid_mask) if valid])
         export_legend_artists = {}
         category_legend_obj = None
         if self.petro_legend.isChecked() and unique_categories:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(sample_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.12), fontsize=8)
             category_legend_obj = ax.get_legend()
 
@@ -5021,7 +5062,7 @@ class GeochemistryDockWidget(QDockWidget):
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Petrophysics Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -5312,11 +5353,13 @@ class GeochemistryDockWidget(QDockWidget):
 
         ax.grid(True, alpha=0.3)
 
+        category_counts = category_count_pairs(
+            sample_names, [name for name, valid in zip(sample_names, valid_mask) if valid])
         export_legend_artists = {}
         category_legend_obj = None
         if self.custom_legend.isChecked() and len(unique_categories) > 0:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(sample_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.12), fontsize=8)
             category_legend_obj = ax.get_legend()
 
@@ -5330,7 +5373,7 @@ class GeochemistryDockWidget(QDockWidget):
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Custom XY Plot Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -5984,7 +6027,7 @@ class GeochemistryDockWidget(QDockWidget):
         for handle, text in zip(handles, legend.get_texts()):
             # Legend labels may carry a " (n=123)" count suffix; strip it to
             # recover the raw category name used as the artist_registry key.
-            category = re.sub(r'\s*\(n=\d+\)$', '', text.get_text())
+            category = CATEGORY_COUNT_SUFFIX_RE.sub('', text.get_text())
             text.set_color('black')
             role = 'scatter' if hasattr(handle, 'set_paths') else 'marker'
             export_legend_artists.setdefault(category, []).extend([
@@ -6017,7 +6060,7 @@ class GeochemistryDockWidget(QDockWidget):
                 markeredgecolor=style.get('color', '#000000'),
                 markersize=max(4.0, float(style.get('markersize', 8)) * 0.7),
                 alpha=float(style.get('alpha', 1.0))))
-            legend_labels.append(f"{cat} (n={category_counts.get(cat, 0)})")
+            legend_labels.append(f"{cat} ({format_category_count(category_counts, cat)})")
         ax.legend(legend_handles, legend_labels, loc='upper center',
                  bbox_to_anchor=bbox_to_anchor, fontsize=fontsize,
                  ncol=ncol, framealpha=0.9, borderaxespad=0.)
@@ -6214,18 +6257,24 @@ class GeochemistryDockWidget(QDockWidget):
                 elif restore_sizes:
                     artist.set_sizes(saved[1])
 
+        def _count_label(category):
+            # "<label> (n=plotted/selected)" for the panel and plot legend.
+            return f'{_display_label(category)} ({format_category_count(category_counts, category)})'
+
         def _apply_legend_labels():
-            # Imported renderer labels replace the raw category value in the
-            # plot legend (and the raw value comes back when they are removed),
-            # keeping any " (n=...)" count suffix.
+            # Every plot-legend entry reads "<label> (n=plotted/selected)":
+            # imported renderer labels replace the raw category value (which
+            # comes back when they are removed), and diagram legends that
+            # Matplotlib built from the scatter labels gain the counts.
             for category in categories:
-                label = _display_label(category)
                 for entry in export_legend_artists.get(category, []):
-                    if entry.get('role') != 'legend_label':
-                        continue
-                    text = entry['artist'].get_text()
-                    suffix = re.search(r'\s*\(n=\d+\)$', text)
-                    entry['artist'].set_text(label + (suffix.group(0) if suffix else ''))
+                    if entry.get('role') == 'legend_label':
+                        entry['artist'].set_text(
+                            _count_label(category) if category in category_counts
+                            else _display_label(category))
+
+        _apply_legend_labels()
+        fig.canvas.draw_idle()
 
         _stats_display_ref = [lambda: None]
         category_order = list(categories)
@@ -6566,8 +6615,7 @@ class GeochemistryDockWidget(QDockWidget):
                 row_layout.setContentsMargins(0, 0, 0, 0)
                 row_layout.setSpacing(4)
 
-                checkbox = QCheckBox(
-                    f'{_display_label(category)} (n={category_counts.get(category, 0)})', row_widget)
+                checkbox = QCheckBox(_count_label(category), row_widget)
                 checkbox.setChecked(visible_state[category])
                 checkbox_by_category[category] = checkbox
 
@@ -6642,8 +6690,7 @@ class GeochemistryDockWidget(QDockWidget):
                 marker_label = _MarkerSymbolWidget(marker, colour, row_widget)
                 marker_label.setToolTip(f'{marker} / {colour}')
 
-                category_label = QLabel(
-                    f'{_display_label(category)} (n={category_counts.get(category, 0)})', row_widget)
+                category_label = QLabel(_count_label(category), row_widget)
                 category_label.setWordWrap(True)
 
                 row_layout.addWidget(marker_label)
@@ -6978,7 +7025,7 @@ class GeochemistryDockWidget(QDockWidget):
                 changed.update(new_layer_categories)
 
                 for category in categories:
-                    text = f'{_display_label(category)} (n={category_counts.get(category, 0)})'
+                    text = _count_label(category)
                     checkbox_by_category[category].setText(text)
                     _set_checkbox_state(category, visible_state[category])
                     if category in legend_text_by_category:
@@ -7032,8 +7079,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         # Fallback for non-Qt Matplotlib backends: on-axes CheckButtons/Button,
         # visibility toggling only (no per-category style editing).
-        labels = [f'{_display_label(category)} (n={category_counts.get(category, 0)})'
-                  for category in categories]
+        labels = [_count_label(category) for category in categories]
         label_to_category = dict(zip(labels, categories))
         try:
             fig.subplots_adjust(right=0.68)
@@ -7334,11 +7380,12 @@ class GeochemistryDockWidget(QDockWidget):
         title = f"{a_label}  –  {b_label}  –  {c_label}  (n={len(raw_data)})"
         ax.set_title(title, fontsize=11, pad=12)
 
+        category_counts = category_count_pairs(sample_names, valid_names)
         export_legend_artists = {}
         category_legend_obj = None
         if self.tern_legend.isChecked() and len(unique_categories) > 0:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(valid_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.05), fontsize=8)
             category_legend_obj = ax.get_legend()
 
@@ -7351,7 +7398,7 @@ class GeochemistryDockWidget(QDockWidget):
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, ordered_fids, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(valid_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Ternary Plot Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)

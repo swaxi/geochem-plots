@@ -17,9 +17,11 @@ changelog=0.0.6
        **Bug Fixes**
        * Recognise element fields named by isotope mass number (Sr88, Y89, La139, Ce140, Pr141, Nd146, 88Sr, Sr_88, Sr88_ppm ...), preferring the most abundant isotope when several are present
        * Never treat normalised, ratio, error or detection-limit fields (Sr_ChondriteNorm, La_N, Y_2SE, Nb_LOD ...) as a raw element concentration; they could previously be picked up in place of the real field and give wrong Sr/Y, sum LREE, etc.
-       * Winchester & Floyd (1977) diagram now plots Zr/TiO2 with both terms in ppm (TiO2 wt pct x 10000, or Ti ppm x 1.6685 when only Ti is available) and the axis is labelled accordingly; a measured TiO2 (or Ti, for Zr/Ti diagrams) field is preferred over a converted one
+       * Winchester & Floyd (1977) diagram now plots Zr/TiO2 with both terms in ppm (TiO2 wt pct x 10000, or Ti ppm x 1.6685 when only Ti is available); a measured TiO2 (or Ti, for Zr/Ti diagrams) field is preferred over a converted one
        * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
        * Fix chemical formulas in plot titles and axis labels (e.g. TiO2 shown with a square): formula digits (TiO2, SiO2, Na2O, Al2O3 ...) are now drawn as subscripts
+       * Remove the "(both in ppm)" suffix from the ratio axis labels of the Zr/Ti and Zr/TiO2 vs Nb/Y diagrams
+       * Category sample counts in plot legends and the style panel now read n=x/y (x plotted out of y selected samples in the category, as samples missing a required variable are not plotted); Discrimination and Minerals legends now show these counts, and the Spider diagram title counts only samples actually drawn
 
        **Improvements**
        * Rename the Minerals-tab apatite scheme to "Apatite - Sr/Y vs sum LREE (La+Ce+Pr+Nd) - O'Sullivan et al. (2020)"
