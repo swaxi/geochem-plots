@@ -21,6 +21,8 @@ changelog=0.0.6
        * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
        * Fix chemical formulas in plot titles and axis labels (e.g. TiO2 shown with a square): formula digits (TiO2, SiO2, Na2O, Al2O3 ...) are now drawn as subscripts
        * Remove the "(both in ppm)" suffix from the ratio axis labels of the Zr/Ti and Zr/TiO2 vs Nb/Y diagrams
+       * Fix the automatic selected-on-top map rendering order (is_selected() ascending), which was silently not applied; it is now set as soon as a layer is chosen in the plugin and restored after any symbology change, keeping any existing rendering order as a secondary sort
+       * Points selected on the map are now drawn above all unselected points on scatter-type plots, so they stay visible in densely clustered data
        * Category sample counts in plot legends and the style panel now read n=x/y (x plotted out of y selected samples in the category, as samples missing a required variable are not plotted); Discrimination and Minerals legends now show these counts, and the Spider diagram title counts only samples actually drawn
 
        **Improvements**

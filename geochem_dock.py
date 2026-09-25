@@ -43,6 +43,7 @@ try:
     from matplotlib.patches import Polygon
     from matplotlib.lines import Line2D
     from matplotlib.container import ErrorbarContainer
+    from matplotlib.collections import PathCollection
     from matplotlib.widgets import RectangleSelector, CheckButtons, Button
     from matplotlib.path import Path
     from matplotlib.markers import MarkerStyle
@@ -4064,13 +4065,22 @@ class GeochemistryDockWidget(QDockWidget):
         if previous is layer:
             return
         if previous is not None:
-            try:
-                previous.rendererChanged.disconnect(self._update_layer_symbology_option)
-            except (TypeError, RuntimeError):  # already disconnected or layer deleted
-                pass
+            for slot in (self._update_layer_symbology_option, self._on_watched_renderer_changed):
+                try:
+                    previous.rendererChanged.disconnect(slot)
+                except (TypeError, RuntimeError):  # already disconnected or layer deleted
+                    pass
         self._symbology_watched_layer = layer
         if layer is not None and hasattr(layer, 'rendererChanged'):
             layer.rendererChanged.connect(self._update_layer_symbology_option)
+            layer.rendererChanged.connect(self._on_watched_renderer_changed)
+        # Selected samples on top on the map, as soon as the layer is chosen.
+        self._ensure_selected_on_top(layer)
+
+    def _on_watched_renderer_changed(self):
+        """A new renderer (restyled layer, "Apply to layer…") drops the
+        selected-on-top rendering order, so put it back."""
+        self._ensure_selected_on_top(self._symbology_watched_layer)
 
     def _update_layer_symbology_option(self):
         """Enable "Use layer symbology" only when the layer's renderer is
@@ -4234,6 +4244,7 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.critical(parent, 'Apply styles to layer',
                                  f'Could not apply the plot styles to the layer:\n{exc}')
             return
+        self._ensure_selected_on_top(layer)
         try:
             self.iface.layerTreeView().refreshLayerSymbology(layer.id())
         except Exception:  # nosec B110 - legend refresh is cosmetic only
@@ -5386,22 +5397,33 @@ class GeochemistryDockWidget(QDockWidget):
         is_selected() ascending (0 = unselected drawn first, 1 = selected
         drawn last, i.e. on top), so points picked on a plot are never hidden
         under overlapping unselected points.
+
+        Applied whenever a layer is chosen in the plugin, a plot is made, or
+        the layer's symbology is replaced (which resets the order). Any
+        ordering the user already set is kept as secondary sort keys.
         """
-        layer = QgsProject.instance().mapLayer(layer_id)
-        if layer is None:
+        layer = QgsProject.instance().mapLayer(layer_id) if isinstance(layer_id, str) else layer_id
+        if layer is None or not hasattr(layer, 'renderer'):
             return
         try:
             from qgis.core import QgsFeatureRequest
             renderer = layer.renderer()
-            if renderer is not None:
-                order_by = QgsFeatureRequest.OrderBy([
-                    QgsFeatureRequest.OrderByClause('is_selected()', ascending=True, nullsfirst=False)
-                ])
-                renderer.setOrderBy(order_by)
-                renderer.setOrderByEnabled(True)
-                layer.triggerRepaint()
-        except Exception:  # nosec B110 - best-effort draw-order tweak, must not block selection/plotting
-            pass
+            if renderer is None:
+                return
+            existing = renderer.orderBy().list() if renderer.orderByEnabled() else []
+            if existing and existing[0].expression().expression().strip() == 'is_selected()' \
+                    and existing[0].ascending():
+                return  # already in place
+            others = [clause for clause in existing
+                      if clause.expression().expression().strip() != 'is_selected()']
+            # Positional (expression, ascending, nullsFirst): the keyword
+            # spelling differs between QGIS versions and fails silently here.
+            renderer.setOrderBy(QgsFeatureRequest.OrderBy(
+                [QgsFeatureRequest.OrderByClause('is_selected()', True, False)] + others))
+            renderer.setOrderByEnabled(True)
+            layer.triggerRepaint()
+        except Exception as exc:  # best-effort draw-order tweak, must not block selection/plotting
+            symbology_bridge.log(f'Could not set the selected-on-top rendering order: {exc}', warning=True)
 
     def _link_layer_selection(self, fig, layer_id, on_map_selection_changed):
         """Wire a plot to its layer's selection, in both directions.
@@ -5461,6 +5483,46 @@ class GeochemistryDockWidget(QDockWidget):
             fontsize=8, visible=False, zorder=20
         )
 
+        # Points are drawn one collection per category, so a selected point
+        # keeps its category's depth and can be hidden under unselected
+        # points of categories drawn later. Copies of the selected points
+        # are therefore redrawn in overlay collections above every category
+        # (below labels/tooltips at zorder 20).
+        overlay_artists = []
+        overlay_selection = [set()]
+
+        def _draw_selection_overlay(selected_set):
+            overlay_selection[0] = set(selected_set)
+            for artist in overlay_artists:
+                try:
+                    artist.remove()
+                except Exception:  # nosec B110 - already removed with its axes
+                    pass
+            overlay_artists.clear()
+            by_collection = {}
+            for fid in selected_set:
+                entry = fid_to_scatter.get(fid)
+                if entry is not None:
+                    by_collection.setdefault(entry[0], []).append(entry[1])
+            for sc, indices in by_collection.items():
+                if not sc.get_visible():
+                    continue  # category hidden in the style panel
+                indices = sorted(indices)
+                offsets = sc.get_offsets()
+                faces, sizes = sc.get_facecolors(), sc.get_sizes()
+                pick = lambda values: [values[i if len(values) > 1 else 0] for i in indices]
+                overlay = PathCollection(
+                    sc.get_paths(), sizes=pick(sizes) if len(sizes) else None,
+                    offsets=[offsets[i] for i in indices], offset_transform=ax.transData,
+                    facecolors=pick(faces) if len(faces) else 'none',
+                    edgecolors='red', linewidths=2.0, alpha=sc.get_alpha(), zorder=12)
+                ax.add_collection(overlay, autolim=False)
+                overlay_artists.append(overlay)
+
+        # The style panel calls this after visibility/style edits, so the
+        # overlay follows hidden categories and new colours/markers/sizes.
+        fig._geochem_refresh_selection_overlay = lambda: _draw_selection_overlay(overlay_selection[0])
+
         def show_selection(selected_fids):
             """Highlight (and optionally label) `selected_fids` on the plot only."""
             layer = QgsProject.instance().mapLayer(layer_id)
@@ -5494,6 +5556,7 @@ class GeochemistryDockWidget(QDockWidget):
             for sc in coll_edge:
                 sc.set_edgecolors(coll_edge[sc])
                 sc.set_linewidths(coll_lw[sc])
+            _draw_selection_overlay(selected_set)
 
             if self.discrim_label.isChecked() and selected_fids:
                 label_field = self.label_field_combo.currentText()
@@ -6326,7 +6389,15 @@ class GeochemistryDockWidget(QDockWidget):
             # own value, which would undo any "Show mean +/- 2 sigma" fade -
             # so reapply that fade on top, if the Statistics toggle is on.
             _stats_display_ref[0]()
+            _refresh_selection_overlay()
             fig.canvas.draw_idle()
+
+        def _refresh_selection_overlay():
+            # Selected points are redrawn on top (see _attach_scatter_selection);
+            # keep those copies in step with visibility, style and fading.
+            refresh = getattr(fig, '_geochem_refresh_selection_overlay', None)
+            if refresh is not None:
+                refresh()
 
         def _sync_legend_symbols():
             for category in categories:
@@ -6346,6 +6417,7 @@ class GeochemistryDockWidget(QDockWidget):
             # The Statistics overlay's own visibility/fade also depends on
             # which categories are shown/hidden here.
             _stats_display_ref[0]()
+            _refresh_selection_overlay()
             fig.canvas.draw_idle()
 
         def _apply_all_category_styles():
@@ -6450,6 +6522,7 @@ class GeochemistryDockWidget(QDockWidget):
                             effective_alpha = base_alpha
                         for entry in artist_registry.get(category, []):
                             self._set_artist_alpha(entry, effective_alpha)
+                    _refresh_selection_overlay()
                     fig.canvas.draw_idle()
 
                 _stats_display_ref[0] = _apply_stats_display
