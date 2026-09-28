@@ -46,6 +46,7 @@ try:
     from matplotlib.lines import Line2D
     from matplotlib.container import ErrorbarContainer
     from matplotlib.collections import PathCollection
+    from matplotlib.transforms import IdentityTransform
     from matplotlib.widgets import RectangleSelector, CheckButtons, Button
     from matplotlib.path import Path
     from matplotlib.markers import MarkerStyle
@@ -2303,7 +2304,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
 
         ax.set_xlabel('Nb/Y', fontsize=12)
-        ax.set_ylabel(subscript_formula('Zr/TiO2'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Zr/TiO2 (in ppm)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
         ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
@@ -5992,7 +5993,16 @@ class GeochemistryDockWidget(QDockWidget):
                     sc.get_paths(), sizes=pick(sizes) if len(sizes) else None,
                     offsets=[offsets[i] for i in indices], offset_transform=ax.transData,
                     facecolors=pick(faces) if len(faces) else 'none',
-                    edgecolors='red', linewidths=2.0, alpha=sc.get_alpha(), zorder=12)
+                    edgecolors='red', linewidths=2.0, alpha=sc.get_alpha(), zorder=12,
+                    # ax.scatter() marks its PathCollection's own transform as
+                    # already "set" (to IdentityTransform, since its per-path
+                    # unit-marker shape is scaled/placed via sizes+offsets, not
+                    # this transform). Without this, add_collection() below
+                    # treats the transform as unset and defaults it to
+                    # ax.transData - which then wrongly re-maps the marker's
+                    # tiny unit-shape vertices as if they were data
+                    # coordinates, rendering it as a giant, mispositioned blob.
+                    transform=IdentityTransform())
                 ax.add_collection(overlay, autolim=False)
                 overlay_artists.append(overlay)
 
@@ -6211,7 +6221,15 @@ class GeochemistryDockWidget(QDockWidget):
 
         fig.canvas.mpl_connect('button_release_event', on_click)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
-        rect = RectangleSelector(ax, on_rect_select, useblit=True, button=[1],
+        # useblit=False: blitting caches a snapshot of the canvas at drag-start
+        # and restores it instead of a full redraw. Our own selection overlay
+        # (_draw_selection_overlay/show_selection) mutates artists and redraws
+        # independently (via draw_idle()); if that redraw hasn't been flushed
+        # yet when a drag starts, the selector's cached background goes stale
+        # and gets blitted back over the current frame, leaving a "ghost" of
+        # an earlier overlay frozen on the plot until something forces a full
+        # redraw (e.g. a resize).
+        rect = RectangleSelector(ax, on_rect_select, useblit=False, button=[1],
                                  props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
                                             alpha=0.3, linewidth=1.5))
         fig._rect_selector = rect  # keep reference so it isn't garbage-collected
