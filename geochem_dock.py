@@ -401,8 +401,10 @@ class _CheckableComboBox(QComboBox):
     currentText()/setCurrentText() use that same ' + ' form.
 
     `exclusive_item` (e.g. '1 (none)') cannot be combined with other
-    entries: ticking it clears the others and vice versa. At least one entry
-    always stays ticked (the exclusive item if present, else the first).
+    entries: ticking it clears the others and vice versa. Nothing is ticked
+    to start with, and the box can be left with nothing ticked - callers
+    that need at least one entry (a plot's numerator) must check for that
+    themselves and prompt the user, rather than have one silently forced on.
     """
 
     checkedChanged = pyqtSignal()
@@ -414,6 +416,11 @@ class _CheckableComboBox(QComboBox):
         self._exclusive_item = exclusive_item
         self._updating = False
         self._tick_order = []  # ticked entries in the order they were ticked
+        # The click that opens the popup can land its mouse-release over the
+        # popup's own viewport (typically row 0, right under the combo box),
+        # which the eventFilter below would otherwise read as a deliberate
+        # click and toggle. Swallow exactly one release right after opening.
+        self._suppress_next_toggle = False
         self.setModel(QStandardItemModel(self))
         self.model().itemChanged.connect(self._on_item_changed)
         # Toggle on click and keep the list open, so several entries can be
@@ -440,7 +447,6 @@ class _CheckableComboBox(QComboBox):
             self._updating = False
         # Room for the widest entry plus its tick box and spacing.
         fit_popup_width(self, extra=self.INDICATOR_SIZE + 12)
-        self._ensure_one_checked()
         self._after_change()
 
     def addItem(self, text, *args):
@@ -476,7 +482,6 @@ class _CheckableComboBox(QComboBox):
                 item.setCheckState(Qt_Checked if item.text() in texts else Qt_Unchecked)
         finally:
             self._updating = False
-        self._ensure_one_checked()
         self._after_change()
 
     def currentText(self):
@@ -484,20 +489,6 @@ class _CheckableComboBox(QComboBox):
 
     def setCurrentText(self, text):
         self.set_checked_items([part.strip() for part in str(text).split(self.SEPARATOR)])
-
-    def _ensure_one_checked(self):
-        model = self.model()
-        if model.rowCount() == 0 or self.checked_items():
-            return
-        fallback = model.item(0)
-        for i in range(model.rowCount()):
-            if model.item(i).text() == self._exclusive_item:
-                fallback = model.item(i)
-        self._updating = True
-        try:
-            fallback.setCheckState(Qt_Checked)
-        finally:
-            self._updating = False
 
     def _on_item_changed(self, item):
         if self._updating:
@@ -518,7 +509,6 @@ class _CheckableComboBox(QComboBox):
                         other.setCheckState(Qt_Unchecked)
         finally:
             self._updating = False
-        self._ensure_one_checked()
         self._after_change()
 
     def _after_change(self):
@@ -529,8 +519,25 @@ class _CheckableComboBox(QComboBox):
         self.update()
         self.checkedChanged.emit()
 
+    def showPopup(self):
+        super().showPopup()
+        # The press that opens the popup is followed by a release once it's
+        # already showing; if that release lands over the popup's viewport
+        # (commonly row 0, right under the combo box), it must not toggle.
+        self._suppress_next_toggle = True
+
+    def hidePopup(self):
+        super().hidePopup()
+        # Guard against a stale flag if the opening click's release never
+        # reached the viewport (e.g. the popup was opened from the keyboard),
+        # so it can't wrongly swallow a real click the next time it opens.
+        self._suppress_next_toggle = False
+
     def eventFilter(self, obj, event):
         if obj is self.view().viewport() and event.type() == QEvent_MouseButtonRelease:
+            if self._suppress_next_toggle:
+                self._suppress_next_toggle = False
+                return True  # swallow the release that opened the popup
             pos = event.position().toPoint() if hasattr(event, 'position') else event.pos()
             index = self.view().indexAt(pos)
             if index.isValid():
@@ -5709,9 +5716,14 @@ class GeochemistryDockWidget(QDockWidget):
         together (e.g. Na2O + K2O); see custom_sum_plan() for units.
         """
         x_num = self.x_num_combo.checked_items()
-        x_denom = self.x_denom_combo.checked_items()
+        x_denom = self.x_denom_combo.checked_items() or ['1 (none)']
         y_num = self.y_num_combo.checked_items()
-        y_denom = self.y_denom_combo.checked_items()
+        y_denom = self.y_denom_combo.checked_items() or ['1 (none)']
+
+        if not x_num or not y_num:
+            QMessageBox.warning(self, "Warning", "Please select X and Y fields.")
+            return
+
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('custom')
 
@@ -7883,11 +7895,15 @@ class GeochemistryDockWidget(QDockWidget):
             return f"{sum_str(num, True)} / {sum_str(denom, True)}"
 
         a_num   = self.tern_a_num_combo.checked_items()
-        a_denom = self.tern_a_denom_combo.checked_items()
+        a_denom = self.tern_a_denom_combo.checked_items() or ['1 (none)']
         b_num   = self.tern_b_num_combo.checked_items()
-        b_denom = self.tern_b_denom_combo.checked_items()
+        b_denom = self.tern_b_denom_combo.checked_items() or ['1 (none)']
         c_num   = self.tern_c_num_combo.checked_items()
-        c_denom = self.tern_c_denom_combo.checked_items()
+        c_denom = self.tern_c_denom_combo.checked_items() or ['1 (none)']
+
+        if not a_num or not b_num or not c_num:
+            QMessageBox.warning(self, "Warning", "Please select A, B and C fields.")
+            return
 
         a_label = apex_label(a_num, a_denom)
         b_label = apex_label(b_num, b_denom)
