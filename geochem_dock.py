@@ -889,7 +889,7 @@ REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er'
 CUSTOM_XY_ELEMENTS = [
     '1 (none)', 'Ag', 'Al', 'Al2O3', 'As', 'Au', 'B', 'Ba', 'Bi', 'Ca', 'CaO',
     'Cd', 'Ce', 'Co', 'Cr', 'Cr2O3', 'Cs', 'Cu', 'Dy', 'Er', 'Eu', 'F', 'Fe',
-    'Fe2O3', 'FeO', 'Ga', 'Gd', 'Ge', 'Hf', 'Ho', 'K', 'K2O', 'La', 'Lu',
+    'Fe2O3', 'Fe2O3-T', 'FeO', 'FeO-T', 'Ga', 'Gd', 'Ge', 'Hf', 'Ho', 'K', 'K2O', 'La', 'Lu',
     'Mg#', 'Mg', 'MgO', 'Mn', 'MnO', 'Mo', 'Na', 'Na2O', 'Nb', 'Nd', 'Ni',
     'NiO', 'P', 'P2O5', 'Pb', 'Pr', 'Rb', 'S', 'Sb', 'Sc', 'Se', 'Si', 'SiO2',
     'Sm', 'Sn', 'Sr', 'Ta', 'Tb', 'Th', 'Ti', 'TiO2', 'Tm', 'U', 'V', 'W',
@@ -925,6 +925,59 @@ OXIDE_COMPOSITION = {
 ELEMENT_TO_OXIDE = {element: oxide for oxide, (element, _, _) in OXIDE_COMPOSITION.items()
                     # Fe maps to Fe2O3 (total iron) by convention; FeO stays reachable via OXIDE_COMPOSITION.
                     if not (oxide == 'FeO')}
+
+# FeO and Fe2O3 are often reported as an explicit "total" - all iron
+# recalculated as that one oxide - under a field name that tags the base
+# oxide name with some spelling of "total": FeOT, FeOt, FeO*, FeOtot,
+# FeO-tot, FeO(T), FeO(t)... (and the same for Fe2O3). These report the same
+# species as a plain 'FeO'/'Fe2O3' field, just under a different name, so
+# they are recognised as if they were that oxide field - but only once a
+# genuine 'FeO'/'Fe2O3' field has been ruled out (see _find_element_field_in_names).
+TOTAL_IRON_OXIDES = ('FeO', 'Fe2O3')
+
+
+def _total_iron_field_variants(oxide):
+    """Field-name spellings for `oxide` ('FeO' or 'Fe2O3') reported as total
+    iron, e.g. 'FeOT', 'FeOt', 'FeO*', 'FeOtot', 'FeO-tot', 'FeO(T)', 'FeO(t)'."""
+    tags = ('T', 't', 'Tot', 'tot', 'TOT', 'Total', 'total', 'TOTAL')
+    seps = ('', '_', '-', ' ')
+    unit_suffixes = ('', '_pct', '_PCT', '_wt', '_WT')
+    variants = [f'{oxide}*']
+    for sep in seps:
+        for tag in tags:
+            for suffix in unit_suffixes:
+                variants.append(f'{oxide}{sep}{tag}{suffix}')
+    for tag in ('T', 't'):
+        variants.append(f'{oxide}({tag})')
+    return variants
+
+
+# Explicit "total iron" entries offered in the Custom XY/Ternary and bubble
+# "Size by" dropdowns, distinct from 'FeO'/'Fe2O3': those only fall back to
+# a FeOT-style field when no real FeO/Fe2O3 field exists (find_element_field),
+# so picking 'FeO-T'/'Fe2O3-T' explicitly always reads the total-iron field,
+# even when a separate (non-total) FeO/Fe2O3 field is also present.
+TOTAL_IRON_TERM_OXIDE = {'FeO-T': 'FeO', 'Fe2O3-T': 'Fe2O3'}
+
+
+def find_total_iron_field(layer, oxide):
+    """Field in `layer` reporting *total* iron as `oxide` ('FeO' or 'Fe2O3')
+    under one of its common "total" spellings (FeOT, FeOt, FeO*, FeOtot,
+    FeO-tot, FeO(T), FeO(t)...), or None if there isn't one. A plain
+    'FeO'/'Fe2O3' field is a different, unlabelled quantity, not this."""
+    variants = {v.upper() for v in _total_iron_field_variants(oxide)}
+    for field in layer.fields():
+        if field.name().upper() in variants:
+            return field.name()
+    return None
+
+
+def _is_custom_term_available(layer, term):
+    """Whether `term` (an entry from CUSTOM_XY_ELEMENTS, 'Mg#', or a plain
+    field name from "show all numeric fields") has a usable field in `layer`."""
+    if term in TOTAL_IRON_TERM_OXIDE:
+        return find_total_iron_field(layer, TOTAL_IRON_TERM_OXIDE[term]) is not None
+    return find_element_field(layer, term) is not None
 
 
 def _oxide_element_mass_fraction(oxide):
@@ -1157,9 +1210,18 @@ def _find_element_field_in_names(all_field_names, element, allow_oxide_forms):
         f"{element}(ppm)", f"{element} (ppm)", f"{element}(PPM)", f"{element}_[ppm]",
     ]
 
+    # FeO/Fe2O3 reported as total iron (FeOT, FeOt, FeO*, FeOtot, FeO-tot,
+    # FeO(T)...) name the same oxide, not a different species to convert
+    # from/to, so these are recognised unconditionally - but appended after
+    # the exact-name patterns above, so a genuine 'FeO'/'Fe2O3' field (see
+    # the "exact pattern match" step below) always wins when both exist.
+    if element in TOTAL_IRON_OXIDES:
+        patterns.extend(_total_iron_field_variants(element))
+
     oxide_forms = {
         'Ti': ['TiO2_pct', 'TiO2_PCT', 'TiO2_wt', 'TiO2', 'tio2_pct', 'TIO2_PCT'],
-        'Fe': ['Fe2O3_pct', 'Fe2O3T_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeOT_pct', 'FeO_PCT'],
+        'Fe': ['Fe2O3_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeO_PCT',
+               *_total_iron_field_variants('FeO'), *_total_iron_field_variants('Fe2O3')],
         'Mn': ['MnO_pct', 'MnO_PCT', 'MnO_wt', 'MnO'],
         'Mg': ['MgO_pct', 'MgO_PCT', 'MgO_wt', 'MgO'],
         'Ca': ['CaO_pct', 'CaO_PCT', 'CaO_wt', 'CaO'],
@@ -1452,7 +1514,7 @@ def custom_term_unit(layer, term, norm_values=None):
         return 'Mg#'
     if norm_values and term in REE_ELEMENTS and norm_values.get(term):
         return 'normalised'
-    if term in OXIDE_COMPOSITION:
+    if term in OXIDE_COMPOSITION or term in TOTAL_IRON_TERM_OXIDE:
         return 'wt%'
     if term in CUSTOM_XY_ELEMENTS:
         return 'ppm'
@@ -1517,9 +1579,7 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
     if element_name == 'Mg#':
         mgo_field = find_element_field(layer, 'MgO')
         feo_field = find_element_field(layer, 'FeO')
-        
-        if feo_field is None:
-            feo_field = find_element_field(layer, 'FeOT')
+
         if feo_field is None:
             fe2o3_field = find_element_field(layer, 'Fe2O3')
             if fe2o3_field:
@@ -1559,12 +1619,23 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
         except (ValueError, TypeError, ZeroDivisionError):
             return None
     
+    if element_name in TOTAL_IRON_TERM_OXIDE:
+        oxide = TOTAL_IRON_TERM_OXIDE[element_name]
+        field_name = find_total_iron_field(layer, oxide)
+        if field_name is None:
+            return None
+        raw = _read_numeric_field(feature, field_name)
+        if raw is None:
+            return None
+        _record_field_use(element_name, field_name)
+        value = _value_to_pct(raw, field_name, default_unit='pct')
+
     # Recognised element symbols are returned in ppm and recognised oxide
     # formulas in wt%, auto-converting from whichever unit/form (ppm, ppb,
     # pct, elemental or oxide) the layer actually stores. A field picked
     # directly via "show all numeric fields" isn't a known species, so it's
     # returned as stored, with no conversion.
-    if element_name in OXIDE_COMPOSITION:
+    elif element_name in OXIDE_COMPOSITION:
         value = get_oxide_pct(feature, layer, element_name)
     elif element_name in CUSTOM_XY_ELEMENTS:
         value = get_element_ppm(feature, layer, element_name)
@@ -4320,7 +4391,8 @@ class GeochemistryDockWidget(QDockWidget):
         variables.update(EXTENDED_ORDER_ALT)
         variables.update(REE_ORDER)
         variables.update(REE_ELEMENTS)
-        variables.update([v for v in CUSTOM_XY_ELEMENTS if v not in ('1 (none)', 'Mg#')])
+        variables.update([v for v in CUSTOM_XY_ELEMENTS
+                         if v not in ('1 (none)', 'Mg#') and v not in TOTAL_IRON_TERM_OXIDE])
 
         return sorted(variables)
 
@@ -4572,13 +4644,18 @@ class GeochemistryDockWidget(QDockWidget):
             return None
         if size_field == 'Mg#':
             mgo = find_element_field(layer, 'MgO')
-            feo = find_element_field(layer, 'FeO') or find_element_field(layer, 'FeOT')
+            feo = find_element_field(layer, 'FeO')
             fe2o3 = None if feo else find_element_field(layer, 'Fe2O3')
             feo_expr = q(feo) if feo else (f'({q(fe2o3)} * 0.8998)' if fe2o3 else None)
             if not mgo or not feo_expr:
                 return None
             mg = f'({q(mgo)} / {num(MW_MGO)})'
             return f'(100 * {mg} / ({mg} + 0.9 * {feo_expr} / {num(MW_FEO)}))'
+        if size_field in TOTAL_IRON_TERM_OXIDE:
+            field = find_total_iron_field(layer, TOTAL_IRON_TERM_OXIDE[size_field])
+            if not field:
+                return None
+            return term(field, _value_to_pct(1.0, field, default_unit='pct'))
 
         # (field, factor) candidates in the order get_*_value() tries them;
         # coalesce() reproduces its per-feature fallback.
@@ -5710,12 +5787,9 @@ class GeochemistryDockWidget(QDockWidget):
                 else:
                     elements_needed.add(elem)
         
-        missing_elements = []
-        for elem in sorted(elements_needed):
-            field = find_element_field(layer, elem)
-            if field is None:
-                missing_elements.append(elem)
-        
+        missing_elements = [elem for elem in sorted(elements_needed)
+                            if not _is_custom_term_available(layer, elem)]
+
         if missing_elements:
             QMessageBox.warning(self, "Warning", 
                 f"Missing elements: {', '.join(missing_elements)}\nPlot cannot be generated.")
@@ -6626,7 +6700,7 @@ class GeochemistryDockWidget(QDockWidget):
 
     def _field_display_label(self, field):
         """Human-readable label for a single element/oxide field, with unit."""
-        if field in OXIDE_COMPOSITION:
+        if field in OXIDE_COMPOSITION or field in TOTAL_IRON_TERM_OXIDE:
             return f"{field} (wt%)"
         if field in CUSTOM_XY_ELEMENTS and field not in ('1 (none)', 'Mg#'):
             return f"{field} (ppm)"
@@ -7846,7 +7920,7 @@ class GeochemistryDockWidget(QDockWidget):
                 self._bubble_terms('tern'):
             if elem != '1 (none)':
                 elements_needed.add(elem)
-        missing = [e for e in sorted(elements_needed) if find_element_field(layer, e) is None]
+        missing = [e for e in sorted(elements_needed) if not _is_custom_term_available(layer, e)]
         if missing:
             QMessageBox.warning(self, "Warning",
                 f"Missing elements: {', '.join(missing)}\nPlot cannot be generated.")
