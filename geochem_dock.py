@@ -6075,9 +6075,9 @@ class GeochemistryDockWidget(QDockWidget):
                 offsets = sc.get_offsets()
                 faces, sizes = sc.get_facecolors(), sc.get_sizes()
                 pick = lambda values: [values[i if len(values) > 1 else 0] for i in indices]
-                overlay = PathCollection(
-                    sc.get_paths(), sizes=pick(sizes) if len(sizes) else None,
-                    offsets=[offsets[i] for i in indices], offset_transform=ax.transData,
+                overlay_kwargs = dict(
+                    sizes=pick(sizes) if len(sizes) else None,
+                    offsets=[offsets[i] for i in indices],
                     facecolors=pick(faces) if len(faces) else 'none',
                     edgecolors='red', linewidths=2.0, alpha=sc.get_alpha(), zorder=12,
                     # ax.scatter() marks its PathCollection's own transform as
@@ -6089,6 +6089,13 @@ class GeochemistryDockWidget(QDockWidget):
                     # tiny unit-shape vertices as if they were data
                     # coordinates, rendering it as a giant, mispositioned blob.
                     transform=IdentityTransform())
+                try:
+                    overlay = PathCollection(sc.get_paths(), offset_transform=ax.transData,
+                                             **overlay_kwargs)
+                except (TypeError, AttributeError):
+                    # matplotlib < 3.6 spells the offsets' transform transOffset.
+                    overlay = PathCollection(sc.get_paths(), transOffset=ax.transData,
+                                             **overlay_kwargs)
                 ax.add_collection(overlay, autolim=False)
                 overlay_artists.append(overlay)
 

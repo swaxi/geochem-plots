@@ -45,6 +45,12 @@ changelog=0.0.6
        * Add opt-in "Use layer symbology" option: take each category's colour, marker shape, size and label from the layer's Categorized symbology when it classifies on the selected Category field (map-unchecked categories start hidden; unstyled categories keep the default plot styling); also available as a toggle button in the plot style panel (Style Management) to restyle an open plot live (click again to restore the default styles); a data-defined symbol size on the layer fills in the tab's Bubble Size settings
        * Add "Apply to layer..." button to the plot style panel, building a Categorized symbology for the layer from the plot's category styles (with confirmation; the previous layer style is kept in the layer's style list); bubble sizing is exported as a matching data-defined symbol size
 
+       **Dependencies & QGIS 4 (Qt6)**
+       * requirements.txt now declares minimum versions only, harmonised with the GEOL-QMAPS and Stereoplot plugins (numpy>=1.21 ; matplotlib>=3.5). The previous upper caps (numpy<2.0, matplotlib<3.12) conflicted with the numpy 2.x that QGIS 3.44 and QGIS 4 ship, making qpip install an older duplicate numpy that shadows QGIS's own (which can break QGIS's GDAL bindings). The floors are the oldest versions the plugin actually needs (matplotlib 3.5 is the first with the QtAgg backend used under Qt6), so qpip never replaces the packages QGIS ships.
+       * Set plugin_dependencies=qpip (as GEOL-QMAPS already does), so the QGIS Plugin Manager offers to install qpip, which installs the requirements.txt dependencies, together with the plugin.
+       * The map-to-plot selection highlight now also works with matplotlib 3.5 (it used a keyword only available from matplotlib 3.6).
+       * Checked QGIS 4 readiness: QGIS 4 only uses qgisMaximumVersion (4.99) to decide compatibility, and the supportsQt6 flag is obsolete (removed from QGIS core), so it stays out of metadata.txt. A static check of the code against PyQt6 found no unscoped Qt enums, removed classes or removed methods outside the existing Qt5 fallbacks.
+
      0.0.5 2026-07
        **Dependency Harmonisation & Qt6 Fixes**
        * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins (numpy>=1.26.4,<2.0 ; matplotlib>=3.7,<3.12), so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.
@@ -96,3 +102,4 @@ category=Analysis
 icon=icon.svg
 experimental=False
 deprecated=False
+plugin_dependencies=qpip

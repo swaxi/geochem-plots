@@ -1,2 +1,7 @@
-matplotlib>=3.7,<3.12
-numpy>=1.26.4,<2.0
+# Minimum versions only (no upper caps), harmonised with the GEOL-QMAPS and
+# Stereoplot plugins. Floors are the oldest versions the plugin code needs,
+# so qpip never replaces the newer copies QGIS itself ships (e.g. numpy 2.x,
+# matplotlib 3.11 in QGIS 3.44 / 4.x). matplotlib 3.5 is the first release with
+# the QtAgg backend used under Qt6 (QGIS 4).
+numpy>=1.21
+matplotlib>=3.5
