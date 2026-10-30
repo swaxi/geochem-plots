@@ -42,7 +42,7 @@ try:
     import matplotlib.pyplot as plt
 
     import matplotlib.ticker as ticker
-    from matplotlib.patches import Polygon
+    from matplotlib.patches import Polygon, Rectangle
     from matplotlib.lines import Line2D
     from matplotlib.container import ErrorbarContainer
     from matplotlib.collections import PathCollection
@@ -1829,16 +1829,22 @@ def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers
 
 
 # =============================================================================
-# CATEGORY MEAN +/- 2-SIGMA STATISTICS OVERLAYS
+# CATEGORY STATISTICS OVERLAYS (MEAN +/- 2 SIGMA, MEDIAN, IQR)
 # =============================================================================
 # Every generate_*_plot() method draws its normal per-sample points/lines as
 # before, then additionally builds one of these overlay artist sets per
-# category - a mean +/- 2 sigma marker/error-bar and a convex-hull/min-max
-# envelope - both created hidden (visible=False). The interactive category
-# panel (_open_category_panel) then reveals them and fades the raw points on
-# a "Show mean +/- 2 sigma" toggle, so switching modes is instant (no
-# re-plotting) and still leaves the underlying points clickable for QGIS
-# feature selection.
+# category - a mean +/- 2 sigma marker/error-bar, a median marker/line, an
+# interquartile range box/band and a convex-hull/min-max envelope - all
+# created hidden (visible=False). The interactive category panel
+# (_open_category_panel) then reveals them and fades the raw points on its
+# Statistics checkboxes, so switching modes is instant (no re-plotting) and
+# still leaves the underlying points clickable for QGIS feature selection.
+# stats_registry entries are {'artist': ..., 'kind': 'mean'|'median'|'iqr'}.
+
+# The median marker is drawn this much larger than the mean marker, so its
+# open ring stays visible around the mean when the two coincide.
+MEDIAN_MARKER_SCALE = 1.4
+
 
 def _convex_hull(points):
     """Andrew's monotone-chain convex hull, in counter-clockwise order.
@@ -1877,6 +1883,14 @@ def _group_mean_2sigma(xs, ys):
     return mean_x, mean_y, err_x, err_y
 
 
+def _group_median_iqr(xs, ys):
+    """Return (median_x, median_y, q1_x, q3_x, q1_y, q3_y): the medians and
+    25th/75th percentiles of a category's points."""
+    q1_x, median_x, q3_x = np.nanpercentile(np.asarray(xs, dtype=float), [25, 50, 75])
+    q1_y, median_y, q3_y = np.nanpercentile(np.asarray(ys, dtype=float), [25, 50, 75])
+    return float(median_x), float(median_y), float(q1_x), float(q3_x), float(q1_y), float(q3_y)
+
+
 def _build_cat_groups_from_points(pts_data, sample_names, category_colors, category_markers, sizes=None):
     """Group already-computed (x, y) points by category name.
 
@@ -1913,8 +1927,13 @@ def _group_color(g):
 
 
 def _build_xy_stat_artists(ax, cat_groups):
-    """Build hidden mean +/- 2-sigma and convex-hull envelope overlays for
-    XY-style scatter plots, one per category.
+    """Build hidden mean +/- 2-sigma, median, IQR and convex-hull envelope
+    overlays for XY-style scatter plots, one set per category.
+
+    The median is an open ring marker, drawn slightly larger than the mean
+    marker so both stay visible when they coincide; the IQR is an unfilled
+    box from Q1 to Q3 on both axes, so it can't be confused with the mean's
+    error-bar cross.
 
     `cat_groups`: {key: {'xs': [...], 'ys': [...], 'name': str, plus either
     'color'/'marker' (custom-ternary/discrimination/minerals) or
@@ -1943,7 +1962,19 @@ def _build_xy_stat_artists(ax, cat_groups):
             fmt=marker, ms=ms, mfc=color, mec=color, mew=1.3,
             ecolor=color, elinewidth=1.8, capsize=6, capthick=1.8,
             zorder=16, visible=False)
-        stats_registry.setdefault(name, []).append(err)
+        stats_registry.setdefault(name, []).append({'artist': err, 'kind': 'mean'})
+
+        median_x, median_y, q1_x, q3_x, q1_y, q3_y = _group_median_iqr(xs, ys)
+        median = ax.errorbar(
+            median_x, median_y, fmt=marker, ms=ms * MEDIAN_MARKER_SCALE, mfc='none', mec=color,
+            mew=1.8, zorder=17, visible=False)
+        stats_registry[name].append({'artist': median, 'kind': 'median'})
+
+        if q3_x > q1_x or q3_y > q1_y:
+            box = Rectangle((q1_x, q1_y), q3_x - q1_x, q3_y - q1_y, fill=False, edgecolor=color,
+                            linewidth=1.8, zorder=15, visible=False)
+            ax.add_patch(box)
+            stats_registry[name].append({'artist': box, 'kind': 'iqr'})
 
         if len(xs) >= 3:
             hull = _convex_hull(list(zip(xs, ys)))
@@ -1955,21 +1986,27 @@ def _build_xy_stat_artists(ax, cat_groups):
     return stats_registry, envelope_registry
 
 
-def _restyle_stats_artist(artist, style, lock_size=False):
-    """Recolour/re-marker a mean +/- 2-sigma errorbar (or a dict/list of
-    them) to match a category's current style, leaving its computed
-    position/error-bar geometry untouched.
+def _restyle_stats_artist(artist, style, lock_size=False, kind='mean'):
+    """Recolour/re-marker a statistics overlay (mean +/- 2-sigma or median
+    errorbar, IQR box or band, or a dict/list of them) to match a category's
+    current style, leaving its computed position/geometry untouched.
 
     `lock_size=True` (bubble sizing active) leaves the marker's size alone,
     matching how _apply_style_to_matplotlib_artist() locks raw-point sizes.
+    The median keeps its open, slightly larger ring whatever the style's fill.
     """
     if artist is None:
         return
     if isinstance(artist, dict):
-        return _restyle_stats_artist(artist.get('artist'), style, lock_size)
+        return _restyle_stats_artist(artist.get('artist'), style, lock_size,
+                                     artist.get('kind', kind))
     if isinstance(artist, ErrorbarContainer):
         colour = style.get('color', '#000000')
-        face = 'white' if style.get('fill') == 'hollow' else colour
+        if kind == 'median':
+            face = 'none'
+        else:
+            face = 'white' if style.get('fill') == 'hollow' else colour
+        size_scale = MEDIAN_MARKER_SCALE if kind == 'median' else 1.0
         data_line, caplines, barlinecols = artist.lines
         if data_line is not None:
             if hasattr(data_line, 'set_marker'):
@@ -1985,7 +2022,8 @@ def _restyle_stats_artist(artist, style, lock_size=False):
             if hasattr(data_line, 'set_color'):
                 data_line.set_color(colour)
             if not lock_size and hasattr(data_line, 'set_markersize'):
-                data_line.set_markersize(max(6.0, float(style.get('markersize', 8)) * 1.5))
+                data_line.set_markersize(
+                    max(6.0, float(style.get('markersize', 8)) * 1.5) * size_scale)
         for cap in caplines:
             cap.set_color(colour)
             # Cap "ticks" are themselves marker-based Line2D's, subject to
@@ -1997,7 +2035,14 @@ def _restyle_stats_artist(artist, style, lock_size=False):
         return
     if isinstance(artist, (list, tuple)):
         for item in artist:
-            _restyle_stats_artist(item, style, lock_size)
+            _restyle_stats_artist(item, style, lock_size, kind)
+        return
+    # IQR overlay: an unfilled box (Patch) or a shaded band (PolyCollection).
+    colour = style.get('color', '#000000')
+    if hasattr(artist, 'set_edgecolor'):
+        artist.set_edgecolor(colour)
+    if hasattr(artist, 'set_facecolor') and not isinstance(artist, Rectangle):
+        artist.set_facecolor(colour)
 
 
 def _restyle_envelope_artist(artist, style):
@@ -2025,13 +2070,14 @@ def _restyle_envelope_artist(artist, style):
 def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
                                category_colors, category_markers, markers_enabled=True,
                                sample_markersizes=None):
-    """Build hidden mean +/- 2-sigma and min/max-envelope overlays for a
-    spider diagram, one per category.
+    """Build hidden mean +/- 2-sigma, median, IQR and min/max-envelope
+    overlays for a spider diagram, one set per category.
 
     Statistics are computed in log10 space (spider diagrams use a log
     y-axis and geochemical ratios are roughly log-normal), then mapped back
-    to linear values for display. Returns (stats_registry, envelope_registry)
-    with the same shape as _build_xy_stat_artists().
+    to linear values for display. The median is a dashed line with open
+    markers, the IQR a shaded band from Q1 to Q3. Returns (stats_registry,
+    envelope_registry) with the same shape as _build_xy_stat_artists().
 
     `sample_markersizes`, if given, is a per-sample list of the markersize
     (already sqrt-of-area, matching each raw sample line's own bubble-scaled
@@ -2064,6 +2110,7 @@ def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
             elem_max = np.nanmax(arr, axis=0)
             mean_log = np.nanmean(log_arr, axis=0)
             std_log = np.nanstd(log_arr, axis=0) if arr.shape[0] > 1 else np.zeros_like(mean_log)
+            q1_log, median_log, q3_log = np.nanpercentile(log_arr, [25, 50, 75], axis=0)
 
         valid = np.isfinite(mean_log)
         if not np.any(valid):
@@ -2080,7 +2127,19 @@ def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
             color=color, ecolor=color, elinewidth=1.6, capsize=4, capthick=1.6,
             markerfacecolor='white', markeredgecolor=color,
             markeredgewidth=1.5, zorder=16, visible=False)
-        stats_registry.setdefault(name, []).append(err)
+        stats_registry.setdefault(name, []).append({'artist': err, 'kind': 'mean'})
+
+        median = ax.errorbar(
+            x_positions[valid], 10 ** median_log[valid], fmt='--', marker=marker,
+            markersize=mean_markersize * MEDIAN_MARKER_SCALE, linewidth=2.5, color=color,
+            markerfacecolor='none', markeredgecolor=color, markeredgewidth=1.5,
+            zorder=17, visible=False)
+        stats_registry[name].append({'artist': median, 'kind': 'median'})
+
+        band = ax.fill_between(
+            x_positions[valid], 10 ** q1_log[valid], 10 ** q3_log[valid], facecolor=color,
+            edgecolor=color, linewidth=1.8, alpha=0.3, zorder=15, visible=False)
+        stats_registry[name].append({'artist': band, 'kind': 'iqr'})
 
         if np.any(np.isfinite(elem_min) & np.isfinite(elem_max)):
             band = ax.fill_between(x_positions, elem_min, elem_max, facecolor=color,
@@ -7043,16 +7102,32 @@ class GeochemistryDockWidget(QDockWidget):
                 stats_group = QGroupBox('Statistics', panel)
                 stats_layout = QVBoxLayout(stats_group)
                 stats_caption = QLabel(
-                    "Show each category's mean ± 2σ, with individual samples "
-                    "faded behind it (or replaced by a shaded envelope).", stats_group)
+                    "Show each category's statistics, with individual samples "
+                    "faded behind them (or replaced by a shaded envelope).", stats_group)
                 stats_caption.setWordWrap(True)
                 stats_layout.addWidget(stats_caption)
 
                 stats_checkbox = QCheckBox('Show mean ± 2σ', stats_group)
+                median_checkbox = QCheckBox('Show median', stats_group)
+                median_checkbox.setToolTip(
+                    "Open ring around the category's symbol (dashed line on spider diagrams).")
+                iqr_checkbox = QCheckBox('Show interquartile range (IQR)', stats_group)
+                iqr_checkbox.setToolTip(
+                    "25th to 75th percentile, as an unfilled box covering both axes "
+                    "(shaded band on spider diagrams).")
+                faded_data_checkbox = QCheckBox('Show faded individual data', stats_group)
+                faded_data_checkbox.setChecked(True)
+                faded_data_checkbox.setEnabled(False)
+                faded_data_checkbox.setToolTip(
+                    "Keep the individual points/lines, faint and transparent, behind the "
+                    "statistics. Untick to show the statistics alone.")
                 envelope_checkbox = QCheckBox(
                     'Individual data as envelope (instead of faint points/lines)', stats_group)
                 envelope_checkbox.setEnabled(False)
                 stats_layout.addWidget(stats_checkbox)
+                stats_layout.addWidget(median_checkbox)
+                stats_layout.addWidget(iqr_checkbox)
+                stats_layout.addWidget(faded_data_checkbox)
                 stats_layout.addWidget(envelope_checkbox)
 
                 opacity_row = QHBoxLayout()
@@ -7065,20 +7140,20 @@ class GeochemistryDockWidget(QDockWidget):
                 opacity_spin.setEnabled(False)
                 opacity_spin.setToolTip(
                     "Opacity of the individual points/lines (or envelope fill) shown "
-                    "behind the mean ± 2σ overlay.")
+                    "behind the statistics overlays.")
                 opacity_row.addWidget(opacity_label)
                 opacity_row.addWidget(opacity_spin)
                 stats_layout.addLayout(opacity_row)
 
                 width_row = QHBoxLayout()
-                width_label = QLabel('Error bar thickness:', stats_group)
+                width_label = QLabel('Line thickness:', stats_group)
                 width_spin = QDoubleSpinBox(stats_group)
                 width_spin.setRange(0.5, 6.0)
                 width_spin.setDecimals(1)
                 width_spin.setSingleStep(0.2)
                 width_spin.setValue(1.8)
                 width_spin.setEnabled(False)
-                width_spin.setToolTip("Line width of the mean ± 2σ marker/error bars.")
+                width_spin.setToolTip("Line width of the statistics markers, error bars and boxes.")
                 width_row.addWidget(width_label)
                 width_row.addWidget(width_spin)
                 stats_layout.addLayout(width_row)
@@ -7087,16 +7162,24 @@ class GeochemistryDockWidget(QDockWidget):
                 panel_layout.addWidget(_CollapsibleSection('Statistics', stats_group, True, panel), 0)
 
                 def _apply_stats_display():
-                    enabled = stats_checkbox.isChecked()
+                    shown_kinds = {kind for kind, checkbox in (
+                        ('mean', stats_checkbox), ('median', median_checkbox),
+                        ('iqr', iqr_checkbox)) if checkbox.isChecked()}
+                    enabled = bool(shown_kinds)
                     envelope = envelope_checkbox.isChecked()
+                    show_faded_data = faded_data_checkbox.isChecked()
                     opacity = opacity_spin.value()
                     line_width = width_spin.value()
                     envelope_checkbox.setEnabled(enabled)
-                    opacity_spin.setEnabled(enabled)
+                    # The envelope replaces the faint points/lines, so this
+                    # choice only applies without it.
+                    faded_data_checkbox.setEnabled(enabled and not envelope)
+                    opacity_spin.setEnabled(enabled and (envelope or show_faded_data))
                     width_spin.setEnabled(enabled)
                     for category in categories:
                         cat_visible = visible_state.get(category, True)
-                        self._set_artist_visible(stats_registry.get(category, []), enabled and cat_visible)
+                        for entry in stats_registry.get(category, []):
+                            self._set_artist_visible(entry, entry['kind'] in shown_kinds and cat_visible)
                         self._set_artist_visible(
                             envelope_registry.get(category, []), enabled and envelope and cat_visible)
                         self._set_artist_linewidth(stats_registry.get(category, []), line_width)
@@ -7105,7 +7188,7 @@ class GeochemistryDockWidget(QDockWidget):
                         style = category_styles.get(category, self._default_category_style(0))
                         base_alpha = float(style.get('alpha', 1.0))
                         if enabled:
-                            effective_alpha = 0.0 if envelope else opacity
+                            effective_alpha = opacity if show_faded_data and not envelope else 0.0
                         else:
                             effective_alpha = base_alpha
                         for entry in artist_registry.get(category, []):
@@ -7114,8 +7197,9 @@ class GeochemistryDockWidget(QDockWidget):
                     fig.canvas.draw_idle()
 
                 _stats_display_ref[0] = _apply_stats_display
-                stats_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
-                envelope_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                for checkbox in (stats_checkbox, median_checkbox, iqr_checkbox,
+                                 faded_data_checkbox, envelope_checkbox):
+                    checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
                 opacity_spin.valueChanged.connect(lambda _val: _apply_stats_display())
                 width_spin.valueChanged.connect(lambda _val: _apply_stats_display())
 
