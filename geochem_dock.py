@@ -4,6 +4,7 @@ Geochemistry Plotting Tools - Dock Widget
 Contains the main dockable widget with all plotting functionality.
 """
 
+import io
 import os
 import re
 import json
@@ -21,7 +22,7 @@ from qgis.PyQt.QtWidgets import (
     QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate,
     QApplication, QLineEdit, QPlainTextEdit
 )
-from qgis.PyQt.QtGui import (QColor, QPainter, QPen, QBrush, QPolygonF,
+from qgis.PyQt.QtGui import (QColor, QImage, QPainter, QPen, QBrush, QPolygonF,
                              QStandardItem, QStandardItemModel)
 from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer, QEvent
 
@@ -7279,6 +7280,29 @@ class GeochemistryDockWidget(QDockWidget):
             if hasattr(artist, 'set_alpha'):
                 artist.set_alpha(alpha)
 
+    COPIED_PLOT_DPI = 300
+
+    def _copy_plot_to_clipboard(self, fig):
+        """Copy the figure to the clipboard as an image, cropped to its
+        contents so legends outside the axes are kept."""
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', dpi=self.COPIED_PLOT_DPI, bbox_inches='tight')
+        QApplication.clipboard().setImage(QImage.fromData(buffer.getvalue(), 'PNG'))
+        self.iface.messageBar().pushInfo("Geochemistry Plotting Tools", "Plot copied to the clipboard.")
+
+    def _add_copy_plot_button(self, fig):
+        """Add a "Copy PNG" button to the plot window's toolbar, after Save."""
+        toolbar = getattr(getattr(fig.canvas, 'manager', None), 'toolbar', None)
+        if toolbar is None or not hasattr(toolbar, 'addAction'):
+            return
+        action = toolbar.addAction('Copy PNG')
+        action.setToolTip('Copy the plot to the clipboard as a PNG image')
+        action.triggered.connect(lambda _checked=False: self._copy_plot_to_clipboard(fig))
+        actions = toolbar.actions()
+        save_action = getattr(toolbar, '_actions', {}).get('save_figure')
+        if save_action in actions:
+            toolbar.insertAction(actions[actions.index(save_action) + 1], action)
+
     def _open_category_panel(self, fig, artist_registry, category_counts=None,
                              category_styles=None, title='Plot Categories',
                              style_template_key=None, export_legend_artists=None,
@@ -7308,6 +7332,7 @@ class GeochemistryDockWidget(QDockWidget):
         size) pushed onto the plotted artists on open. Plots that already
         draw with the imported size (spider diagram) pass False.
         """
+        self._add_copy_plot_button(fig)
         if not artist_registry:
             return
 

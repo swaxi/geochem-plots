@@ -42,6 +42,7 @@ Developed for UWA EART3343 Lab exercises.
       * Custom Ternary: the three apexes can now use a Linear or Log scale (log10, or log10(1 + value) when a plotted value is below 1, as shown in the apex labels). Plot Options: Bubble Size is now the last section on every tab, and Axis Scales and Display follows the field definitions on Custom XY and Custom Ternary
       * Samples: all samples are selected by default when the layer has no QGIS selection, and the list now follows map selections by itself. New **Copy Table** and **Copy Labels** buttons copy the selected samples to the clipboard, and a **Selections** list with ◀ ▶ buttons recalls earlier selections, which can be saved with a name and notes (see [Recall, save and copy selections](#recall-save-and-copy-selections))
       * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's **Selection** section; an **Add to selection** option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
+      * Plots: new **Copy PNG** button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image
       * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
       * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
@@ -91,7 +92,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 ![Map selection](map2plot.png)
 
 7. Click **Generate Plot**
-8. Click **Save...** to export the current plot as PNG, PDF or SVG
+8. Click **Save...** to export the current plot as PNG, PDF or SVG, or **Copy PNG** in the plot window's toolbar to copy it to the clipboard
 9. Click **None** to clear the sample selection
 
 ## Tabs
