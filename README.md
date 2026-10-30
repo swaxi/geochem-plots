@@ -40,6 +40,8 @@ Developed for UWA EART3343 Lab exercises.
       * The style panel's **Statistics** section can now also show each category's median and interquartile range (IQR), with two new checkboxes alongside **Show mean ± 2σ**; the three can be combined freely, and a **Show faded individual data** checkbox (ticked by default) hides the faint points/lines behind them (see [Category statistics overlay](#category-statistics-overlay-mean--2σ-median-iqr))
       * Layer Selection: the layer selected in the QGIS Layers panel is now preselected if it's suitable for the plugin, and followed while the plugin is open; the Category and Add label lists show field aliases as `alias (fieldname)` when defined
       * Custom Ternary: the three apexes can now use a Linear or Log scale (log10, or log10(1 + value) when a plotted value is below 1, as shown in the apex labels). Plot Options: Bubble Size is now the last section on every tab, and Axis Scales and Display follows the field definitions on Custom XY and Custom Ternary
+      * Samples: all samples are selected by default when the layer has no QGIS selection, and the list now follows map selections by itself. New **Copy Table** and **Copy Labels** buttons copy the selected samples to the clipboard, and a **Selections** list with ◀ ▶ buttons recalls earlier selections, which can be saved with a name and notes (see [Recall, save and copy selections](#recall-save-and-copy-selections))
+      * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's **Selection** section; an **Add to selection** option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
       * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
       * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
@@ -83,8 +85,8 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 
 6. Select samples to plot, using any of:
    - The **Samples** list in the plugin (multi-select as usual). When a **Category** field is chosen, each category is listed once with its sample count, and selecting it selects all of its samples
-   - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (click **Refresh** in the plugin if the list doesn't update)
-   - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first)
+   - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (the list follows it automatically)
+   - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first). All samples are selected by default when the layer has no QGIS selection, so you can click **Generate Plot** straight away
 
 ![Map selection](map2plot.png)
 
@@ -204,8 +206,9 @@ Substitution is computed per-row from each value's own encoded detection limit, 
 | Left-click a point | Select that feature in QGIS (replaces current selection) |
 | Shift + left-click a point | Add or remove that feature from the QGIS selection |
 | Left-click empty space | Clear the QGIS selection |
-| Left-click drag (rectangle) | Select all points enclosed by the rectangle |
-| Shift + left-click drag | Add all points enclosed by the rectangle to the current selection |
+| Left-click drag | Select all points enclosed by the drawn area (freehand or rectangle) |
+| Shift + left-click drag | Add all points enclosed by the area to the current selection (union) |
+| Esc | Clear the QGIS selection |
 
 **Spider diagrams:**
 
@@ -213,6 +216,11 @@ Substitution is computed per-row from each value's own encoded detection limit, 
 |---|---|
 | Click a sample line | Select that feature in QGIS (replaces current selection) |
 | Shift + click a sample line | Add or remove that feature from the QGIS selection |
+| Left-click drag | Select every sample with a data point inside the drawn area (freehand or rectangle) |
+| Shift + left-click drag | Add those samples to the current selection (union) |
+| Esc | Clear the QGIS selection |
+
+The Style panel's **Selection** section sets the drawing **Tool** (**Freehand** or **Rectangle**; new plots keep your last choice) and has a **Clear selection** button. Tick **Add to selection** to combine several zones of interest without holding Shift: each new area or clicked sample then adds to the selection.
 
 Selected features are highlighted on the map using QGIS's standard selection colour, and rendered on top of other features in the layer: as soon as a layer is chosen in the plugin, its **Control feature rendering order** is set to `is_selected()` ascending, and set again whenever the layer's symbology is changed (including by **Apply to layer…**). Any rendering order you had already defined is kept as a secondary sort.
 
@@ -225,6 +233,14 @@ Selection also works in the other direction: features you select on the QGIS map
 ### Assign labels to points
 
 The **Add label** dropdown and checkbox (Layer Selection) permanently labels selected points/lines in a plot using the chosen field, and also defines the hover popup label. Labels are drawn with a semi-transparent white background and always on top of plotted points, for readability.
+
+### Recall, save and copy selections
+
+Every selection made on the map or on a plot while the plugin is open is added to the **Selections** list in the Samples section. Pick an entry, or use the **◀** and **▶** buttons, to select those samples again on the map, the plots and the Samples list.
+
+**Save…** gives the current selection a name and notes (shown as a tooltip in the list), handy for keeping track of different tests. Saved selections are marked ★ and stored with the layer in the QGIS project (save the project to keep them); the others last until QGIS closes, and the 30 most recent are kept. **Delete** removes the listed entry, without changing what is selected.
+
+**Copy Table** copies the attribute table of the samples selected in the Samples list to the clipboard, tab-separated so it pastes straight into a spreadsheet. **Copy Labels** copies the values of the **Add label** field for those samples, one per line.
 
 ### Filter layer to selection
 

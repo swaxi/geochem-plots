@@ -9,6 +9,7 @@ import re
 import json
 import random
 from collections import Counter
+from datetime import datetime
 from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
@@ -17,7 +18,8 @@ from qgis.PyQt.QtWidgets import (
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
     QDialogButtonBox, QSizePolicy, QSplitter, QToolButton,
-    QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate
+    QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate,
+    QApplication, QLineEdit, QPlainTextEdit
 )
 from qgis.PyQt.QtGui import (QColor, QPainter, QPen, QBrush, QPolygonF,
                              QStandardItem, QStandardItemModel)
@@ -47,7 +49,7 @@ try:
     from matplotlib.container import ErrorbarContainer
     from matplotlib.collections import PathCollection
     from matplotlib.transforms import IdentityTransform
-    from matplotlib.widgets import RectangleSelector, CheckButtons, Button
+    from matplotlib.widgets import RectangleSelector, LassoSelector, CheckButtons, Button
     from matplotlib.path import Path
     from matplotlib.markers import MarkerStyle
     import numpy as np
@@ -104,6 +106,7 @@ try:
     QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
     QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
     QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    Qt_ToolTipRole = Qt.ItemDataRole.ToolTipRole
 
 except AttributeError:
     # Qt5 detected
@@ -151,6 +154,7 @@ except AttributeError:
     QStyle_CC_ComboBox = QStyle.CC_ComboBox
     QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
     QComboBox_AdjustToMinimumContents = QComboBox.AdjustToMinimumContentsLengthWithIcon
+    Qt_ToolTipRole = Qt.ToolTipRole
 
 
 # =============================================================================
@@ -3517,6 +3521,12 @@ class GeochemistryDockWidget(QDockWidget):
         self.iface = iface
         self.current_fig = None
         self._category_controls = None
+        # Area-selection tool last chosen in a plot's style panel, for new plots.
+        self._plot_selection_prefs = {'tool': 'freehand', 'add': False}
+        # {layer id: [selection entries]}, see _record_selection().
+        self._selection_history = {}
+        self._selection_watched_layer = None
+        self._restoring_selection = False
         self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
@@ -4369,6 +4379,56 @@ class GeochemistryDockWidget(QDockWidget):
         btn_row.addWidget(deselect_all_btn)
         sample_layout.addLayout(btn_row)
 
+        # Recall of earlier selections of this layer (map or plots).
+        selection_row = QHBoxLayout()
+        selection_row.setSpacing(3)
+        self.selection_combo = QComboBox()
+        self.selection_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.selection_combo.setMinimumContentsLength(12)
+        self.selection_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+        self.selection_combo.setToolTip(
+            "Selections made on the map or on plots while the plugin is open. "
+            "Pick one to select those samples again.")
+        self.selection_combo.activated.connect(self._restore_selection_at)
+        previous_selection_btn = QToolButton()
+        previous_selection_btn.setText('◀')
+        previous_selection_btn.setToolTip("Go back to the previous selection")
+        previous_selection_btn.clicked.connect(lambda: self._step_selection(-1))
+        next_selection_btn = QToolButton()
+        next_selection_btn.setText('▶')
+        next_selection_btn.setToolTip("Go forward to the next selection")
+        next_selection_btn.clicked.connect(lambda: self._step_selection(1))
+        save_selection_btn = QPushButton("Save…")
+        save_selection_btn.setToolTip(
+            "Give the current selection a name and notes. Saved selections are kept "
+            "with the layer in the QGIS project.")
+        save_selection_btn.clicked.connect(self.save_current_selection)
+        delete_selection_btn = QPushButton("Delete")
+        delete_selection_btn.setToolTip("Remove the selection shown in the list")
+        delete_selection_btn.clicked.connect(self.delete_listed_selection)
+        selection_row.addWidget(QLabel("Selections:"), 0)
+        selection_row.addWidget(self.selection_combo, 1)
+        selection_row.addWidget(previous_selection_btn, 0)
+        selection_row.addWidget(next_selection_btn, 0)
+        selection_row.addWidget(save_selection_btn, 0)
+        selection_row.addWidget(delete_selection_btn, 0)
+        sample_layout.addLayout(selection_row)
+
+        copy_row = QHBoxLayout()
+        copy_table_btn = QPushButton("Copy Table")
+        copy_table_btn.setToolTip(
+            "Copy the attribute table of the samples selected in the list above to the "
+            "clipboard (tab-separated, pastes into a spreadsheet).")
+        copy_table_btn.clicked.connect(self.copy_selection_table)
+        copy_labels_btn = QPushButton("Copy Labels")
+        copy_labels_btn.setToolTip(
+            "Copy the values of the \"Add label\" field for the samples selected in the "
+            "list above to the clipboard, one per line.")
+        copy_labels_btn.clicked.connect(self.copy_selection_labels)
+        copy_row.addWidget(copy_table_btn)
+        copy_row.addWidget(copy_labels_btn)
+        sample_layout.addLayout(copy_row)
+
         classify_btn = QPushButton("Add Classification Field to Layer")
         classify_btn.setToolTip(
             "Adds (or updates) a text field in the layer with the classification\n"
@@ -4620,6 +4680,8 @@ class GeochemistryDockWidget(QDockWidget):
         self.update_feature_list(layer)
         self._watch_layer_renderer(layer)
         self._update_layer_symbology_option()
+        self._watch_layer_selection(layer)
+        self._refresh_selection_combo(layer)
 
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
@@ -4924,7 +4986,8 @@ class GeochemistryDockWidget(QDockWidget):
         If the layer has a QGIS selection, rows containing selected samples
         are highlighted and only those selected samples are carried by the
         row (shown as "n of m samples selected"), so a subsequent plot
-        contains exactly what is selected on the map.
+        contains exactly what is selected on the map. Otherwise every row
+        is selected, so a plot can be generated straight away.
         """
         self.feature_list.setUpdatesEnabled(False)
         self.feature_list.clear()
@@ -4964,13 +5027,229 @@ class GeochemistryDockWidget(QDockWidget):
             item = QListWidgetItem(text)
             item.setData(Qt_UserRole, list(row_fids))
             self.feature_list.addItem(item)
-            if picked_fids:
+            if picked_fids or not selected_ids:
                 items_to_select.append(item)
 
         for item in items_to_select:
             item.setSelected(True)
 
         self.feature_list.setUpdatesEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Selection history (recall earlier selections of a layer)
+    # ------------------------------------------------------------------
+    # Each layer has a list of entries {'name': str, 'notes': str, 'fids': [int],
+    # 'saved': bool}. Every selection made on the map or a plot adds one for this
+    # session; saved ones (named by the user) also live on the layer as a custom
+    # property, so they are stored in the QGIS project.
+
+    SAVED_SELECTIONS_PROPERTY = 'geochem_plotting/saved_selections'
+    MAX_UNSAVED_SELECTIONS = 30
+
+    def _current_layer(self):
+        layer_id = self.layer_combo.currentData()
+        return QgsProject.instance().mapLayer(layer_id) if layer_id else None
+
+    def _selection_entries(self, layer):
+        """The layer's selection entries, loading saved ones on first use."""
+        entries = self._selection_history.get(layer.id())
+        if entries is None:
+            entries = []
+            try:
+                stored = json.loads(layer.customProperty(self.SAVED_SELECTIONS_PROPERTY) or '[]')
+            except (TypeError, ValueError):
+                stored = []
+            for item in stored:
+                entries.append({'name': str(item.get('name', '')), 'notes': str(item.get('notes', '')),
+                                'fids': [int(fid) for fid in item.get('fids', [])], 'saved': True})
+            self._selection_history[layer.id()] = entries
+        return entries
+
+    def _store_saved_selections(self, layer):
+        """Write the layer's saved selections to the layer (and so the project)."""
+        saved = [{'name': e['name'], 'notes': e['notes'], 'fids': e['fids']}
+                 for e in self._selection_entries(layer) if e['saved']]
+        layer.setCustomProperty(self.SAVED_SELECTIONS_PROPERTY, json.dumps(saved))
+        QgsProject.instance().setDirty(True)
+
+    def _record_selection(self, layer, fids):
+        """Add `fids` to the layer's history, unless already listed. Returns its entry."""
+        entries = self._selection_entries(layer)
+        fid_set = set(fids)
+        for entry in entries:
+            if set(entry['fids']) == fid_set:
+                return entry
+        entry = {'name': f"{len(fids)} samples, {datetime.now().strftime('%H:%M:%S')}",
+                 'notes': '', 'fids': list(fids), 'saved': False}
+        entries.append(entry)
+        unsaved = [e for e in entries if not e['saved']]
+        if len(unsaved) > self.MAX_UNSAVED_SELECTIONS:
+            entries.remove(unsaved[0])
+        return entry
+
+    def _refresh_selection_combo(self, layer, current=None):
+        """List the layer's selection entries, showing `current`."""
+        self.selection_combo.clear()
+        if layer is None:
+            return
+        entries = self._selection_entries(layer)
+        for i, entry in enumerate(entries):
+            text = f"★ {entry['name']} ({len(entry['fids'])})" if entry['saved'] else entry['name']
+            self.selection_combo.addItem(text)
+            if entry['notes']:
+                self.selection_combo.setItemData(i, entry['notes'], Qt_ToolTipRole)
+        self.selection_combo.setCurrentIndex(entries.index(current) if current in entries else -1)
+        fit_popup_width(self.selection_combo)
+
+    def _watch_layer_selection(self, layer):
+        """Follow the selection of the layer shown in the plugin."""
+        previous = self._selection_watched_layer
+        if previous is layer:
+            return
+        if previous is not None:
+            try:
+                previous.selectionChanged.disconnect(self._on_watched_selection_changed)
+            except (TypeError, RuntimeError):  # already disconnected or layer deleted
+                pass
+        self._selection_watched_layer = layer
+        if layer is not None:
+            layer.selectionChanged.connect(self._on_watched_selection_changed)
+
+    def _on_watched_selection_changed(self, *_args):
+        """Keep the sample list current and record new selections."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        self.update_feature_list(layer)
+        fids = layer.selectedFeatureIds()
+        if self._restoring_selection:
+            return
+        self._refresh_selection_combo(layer, self._record_selection(layer, fids) if fids else None)
+
+    def _restore_selection_at(self, index):
+        """Select again the samples of the entry at `index` of the list."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        entries = self._selection_entries(layer)
+        if not 0 <= index < len(entries):
+            return
+        self._restoring_selection = True
+        try:
+            layer.selectByIds(entries[index]['fids'])
+        finally:
+            self._restoring_selection = False
+        self._refresh_selection_combo(layer, entries[index])
+
+    def _step_selection(self, step):
+        """Go back (-1) or forward (+1) through the layer's selections."""
+        count = self.selection_combo.count()
+        if count == 0:
+            return
+        index = self.selection_combo.currentIndex()
+        target = (count - 1 if step < 0 else 0) if index < 0 else index + step
+        self._restore_selection_at(max(0, min(count - 1, target)))
+
+    def _ask_selection_details(self, name, notes):
+        """Ask for a selection's name and notes; returns (name, notes) or None."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save selection")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        name_edit = QLineEdit(name, dialog)
+        notes_edit = QPlainTextEdit(notes, dialog)
+        form.addRow("Name:", name_edit)
+        form.addRow("Notes:", notes_edit)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox_Ok | QDialogButtonBox_Cancel, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog_Accepted or not name_edit.text().strip():
+            return None
+        return name_edit.text().strip(), notes_edit.toPlainText().strip()
+
+    def save_current_selection(self):
+        """Name the current selection and keep it with the layer."""
+        layer = self._current_layer()
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+        fids = layer.selectedFeatureIds() or self._selected_feature_ids()
+        if not fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return
+        entry = self._record_selection(layer, fids)
+        details = self._ask_selection_details(entry['name'] if entry['saved'] else '', entry['notes'])
+        if details is None:
+            self._refresh_selection_combo(layer, entry)
+            return
+        entry['name'], entry['notes'] = details
+        entry['saved'] = True
+        self._store_saved_selections(layer)
+        self._refresh_selection_combo(layer, entry)
+
+    def delete_listed_selection(self):
+        """Remove the selection shown in the list (the samples stay selected)."""
+        layer = self._current_layer()
+        index = self.selection_combo.currentIndex()
+        if layer is None or index < 0:
+            return
+        entries = self._selection_entries(layer)
+        entry = entries.pop(index)
+        if entry['saved']:
+            self._store_saved_selections(layer)
+        self._refresh_selection_combo(layer)
+
+    # ------------------------------------------------------------------
+    # Copy the selection to the clipboard
+    # ------------------------------------------------------------------
+
+    def _selected_features_for_copy(self):
+        """(layer, features) of the samples selected in the sample list, or None."""
+        layer = self._current_layer()
+        fids = self._selected_feature_ids()
+        if layer is None or not fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return None
+        return layer, [layer.getFeature(fid) for fid in fids]
+
+    @staticmethod
+    def _clipboard_cell(value):
+        """A field value as clipboard text (no tabs/line breaks, NULL as empty)."""
+        if value is None or value == NULL:
+            return ''
+        return ' '.join(str(value).split())
+
+    def _copy_to_clipboard(self, text, description):
+        QApplication.clipboard().setText(text)
+        self.iface.messageBar().pushInfo("Geochemistry Plotting Tools", f"{description} copied to the clipboard.")
+
+    def copy_selection_table(self):
+        """Copy the selected samples' attribute table as tab-separated text."""
+        selection = self._selected_features_for_copy()
+        if selection is None:
+            return
+        layer, features = selection
+        names = [field.name() for field in layer.fields()]
+        lines = ['\t'.join(names)]
+        for feature in features:
+            lines.append('\t'.join(self._clipboard_cell(feature[name]) for name in names))
+        self._copy_to_clipboard('\n'.join(lines), f"Attribute table of {len(features)} sample(s)")
+
+    def copy_selection_labels(self):
+        """Copy the "Add label" field's values of the selected samples, one per line."""
+        selection = self._selected_features_for_copy()
+        if selection is None:
+            return
+        layer, features = selection
+        label_field = self.label_field_combo.currentData()
+        if not label_field or layer.fields().indexOf(label_field) < 0:
+            QMessageBox.warning(self, "Warning", "Please choose a field under \"Add label\".")
+            return
+        values = [self._clipboard_cell(feature[label_field]) for feature in features]
+        values = [value for value in values if value]
+        self._copy_to_clipboard('\n'.join(values), f"{len(values)} '{label_field}' label(s)")
 
     def _selected_feature_ids(self):
         """Feature ids carried by the selected rows of the sample list, in list order."""
@@ -6102,6 +6381,85 @@ class GeochemistryDockWidget(QDockWidget):
         except Exception as exc:  # best-effort draw-order tweak, must not block selection/plotting
             symbology_bridge.log(f'Could not set the selected-on-top rendering order: {exc}', warning=True)
 
+    def _attach_area_selectors(self, fig, ax, select_area, clear_selection):
+        """Add the freehand and rectangle area-selection tools to a plot.
+
+        `select_area(path, additive)` gets the drawn area as a matplotlib Path
+        in display coordinates (so it also holds on log axes), and whether to
+        add to the current selection (Shift held, or "Add to selection" on).
+        `clear_selection()` runs on Escape and from the style panel.
+
+        Returns the state dict, also stored as fig._geochem_selection_state:
+        'tool' ('freehand'/'rectangle'), 'add', 'sync()' (apply the tool),
+        'additive(key)' and 'was_drag(event)' for the plot's click handlers.
+        """
+        state = dict(self._plot_selection_prefs, press=None, press_key='', dragged=False,
+                     clear=clear_selection)
+
+        def on_press(event):
+            inside = event.button == 1 and event.inaxes is ax
+            state['press'] = (event.x, event.y) if inside else None
+            state['press_key'] = (event.key or '') if inside else ''
+            state['dragged'] = False
+
+        def on_motion(event):
+            # Tracked during the drag, as a freehand loop can end where it began.
+            press = state['press']
+            if press is not None and max(abs(event.x - press[0]), abs(event.y - press[1])) > 5:
+                state['dragged'] = True
+
+        def additive(key=None):
+            return state['add'] or 'shift' in (state['press_key'] if key is None else key or '').lower()
+
+        def was_drag(event):
+            on_motion(event)
+            return state['dragged']
+
+        def finish(vertices):
+            vertices = np.asarray(vertices, dtype=float)
+            if len(vertices) < 3 or not np.isfinite(vertices).all() or np.ptp(vertices, axis=0).max() <= 5:
+                return
+            select_area(Path(vertices), additive())
+            fig.canvas.draw_idle()
+
+        def on_rectangle(eclick, erelease):
+            x0, y0, x1, y1 = eclick.x, eclick.y, erelease.x, erelease.y
+            finish([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+
+        def on_lasso(vertices):
+            finish(ax.transData.transform(vertices))
+
+        def on_key(event):
+            if event.key == 'escape':
+                clear_selection()
+
+        # useblit=False: blitting caches a snapshot of the canvas at drag-start
+        # and restores it instead of a full redraw. Our own selection overlay
+        # (_draw_selection_overlay/show_selection) mutates artists and redraws
+        # independently (via draw_idle()); if that redraw hasn't been flushed
+        # yet when a drag starts, the selector's cached background goes stale
+        # and gets blitted back over the current frame, leaving a "ghost" of
+        # an earlier overlay frozen on the plot until something forces a full
+        # redraw (e.g. a resize).
+        rectangle = RectangleSelector(ax, on_rectangle, useblit=False, button=[1],
+                                      props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
+                                                 alpha=0.3, linewidth=1.5))
+        lasso = LassoSelector(ax, on_lasso, useblit=False, button=1,
+                              props=dict(color='steelblue', linewidth=1.5))
+        fig._geochem_selectors = (rectangle, lasso)  # keep references from being garbage-collected
+
+        def sync():
+            rectangle.set_active(state['tool'] == 'rectangle')
+            lasso.set_active(state['tool'] == 'freehand')
+
+        state.update(sync=sync, additive=additive, was_drag=was_drag)
+        sync()
+        fig.canvas.mpl_connect('button_press_event', on_press)
+        fig.canvas.mpl_connect('motion_notify_event', on_motion)
+        fig.canvas.mpl_connect('key_press_event', on_key)
+        fig._geochem_selection_state = state
+        return state
+
     def _link_layer_selection(self, fig, layer_id, on_map_selection_changed):
         """Wire a plot to its layer's selection, in both directions.
 
@@ -6142,7 +6500,7 @@ class GeochemistryDockWidget(QDockWidget):
         Left-click (no toolbar mode): select nearest point in QGIS.
         Shift+left-click: toggle that point in the QGIS selection.
         Left-click on empty space: clear QGIS selection.
-        Left-drag: rubber-band rectangle selects all enclosed points.
+        Left-drag: freehand or rectangle area selects all enclosed points.
         Shift+left-drag: adds enclosed points to the current selection.
         Selected points are highlighted with a red edge on the plot.
         """
@@ -6306,43 +6664,22 @@ class GeochemistryDockWidget(QDockWidget):
 
         self._link_layer_selection(fig, layer_id, on_map_selection_changed)
 
-        _rect_used = [False]
-
-        def on_rect_select(eclick, erelease):
-            if eclick.xdata is None or erelease.xdata is None:
-                return
-            try:
-                p1 = ax.transData.transform([[eclick.xdata, eclick.ydata]])[0]
-                p2 = ax.transData.transform([[erelease.xdata, erelease.ydata]])[0]
-                if np.linalg.norm(p2 - p1) < 5:
-                    return
-            except Exception:
-                return
-            _rect_used[0] = True
-            x1 = min(eclick.xdata, erelease.xdata)
-            x2 = max(eclick.xdata, erelease.xdata)
-            y1 = min(eclick.ydata, erelease.ydata)
-            y2 = max(eclick.ydata, erelease.ydata)
-            xs = pts_array[:, 0]
-            ys = pts_array[:, 1]
-            inside = (xs >= x1) & (xs <= x2) & (ys >= y1) & (ys <= y2)
+        def select_area(path, additive):
+            inside = path.contains_points(ax.transData.transform(pts_array))
             new_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
-            key = eclick.key or ''
-            if 'shift' in key.lower():
+            if additive:
                 layer = QgsProject.instance().mapLayer(layer_id)
                 if layer is not None:
-                    current = set(layer.selectedFeatureIds())
-                    current.update(new_fids)
-                    new_fids = list(current)
+                    new_fids = list(set(layer.selectedFeatureIds()) | set(new_fids))
             apply_selection(new_fids)
-            fig.canvas.draw_idle()
+
+        selection = self._attach_area_selectors(fig, ax, select_area, lambda: apply_selection([]))
 
         def on_click(event):
             if event.button != 1:
                 return
-            # If rectangle select just fired on this mouse-up, skip single-point logic
-            if _rect_used[0]:
-                _rect_used[0] = False
+            # A drag belongs to the area-selection tools, not the single-point logic.
+            if selection['was_drag'](event):
                 return
             try:
                 if fig.canvas.toolbar.mode != '':
@@ -6364,15 +6701,15 @@ class GeochemistryDockWidget(QDockWidget):
 
             dists = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
             nearest_idx = int(np.argmin(dists))
-            key = event.key or ''
+            additive = selection['additive'](event.key)
 
             if dists[nearest_idx] > 10:
-                if 'shift' not in key.lower():
+                if not additive:
                     apply_selection([])
                 return
 
             fid = fid_list[nearest_idx]
-            if 'shift' in key.lower():
+            if additive:
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
                 apply_selection(list(current))
@@ -6427,24 +6764,14 @@ class GeochemistryDockWidget(QDockWidget):
 
         fig.canvas.mpl_connect('button_release_event', on_click)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
-        # useblit=False: blitting caches a snapshot of the canvas at drag-start
-        # and restores it instead of a full redraw. Our own selection overlay
-        # (_draw_selection_overlay/show_selection) mutates artists and redraws
-        # independently (via draw_idle()); if that redraw hasn't been flushed
-        # yet when a drag starts, the selector's cached background goes stale
-        # and gets blitted back over the current frame, leaving a "ghost" of
-        # an earlier overlay frozen on the plot until something forces a full
-        # redraw (e.g. a resize).
-        rect = RectangleSelector(ax, on_rect_select, useblit=False, button=[1],
-                                 props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
-                                            alpha=0.3, linewidth=1.5))
-        fig._rect_selector = rect  # keep reference so it isn't garbage-collected
 
     def _attach_spider_selection(self, fig, line_to_fid, layer_id):
-        """Wire up click-to-select on spider diagram lines.
+        """Wire up selection on spider diagram lines.
 
         Click on a line: select that sample in QGIS.
         Shift+click: toggle that sample in the QGIS selection.
+        Left-drag: freehand or rectangle area selects every sample with a
+        data point inside it (Shift+left-drag adds them to the selection).
         Selected lines are drawn bold; unselected lines are dimmed.
         """
         if not line_to_fid:
@@ -6507,6 +6834,10 @@ class GeochemistryDockWidget(QDockWidget):
 
         self._link_layer_selection(fig, layer_id, on_map_selection_changed)
 
+        # A pick fires on mouse press, which also starts any area-selection
+        # drag, so it only takes effect on release if the mouse didn't move.
+        pending_pick = [None]
+
         def on_pick(event):
             if not isinstance(event.artist, Line2D):
                 return
@@ -6517,14 +6848,16 @@ class GeochemistryDockWidget(QDockWidget):
                     return
             except AttributeError:
                 pass
+            pending_pick[0] = line_to_fid[event.artist]
 
+        def on_pick_release(event):
+            fid, pending_pick[0] = pending_pick[0], None
+            if fid is None or selection['was_drag'](event):
+                return
             layer = QgsProject.instance().mapLayer(layer_id)
             if layer is None:
                 return
-
-            fid = line_to_fid[event.artist]
-            key = getattr(event.mouseevent, 'key', None) or ''
-            if 'shift' in key.lower():
+            if selection['additive'](event.key):
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
                 apply_selection(list(current))
@@ -6532,6 +6865,21 @@ class GeochemistryDockWidget(QDockWidget):
                 apply_selection([fid])
 
         ax = next(iter(line_to_fid)).axes
+
+        def select_area(path, additive):
+            fids = set()
+            for line, fid in line_to_fid.items():
+                points = np.column_stack(line.get_data()).astype(float)
+                points = points[np.isfinite(points).all(axis=1)]
+                if len(points) and path.contains_points(ax.transData.transform(points)).any():
+                    fids.add(fid)
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if additive and layer is not None:
+                fids |= set(layer.selectedFeatureIds())
+            apply_selection(list(fids))
+
+        selection = self._attach_area_selectors(fig, ax, select_area, lambda: apply_selection([]))
+
         hover_ann = ax.annotate(
             '', xy=(0, 0), xytext=(10, 10), textcoords='offset points',
             bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', ec='gray', alpha=0.9),
@@ -6582,6 +6930,7 @@ class GeochemistryDockWidget(QDockWidget):
                     fig.canvas.draw_idle()
 
         fig.canvas.mpl_connect('pick_event', on_pick)
+        fig.canvas.mpl_connect('button_release_event', on_pick_release)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
 
     # ------------------------------------------------------------------
@@ -7256,6 +7605,51 @@ class GeochemistryDockWidget(QDockWidget):
                     checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
                 opacity_spin.valueChanged.connect(lambda _val: _apply_stats_display())
                 width_spin.valueChanged.connect(lambda _val: _apply_stats_display())
+
+            selection_state = getattr(fig, '_geochem_selection_state', None)
+            if selection_state is not None:
+                selection_group = QGroupBox('Selection', panel)
+                selection_layout = QVBoxLayout(selection_group)
+                selection_caption = QLabel(
+                    "Drag on the plot to select the samples in an area. Hold Shift, or tick "
+                    "\"Add to selection\", to combine several areas. Esc clears the selection.",
+                    selection_group)
+                selection_caption.setWordWrap(True)
+                selection_layout.addWidget(selection_caption)
+
+                tool_row = QHBoxLayout()
+                tool_row.addWidget(QLabel('Tool:', selection_group))
+                tool_combo = QComboBox(selection_group)
+                tool_combo.addItem('Freehand', 'freehand')
+                tool_combo.addItem('Rectangle', 'rectangle')
+                tool_combo.setCurrentIndex(tool_combo.findData(selection_state['tool']))
+                tool_row.addWidget(tool_combo, 1)
+                selection_layout.addLayout(tool_row)
+
+                add_checkbox = QCheckBox('Add to selection', selection_group)
+                add_checkbox.setChecked(selection_state['add'])
+                add_checkbox.setToolTip(
+                    "Each new area or clicked sample adds to the current selection "
+                    "(union), as when holding Shift.")
+                selection_layout.addWidget(add_checkbox)
+
+                clear_selection_btn = QPushButton('Clear selection', selection_group)
+                clear_selection_btn.clicked.connect(lambda: selection_state['clear']())
+                selection_layout.addWidget(clear_selection_btn)
+
+                def _on_selection_options_changed(*_args):
+                    selection_state['tool'] = tool_combo.currentData()
+                    selection_state['add'] = add_checkbox.isChecked()
+                    selection_state['sync']()
+                    # New plots start with the same options.
+                    self._plot_selection_prefs.update(
+                        tool=selection_state['tool'], add=selection_state['add'])
+
+                tool_combo.currentIndexChanged.connect(_on_selection_options_changed)
+                add_checkbox.stateChanged.connect(_on_selection_options_changed)
+
+                selection_group.setTitle('')
+                panel_layout.addWidget(_CollapsibleSection('Selection', selection_group, True, panel), 0)
 
             style_mgmt_group = QGroupBox('Style Management', panel)
             style_mgmt_layout = QVBoxLayout(style_mgmt_group)
