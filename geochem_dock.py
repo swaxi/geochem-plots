@@ -11,7 +11,7 @@ import json
 import random
 from collections import Counter
 from datetime import datetime
-from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
+from qgis.core import QgsProject, QgsSettings, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
     QDialogButtonBox, QSizePolicy, QSplitter, QToolButton,
     QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate,
-    QApplication, QLineEdit, QPlainTextEdit
+    QApplication, QLineEdit, QMenu, QPlainTextEdit
 )
 from qgis.PyQt.QtGui import (QColor, QImage, QPainter, QPen, QBrush, QPolygonF,
                              QStandardItem, QStandardItemModel)
@@ -108,6 +108,7 @@ try:
     QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
     QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
     Qt_ToolTipRole = Qt.ItemDataRole.ToolTipRole
+    QToolButton_InstantPopup = QToolButton.ToolButtonPopupMode.InstantPopup
 
 except AttributeError:
     # Qt5 detected
@@ -156,6 +157,7 @@ except AttributeError:
     QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
     QComboBox_AdjustToMinimumContents = QComboBox.AdjustToMinimumContentsLengthWithIcon
     Qt_ToolTipRole = Qt.ToolTipRole
+    QToolButton_InstantPopup = QToolButton.InstantPopup
 
 
 # =============================================================================
@@ -3699,6 +3701,105 @@ class GeochemistryDockWidget(QDockWidget):
         row.addStretch()
         return row
 
+    def _add_num_denom_lists(self, group):
+        """Build the even-width Num and Denom tick lists of a custom plot axis
+        in `group`, each with its ⋮ menu. Returns (num_combo, denom_combo)."""
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(3)
+        combos = []
+        for offset, (label, exclusive_item, items) in enumerate((
+                ("Num:", None, CUSTOM_XY_ELEMENTS[1:]),
+                ("Denom:", '1 (none)', CUSTOM_XY_ELEMENTS))):
+            column = offset * 3
+            text = QLabel(label)
+            text.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+            grid.addWidget(text, 0, column)
+            combo = _CheckableComboBox(exclusive_item=exclusive_item)
+            combo.addItems(items)
+            # Width independent of the content, so both stay even.
+            combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+            combo.setMinimumContentsLength(6)
+            combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+            grid.addWidget(combo, 0, column + 1)
+            grid.setColumnStretch(column + 1, 1)
+            grid.addWidget(self._tick_list_menu_button(combo), 0, column + 2)
+            combos.append(combo)
+        return combos
+
+    def _tick_list_menu_button(self, combo):
+        """A ⋮ button clearing a tick list, or saving/applying its entries."""
+        button = QToolButton()
+        button.setText('⋮')
+        button.setToolTip("Clear the ticked entries, or save them for later use")
+        button.setPopupMode(QToolButton_InstantPopup)
+        menu = QMenu(button)
+        menu.aboutToShow.connect(lambda: self._fill_tick_list_menu(menu, combo))
+        button.setMenu(menu)
+        return button
+
+    def _fill_tick_list_menu(self, menu, combo):
+        """Rebuild a tick list's ⋮ menu, as saved selections are shared by all lists."""
+        menu.clear()
+        menu.addAction("Clear").triggered.connect(lambda _checked=False: combo.set_checked_items([]))
+        menu.addAction("Save ticked entries as…").triggered.connect(
+            lambda _checked=False: self._save_field_preset(combo))
+        presets = self._load_field_presets()
+        if not presets:
+            return
+        menu.addSeparator()
+        for name, terms in presets.items():
+            action = menu.addAction(f"{name}: {_CheckableComboBox.SEPARATOR.join(terms)}")
+            action.triggered.connect(
+                lambda _checked=False, terms=terms: self._apply_field_preset(combo, terms))
+        delete_menu = menu.addMenu("Delete")
+        for name in presets:
+            delete_menu.addAction(name).triggered.connect(
+                lambda _checked=False, name=name: self._delete_field_preset(name))
+
+    # Saved Num/Denom selections: {name: [entries]}, in the QGIS user settings
+    # so they are available in every project.
+    FIELD_PRESETS_KEY = 'geochem_plotting/field_presets'
+
+    def _load_field_presets(self):
+        try:
+            presets = json.loads(QgsSettings().value(self.FIELD_PRESETS_KEY, '{}'))
+        except (TypeError, ValueError):
+            return {}
+        return presets if isinstance(presets, dict) else {}
+
+    def _store_field_presets(self, presets):
+        QgsSettings().setValue(self.FIELD_PRESETS_KEY, json.dumps(presets))
+
+    def _save_field_preset(self, combo):
+        terms = [term for term in combo.checked_items() if term != '1 (none)']
+        if not terms:
+            QMessageBox.warning(self, "Warning", "Please tick at least one entry first.")
+            return
+        name, ok = QInputDialog.getText(
+            self, "Save selection", f"Name for {_CheckableComboBox.SEPARATOR.join(terms)}:")
+        name = str(name).strip()
+        if ok and name:
+            presets = self._load_field_presets()
+            presets[name] = terms
+            self._store_field_presets(presets)
+
+    def _delete_field_preset(self, name):
+        presets = self._load_field_presets()
+        presets.pop(name, None)
+        self._store_field_presets(presets)
+
+    def _apply_field_preset(self, combo, terms):
+        """Tick a saved selection's entries, reporting any not offered by the
+        list (e.g. layer fields missing from the current layer)."""
+        offered = {combo.itemText(i) for i in range(combo.count())}
+        combo.set_checked_items([term for term in terms if term in offered])
+        missing = [term for term in terms if term not in offered]
+        if missing:
+            self.iface.messageBar().pushWarning(
+                "Geochemistry Plotting Tools",
+                f"Not available in this list, so not ticked: {', '.join(missing)}")
+
     def _sum_fields_hint(self, lists='a Num or Denom list'):
         """Note under tick lists (custom plots' Num/Denom, bubble "Size by")
         explaining how ticked entries are added together."""
@@ -4044,45 +4145,12 @@ class GeochemistryDockWidget(QDockWidget):
 
         # X-axis
         x_group = QGroupBox("X-Axis")
-        x_grid = QGridLayout(x_group)
-        x_grid.setHorizontalSpacing(20)
-        x_grid.setVerticalSpacing(3)
-        x_num_label = QLabel("Num:")
-        x_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        x_grid.addWidget(x_num_label, 0, 0)
-        # Tickable lists: several ticked entries are added together.
-        self.x_num_combo = _CheckableComboBox()
-        self.x_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-        self.x_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-        x_grid.addWidget(self.x_num_combo, 0, 1)
-        x_denom_label = QLabel("Denom:")
-        x_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        x_grid.addWidget(x_denom_label, 0, 2)
-        self.x_denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
-        self.x_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-        self.x_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        x_grid.addWidget(self.x_denom_combo, 0, 3)
+        self.x_num_combo, self.x_denom_combo = self._add_num_denom_lists(x_group)
         self._group_section(custom_xy_layout, x_group)
 
         # Y-axis
         y_group = QGroupBox("Y-Axis")
-        y_grid = QGridLayout(y_group)
-        y_grid.setHorizontalSpacing(20)
-        y_grid.setVerticalSpacing(3)
-        y_num_label = QLabel("Num:")
-        y_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        y_grid.addWidget(y_num_label, 0, 0)
-        self.y_num_combo = _CheckableComboBox()
-        self.y_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-        self.y_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-        y_grid.addWidget(self.y_num_combo, 0, 1)
-        y_denom_label = QLabel("Denom:")
-        y_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        y_grid.addWidget(y_denom_label, 0, 2)
-        self.y_denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
-        self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-        self.y_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        y_grid.addWidget(self.y_denom_combo, 0, 3)
+        self.y_num_combo, self.y_denom_combo = self._add_num_denom_lists(y_group)
         self._group_section(custom_xy_layout, y_group)
         custom_xy_layout.addWidget(self._sum_fields_hint())
 
@@ -4214,23 +4282,7 @@ class GeochemistryDockWidget(QDockWidget):
             ("C (bottom-right apex)", "tern_c_num_combo", "tern_c_denom_combo"),
         ]:
             grp = QGroupBox(apex_label)
-            grid = QGridLayout(grp)
-            grid.setHorizontalSpacing(20)
-            grid.setVerticalSpacing(3)
-            num_label = QLabel("Num:")
-            num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-            grid.addWidget(num_label, 0, 0)
-            num_combo = _CheckableComboBox()
-            num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-            num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-            grid.addWidget(num_combo, 0, 1)
-            denom_label = QLabel("Denom:")
-            denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-            grid.addWidget(denom_label, 0, 2)
-            denom_combo = _CheckableComboBox(exclusive_item='1 (none)')
-            denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-            denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-            grid.addWidget(denom_combo, 0, 3)
+            num_combo, denom_combo = self._add_num_denom_lists(grp)
             setattr(self, num_attr, num_combo)
             setattr(self, denom_attr, denom_combo)
             self._group_section(custom_tern_layout, grp)
