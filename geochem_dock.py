@@ -4081,20 +4081,6 @@ class GeochemistryDockWidget(QDockWidget):
         self.custom_show_all_fields.toggled.connect(self.refresh_custom_xy_combos)
         custom_fields_layout.addWidget(self.custom_show_all_fields)
 
-        # Bubble size (optional third variable, scaled by symbol size)
-        self._group_section(custom_xy_layout, self._create_bubble_size_group('custom', CUSTOM_XY_ELEMENTS))
-
-        # REE Normalization
-        ree_group = QGroupBox("REE Normalization")
-        ree_layout = QVBoxLayout(ree_group)
-        self.ree_norm_combo = QComboBox()
-        self.ree_norm_combo.addItem("None")
-        for norm_name, norm_values in NORMALIZATION_OPTIONS:
-            self.ree_norm_combo.addItem(norm_name)
-        self.ree_norm_combo.setCurrentIndex(0)
-        ree_layout.addLayout(self._label_row("Normalization:", self.ree_norm_combo))
-        self._group_section(custom_xy_layout, ree_group)
-
         # Axis scales
         custom_display_layout = self._loose_section(custom_xy_layout, "Axis Scales and Display")
         scale_row = QHBoxLayout()
@@ -4120,6 +4106,20 @@ class GeochemistryDockWidget(QDockWidget):
         self.custom_markers = QCheckBox("Markers")
         self.custom_markers.setChecked(True)
         custom_display_layout.addLayout(self._checkbox_row(self.custom_legend, self.custom_markers))
+
+        # REE Normalization
+        ree_group = QGroupBox("REE Normalization")
+        ree_layout = QVBoxLayout(ree_group)
+        self.ree_norm_combo = QComboBox()
+        self.ree_norm_combo.addItem("None")
+        for norm_name, norm_values in NORMALIZATION_OPTIONS:
+            self.ree_norm_combo.addItem(norm_name)
+        self.ree_norm_combo.setCurrentIndex(0)
+        ree_layout.addLayout(self._label_row("Normalization:", self.ree_norm_combo))
+        self._group_section(custom_xy_layout, ree_group)
+
+        # Bubble size (optional third variable, scaled by symbol size)
+        self._group_section(custom_xy_layout, self._create_bubble_size_group('custom', CUSTOM_XY_ELEMENTS))
         custom_xy_layout.addStretch()
 
         custom_xy_subtabs.addTab(plot_setup_tab, "Plot Setup")
@@ -4224,17 +4224,29 @@ class GeochemistryDockWidget(QDockWidget):
             self._group_section(custom_tern_layout, grp)
         custom_tern_layout.addWidget(self._sum_fields_hint())
 
-        tern_options_layout = self._loose_section(custom_tern_layout, "Fields and Display")
+        tern_fields_layout = self._loose_section(custom_tern_layout, "Fields")
         self.tern_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
         self.tern_show_all_fields.setChecked(False)
         self.tern_show_all_fields.toggled.connect(self.refresh_custom_ternary_combos)
-        tern_options_layout.addWidget(self.tern_show_all_fields)
+        tern_fields_layout.addWidget(self.tern_show_all_fields)
+
+        # Axis scale, shared by all three apexes (logging only some of them
+        # rarely spreads the data well).
+        tern_display_layout = self._loose_section(custom_tern_layout, "Axis Scales and Display")
+        self.tern_scale_combo = QComboBox()
+        self.tern_scale_combo.addItems(["Linear", "Log"])
+        self.tern_scale_combo.setToolTip(
+            "Log plots log10(value) for all three apexes, before they are normalised to "
+            "100%. If any plotted sample has a value below 1, which plain log10 would turn "
+            "negative, log10(1 + value) is used for all three instead. The apex labels "
+            "show which one was used.")
+        tern_display_layout.addLayout(self._label_row("Scale:", self.tern_scale_combo))
 
         self.tern_legend = QCheckBox("Legend")
         self.tern_legend.setChecked(True)
         self.tern_markers = QCheckBox("Markers")
         self.tern_markers.setChecked(True)
-        tern_options_layout.addLayout(self._checkbox_row(self.tern_legend, self.tern_markers))
+        tern_display_layout.addLayout(self._checkbox_row(self.tern_legend, self.tern_markers))
 
         self._group_section(custom_tern_layout, self._create_bubble_size_group('tern', CUSTOM_XY_ELEMENTS))
         custom_tern_layout.addStretch()
@@ -8017,15 +8029,22 @@ class GeochemistryDockWidget(QDockWidget):
         """Generate a custom ternary (triangle) diagram.
 
         Each apex numerator/denominator is a list of ticked entries, added
-        together (e.g. Na2O + K2O); see custom_sum_plan() for units.
+        together (e.g. Na2O + K2O); see custom_sum_plan() for units. The Log
+        scale plots log10(value) on all three apexes, or log10(1 + value) if
+        any plotted sample has a value below 1, which plain log10 would turn
+        negative (ternary positions need non-negative values).
         """
-        def apex_label(num, denom):
+        log_scale = self.tern_scale_combo.currentIndex() == 1
+
+        def apex_label(num, denom, log_prefix):
             def sum_str(terms, bracket):
                 text = ' + '.join(terms)
                 return f"({text})" if bracket and len(terms) > 1 else text
             if denom == ['1 (none)']:
-                return sum_str(num, False)
-            return f"{sum_str(num, True)} / {sum_str(denom, True)}"
+                label = sum_str(num, False)
+            else:
+                label = f"{sum_str(num, True)} / {sum_str(denom, True)}"
+            return f"{log_prefix}{label})" if log_prefix else label
 
         a_num   = self.tern_a_num_combo.checked_items()
         a_denom = self.tern_a_denom_combo.checked_items() or ['1 (none)']
@@ -8037,10 +8056,6 @@ class GeochemistryDockWidget(QDockWidget):
         if not a_num or not b_num or not c_num:
             QMessageBox.warning(self, "Warning", "Please select A, B and C fields.")
             return
-
-        a_label = apex_label(a_num, a_denom)
-        b_label = apex_label(b_num, b_denom)
-        c_label = apex_label(c_num, c_denom)
 
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('tern')
@@ -8076,12 +8091,7 @@ class GeochemistryDockWidget(QDockWidget):
             return
 
         # Compute raw A, B, C values per sample
-        raw_data = []
-        valid_features = []
-        valid_names = []
-        fid_list = []
-        size_data = []
-
+        candidates = []
         for feature, name in zip(features, sample_names):
             def val(num, denom):
                 n = custom_sum_value(feature, layer, num, sum_factors[tuple(num)])
@@ -8098,7 +8108,33 @@ class GeochemistryDockWidget(QDockWidget):
             b = val(b_num, b_denom)
             c = val(c_num, c_denom)
 
-            if a is None or b is None or c is None or (a + b + c) == 0:
+            if a is None or b is None or c is None:
+                continue
+            if log_scale and min(a, b, c) < 0:
+                continue  # no logarithm, whichever form is used
+            candidates.append(((a, b, c), feature, name))
+
+        # Log scale: plain log10 unless a plotted value below 1 requires the
+        # +1 offset, applied to all three apexes so they stay comparable.
+        log_offset = 1.0 if log_scale and any(min(v) < 1 for v, _f, _n in candidates) else 0.0
+        log_prefix = ''
+        if log_scale:
+            log_prefix = 'log10(1 + ' if log_offset else 'log10('
+
+        a_label = apex_label(a_num, a_denom, log_prefix)
+        b_label = apex_label(b_num, b_denom, log_prefix)
+        c_label = apex_label(c_num, c_denom, log_prefix)
+
+        raw_data = []
+        valid_features = []
+        valid_names = []
+        fid_list = []
+        size_data = []
+
+        for values, feature, name in candidates:
+            a, b, c = (math.log10(log_offset + v) for v in values) if log_scale else values
+
+            if (a + b + c) == 0:
                 continue
 
             raw_data.append((a, b, c))

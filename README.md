@@ -39,6 +39,7 @@ Developed for UWA EART3343 Lab exercises.
       * New "Apply to layer…" button (plot style panel > Style Management) sets the layer's symbology to a Categorized renderer matching the plot's category styles, after confirmation; the previous layer style is kept in the layer's style list so it can be restored. When the plot uses bubble sizing, the symbols get a matching data-defined size (same field, unit conversion, scaling and size range)
       * The style panel's **Statistics** section can now also show each category's median and interquartile range (IQR), with two new checkboxes alongside **Show mean ± 2σ**; the three can be combined freely, and a **Show faded individual data** checkbox (ticked by default) hides the faint points/lines behind them (see [Category statistics overlay](#category-statistics-overlay-mean--2σ-median-iqr))
       * Layer Selection: the layer selected in the QGIS Layers panel is now preselected if it's suitable for the plugin, and followed while the plugin is open; the Category and Add label lists show field aliases as `alias (fieldname)` when defined
+      * Custom Ternary: the three apexes can now use a Linear or Log scale (log10, or log10(1 + value) when a plotted value is below 1, as shown in the apex labels). Plot Options: Bubble Size is now the last section on every tab, and Axis Scales and Display follows the field definitions on Custom XY and Custom Ternary
       * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
       * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
@@ -118,6 +119,7 @@ Split into two sub-tabs:
 ### Custom Ternary
 - Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY (several entries can be ticked and added together - see [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size))
 - **Show all numeric fields (including data different from concentrations)** toggle
+- **Linear/Log** scale, shared by the three apexes: **Log** plots log10(value) before they are normalised. If any plotted sample has a value below 1 in A, B or C (plain log10 would make it negative, which a ternary can't show), log10(1 + value) is used for all three apexes instead; the apex labels show which one was used
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 
