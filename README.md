@@ -1,14 +1,14 @@
 ![icon](icon_sm.png) 
 # Geochemistry Plotting Tools
 
-_September 2026 - version 0.0.6_
+_October 2026 - version 1.0.0_
 
 A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. 
 Developed for UWA EART3343 Lab exercises.
 
 
 
-# Changelog 0.0.6
+# Changelog 1.0.0
 
       * Recognise element fields named by isotope mass number (`Sr88`, `Y89`, `La139`, `Ce140`, `Pr141`, `Nd146`, `88Sr`, `Sr_88`, `Sr88_ppm`...), preferring the most abundant isotope when several are present
       * Never treat normalised, ratio, error or detection-limit fields (`Sr_ChondriteNorm`, `La_N`, `Y_2SE`, `Nb_LOD`...) as a raw element concentration - previously they could be picked up in place of the real field and give wrong Sr/Y, ΣLREE, etc.

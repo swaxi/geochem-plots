@@ -3,7 +3,7 @@ name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
-version=0.0.6
+version=1.0.0
 author=Mark Jessell, Julien Perret (University of Western Australia)
 email=mark.jessell@uwa.edu.au; julien.perret@uwa.edu.au
 
@@ -12,8 +12,8 @@ about=A simple geochemistry plotting tool for QGIS that creates spider diagrams,
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=0.0.6
-     0.0.6 2026-09
+changelog=1.0.0
+     1.0.0 2026-10
        **Bug Fixes**
        * Recognise element fields named by isotope mass number (Sr88, Y89, La139, Ce140, Pr141, Nd146, 88Sr, Sr_88, Sr88_ppm ...), preferring the most abundant isotope when several are present
        * Never treat normalised, ratio, error or detection-limit fields (Sr_ChondriteNorm, La_N, Y_2SE, Nb_LOD ...) as a raw element concentration; they could previously be picked up in place of the real field and give wrong Sr/Y, sum LREE, etc.
