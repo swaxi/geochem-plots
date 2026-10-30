@@ -103,6 +103,7 @@ try:
     QEvent_MouseButtonRelease = QEvent.Type.MouseButtonRelease
     QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
     QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
+    QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
 
 except AttributeError:
     # Qt5 detected
@@ -149,6 +150,7 @@ except AttributeError:
     QEvent_MouseButtonRelease = QEvent.MouseButtonRelease
     QStyle_CC_ComboBox = QStyle.CC_ComboBox
     QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
+    QComboBox_AdjustToMinimumContents = QComboBox.AdjustToMinimumContentsLengthWithIcon
 
 
 # =============================================================================
@@ -3522,6 +3524,8 @@ class GeochemistryDockWidget(QDockWidget):
         # Connect to layer registry for updates
         QgsProject.instance().layersAdded.connect(self.load_layers)
         QgsProject.instance().layersRemoved.connect(self.load_layers)
+        # Follow the layer selected in the QGIS Layers panel.
+        self.iface.currentLayerChanged.connect(self.on_active_layer_changed)
 
     def closeEvent(self, event):
         """Handle close event."""
@@ -3917,6 +3921,10 @@ class GeochemistryDockWidget(QDockWidget):
         layer_layout.addLayout(self._label_row("Layer:", self.layer_combo))
 
         self.id_field_combo = QComboBox()
+        # Long aliases mustn't widen the whole panel (the list itself opens
+        # wide enough, see fit_popup_width).
+        self.id_field_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.id_field_combo.setMinimumContentsLength(12)
         self.id_field_combo.currentIndexChanged.connect(self.on_id_field_changed)
         layer_layout.addLayout(self._label_row("Category:", self.id_field_combo))
 
@@ -3930,6 +3938,8 @@ class GeochemistryDockWidget(QDockWidget):
         self._symbology_watched_layer = None
 
         self.label_field_combo = QComboBox()
+        self.label_field_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.label_field_combo.setMinimumContentsLength(12)
         self.discrim_label = QCheckBox()
         self.discrim_label.setChecked(False)
         self.discrim_label.setToolTip("Label selected points using this field")
@@ -4514,16 +4524,44 @@ class GeochemistryDockWidget(QDockWidget):
             if self._is_candidate_data_layer(layer):
                 self.layer_combo.addItem(layer.name(), layer.id())
         
-        # Try to restore previous selection
-        if current_layer_id:
-            index = self.layer_combo.findData(current_layer_id)
-            if index >= 0:
-                self.layer_combo.setCurrentIndex(index)
-        
+        # Keep the previous selection if it's still listed, otherwise start
+        # from the layer selected in the QGIS Layers panel, if it's suitable.
+        index = self.layer_combo.findData(current_layer_id) if current_layer_id else -1
+        if index < 0:
+            index = self._active_layer_index()
+        if index >= 0:
+            self.layer_combo.setCurrentIndex(index)
+
         self.layer_combo.blockSignals(False)
-        
+
         if self.layer_combo.count() > 0:
             self.on_layer_changed(self.layer_combo.currentIndex())
+
+    def _layer_index(self, layer):
+        """Position of `layer` in the layer list, or -1 if it isn't listed
+        (the list only holds layers suitable for the plugin)."""
+        if not isinstance(layer, QgsVectorLayer):
+            return -1
+        return self.layer_combo.findData(layer.id())
+
+    def _active_layer_index(self):
+        """Position in the layer list of the QGIS active layer, or -1."""
+        return self._layer_index(self.iface.activeLayer())
+
+    def on_active_layer_changed(self, layer):
+        """Select the layer chosen in the QGIS Layers panel, if it's suitable."""
+        index = self._layer_index(layer)
+        if index >= 0:
+            self.layer_combo.setCurrentIndex(index)
+
+    @staticmethod
+    def _field_list_label(field):
+        """Text for a field in the Category/Add label lists: 'alias (fieldname)'
+        when the layer defines an alias, else the field name."""
+        alias = (field.alias() or '').strip()
+        if alias and alias != field.name():
+            return f"{alias} ({field.name()})"
+        return field.name()
 
     def on_layer_changed(self, index):
         """Handle layer selection change."""
@@ -4537,13 +4575,18 @@ class GeochemistryDockWidget(QDockWidget):
         if layer is None:
             return
         
+        # The list text may show an alias; the item data is always the real
+        # field name, which is what every reader of these lists uses.
         self.id_field_combo.clear()
         self.label_field_combo.clear()
-        self.id_field_combo.addItem(NO_CATEGORY_OPTION)
+        self.id_field_combo.addItem(NO_CATEGORY_OPTION, NO_CATEGORY_OPTION)
         field_names = [field.name() for field in layer.fields()]
-        for field_name in field_names:
-            self.id_field_combo.addItem(field_name)
-            self.label_field_combo.addItem(field_name)
+        for field in layer.fields():
+            list_label = self._field_list_label(field)
+            self.id_field_combo.addItem(list_label, field.name())
+            self.label_field_combo.addItem(list_label, field.name())
+        fit_popup_width(self.id_field_combo)
+        fit_popup_width(self.label_field_combo)
 
         # Auto-select ID field. Default to "no category" (single shared
         # symbol) unless a recognisable sample/category field is found.
@@ -4621,7 +4664,7 @@ class GeochemistryDockWidget(QDockWidget):
 
     def _current_category_field(self):
         """The selected Category field name, or None for "no category"."""
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
         if not id_field or id_field == NO_CATEGORY_OPTION:
             return None
         return id_field
@@ -4853,7 +4896,7 @@ class GeochemistryDockWidget(QDockWidget):
 
     def _category_field_label(self):
         """Return a clean template-key label for the current 'Category:' selection."""
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
         if not id_field or id_field == NO_CATEGORY_OPTION:
             return NO_CATEGORY_LABEL
         return id_field
@@ -4873,7 +4916,7 @@ class GeochemistryDockWidget(QDockWidget):
         """
         self.feature_list.setUpdatesEnabled(False)
         self.feature_list.clear()
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
 
         selected_ids = set(layer.selectedFeatureIds())
         field_names = [f.name() for f in layer.fields()]
@@ -5063,7 +5106,7 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.warning(self, "Warning", "Please select at least one sample.")
             return
 
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
         use_category_field = bool(id_field) and id_field != NO_CATEGORY_OPTION
         self._last_bubble_info = None
         features = []
@@ -5363,10 +5406,9 @@ class GeochemistryDockWidget(QDockWidget):
         )
 
         # Add the new field to the category dropdown if not already present, then select it
-        existing_fields = [self.id_field_combo.itemText(i) for i in range(self.id_field_combo.count())]
-        if field_name not in existing_fields:
-            self.id_field_combo.addItem(field_name)
-        self.id_field_combo.setCurrentText(field_name)
+        if self.id_field_combo.findData(field_name) < 0:
+            self.id_field_combo.addItem(field_name, field_name)
+        self.id_field_combo.setCurrentIndex(self.id_field_combo.findData(field_name))
 
     def generate_discrimination_diagram(self, layer, features, sample_names):
         """Generate discrimination diagram."""
@@ -6198,7 +6240,7 @@ class GeochemistryDockWidget(QDockWidget):
             _draw_selection_overlay(selected_set)
 
             if self.discrim_label.isChecked() and selected_fids:
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 layer_field_names = [f.name() for f in layer.fields()]
                 if label_field in layer_field_names:
                     for fid in selected_fids:
@@ -6344,7 +6386,7 @@ class GeochemistryDockWidget(QDockWidget):
             nearest_idx = int(np.argmin(dists))
             if dists[nearest_idx] <= 10:
                 fid = fid_list[nearest_idx]
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 cache_key = (fid, label_field)
                 if cache_key not in _hover_cache:
                     layer = QgsProject.instance().mapLayer(layer_id)
@@ -6500,7 +6542,7 @@ class GeochemistryDockWidget(QDockWidget):
                     hit_fid = fid
                     break
             if hit_fid is not None:
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 cache_key = (hit_fid, label_field)
                 if cache_key not in _hover_cache:
                     layer = QgsProject.instance().mapLayer(layer_id)
