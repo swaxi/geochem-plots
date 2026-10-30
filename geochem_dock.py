@@ -15,7 +15,7 @@ from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
-    QFileDialog, QMessageBox, QGroupBox, QTabWidget,
+    QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
     QDialogButtonBox, QSizePolicy, QSplitter, QToolButton,
@@ -3528,6 +3528,7 @@ class GeochemistryDockWidget(QDockWidget):
         self._selection_history = {}
         self._selection_watched_layer = None
         self._restoring_selection = False
+        self._list_driving_selection = False
         self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
@@ -4366,6 +4367,7 @@ class GeochemistryDockWidget(QDockWidget):
         self.feature_list = QListWidget()
         self.feature_list.setSelectionMode(QListWidget_MultiSelection)
         self.feature_list.setMinimumHeight(60)
+        self.feature_list.itemSelectionChanged.connect(self._on_list_selection_changed)
         sample_layout.addWidget(self.feature_list, 1)
 
         btn_row = QHBoxLayout()
@@ -4507,15 +4509,10 @@ class GeochemistryDockWidget(QDockWidget):
         self.tab_widget.currentChanged.connect(
             lambda _index: self.use_layer_symbology.isChecked() and self._apply_layer_bubble_settings())
 
-        # Action buttons
-        button_layout = QHBoxLayout()
+        # Action button (plots are saved or copied from their own window's toolbar)
         plot_btn = QPushButton("Generate Plot")
         plot_btn.clicked.connect(self.generate_plot)
-        button_layout.addWidget(plot_btn)
-        save_btn = QPushButton("Save...")
-        save_btn.clicked.connect(self.save_plot)
-        button_layout.addWidget(save_btn)
-        main_layout.addLayout(button_layout)
+        main_layout.addWidget(plot_btn)
 
         # Wrap in scroll area
         scroll_area = QScrollArea()
@@ -4991,6 +4988,8 @@ class GeochemistryDockWidget(QDockWidget):
         is selected, so a plot can be generated straight away.
         """
         self.feature_list.setUpdatesEnabled(False)
+        # Rebuilding must not read as the user ticking rows.
+        self.feature_list.blockSignals(True)
         self.feature_list.clear()
         id_field = self.id_field_combo.currentData()
 
@@ -5034,7 +5033,24 @@ class GeochemistryDockWidget(QDockWidget):
         for item in items_to_select:
             item.setSelected(True)
 
+        self.feature_list.blockSignals(False)
         self.feature_list.setUpdatesEnabled(True)
+
+    def _on_list_selection_changed(self):
+        """Rows ticked by the user become the QGIS selection, so the map and
+        open plots follow. Every sample ticked means no selection, as on start."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        fids = self._selected_feature_ids()
+        self._list_driving_selection = True
+        try:
+            if not fids or len(set(fids)) >= layer.featureCount():
+                layer.removeSelection()
+            else:
+                layer.selectByIds(fids)
+        finally:
+            self._list_driving_selection = False
 
     # ------------------------------------------------------------------
     # Selection history (recall earlier selections of a layer)
@@ -5120,6 +5136,10 @@ class GeochemistryDockWidget(QDockWidget):
         """Keep the sample list current and record new selections."""
         layer = self._current_layer()
         if layer is None:
+            return
+        if self._list_driving_selection:
+            # Keep the rows as ticked, and no history entry per ticked row.
+            self.selection_combo.setCurrentIndex(-1)
             return
         self.update_feature_list(layer)
         fids = layer.selectedFeatureIds()
@@ -5261,15 +5281,24 @@ class GeochemistryDockWidget(QDockWidget):
                 fids.extend(item.data(Qt_UserRole))
         return fids
 
-    def select_all_features(self):
-        """Select all features."""
+    def _set_all_rows_selected(self, selected):
+        self.feature_list.blockSignals(True)
         for i in range(self.feature_list.count()):
-            self.feature_list.item(i).setSelected(True)
+            self.feature_list.item(i).setSelected(selected)
+        self.feature_list.blockSignals(False)
+
+    def select_all_features(self):
+        """Select every sample of the layer: rows only carry their selected
+        samples while a QGIS selection exists, so that is cleared first."""
+        layer = self._current_layer()
+        if layer is not None and layer.selectedFeatureCount():
+            layer.removeSelection()  # the list then rebuilds with all rows selected
+        else:
+            self._set_all_rows_selected(True)
 
     def deselect_all_features(self):
-        """Deselect all features."""
-        for i in range(self.feature_list.count()):
-            self.feature_list.item(i).setSelected(False)
+        """Untick every row, leaving any QGIS selection as it is."""
+        self._set_all_rows_selected(False)
 
     def refresh_selection(self):
         """Refresh feature list from QGIS selection."""
@@ -8354,17 +8383,6 @@ class GeochemistryDockWidget(QDockWidget):
             'checkbuttons': checks, 'buttons': (show_btn, hide_btn, invert_btn),
             'visible_state': visible_state, 'axes': (check_ax, show_ax, hide_ax, invert_ax),
         }
-
-    def save_plot(self):
-        """Save the current plot."""
-        if self.current_fig is None:
-            QMessageBox.warning(self, "Warning", "Please generate a plot first.")
-            return
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "",
-            "PNG Files (*.png);;PDF Files (*.pdf);;SVG Files (*.svg);;All Files (*)")
-        if file_path:
-            self.current_fig.savefig(file_path, dpi=300, bbox_inches='tight')
-            QMessageBox.information(self, "Success", f"Plot saved to:\n{file_path}")
 
     def get_numeric_field_names(self):
         """Get numeric field names from the current layer."""

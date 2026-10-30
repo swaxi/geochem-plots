@@ -40,9 +40,9 @@ Developed for UWA EART3343 Lab exercises.
       * The style panel's **Statistics** section can now also show each category's median and interquartile range (IQR), with two new checkboxes alongside **Show mean ± 2σ**; the three can be combined freely, and a **Show faded individual data** checkbox (ticked by default) hides the faint points/lines behind them (see [Category statistics overlay](#category-statistics-overlay-mean--2σ-median-iqr))
       * Layer Selection: the layer selected in the QGIS Layers panel is now preselected if it's suitable for the plugin, and followed while the plugin is open; the Category and Add label lists show field aliases as `alias (fieldname)` when defined
       * Custom Ternary: the three apexes can now use a Linear or Log scale (log10, or log10(1 + value) when a plotted value is below 1, as shown in the apex labels). Plot Options: Bubble Size is now the last section on every tab, and Axis Scales and Display follows the field definitions on Custom XY and Custom Ternary
-      * Samples: all samples are selected by default when the layer has no QGIS selection, and the list now follows map selections by itself. New **Copy Table** and **Copy Labels** buttons copy the selected samples to the clipboard, and a **Selections** list with ◀ ▶ buttons recalls earlier selections, which can be saved with a name and notes (see [Recall, save and copy selections](#recall-save-and-copy-selections))
+      * Samples: all samples are selected by default when the layer has no QGIS selection, and the list now follows map selections by itself. Rows ticked in the list now select those samples on the map and on open plots, and **All** is a true all (it also clears any QGIS selection). New **Copy Table** and **Copy Labels** buttons copy the selected samples to the clipboard, and a **Selections** list with ◀ ▶ buttons recalls earlier selections, which can be saved with a name and notes (see [Recall, save and copy selections](#recall-save-and-copy-selections))
       * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's **Selection** section; an **Add to selection** option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
-      * Plots: new **Copy PNG** button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image
+      * Plots: new **Copy PNG** button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image. The **Save...** button of the plugin window is removed: plots are saved from the plot window's toolbar
       * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
       * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
@@ -85,15 +85,15 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 ![Custom XY](tab3.png)
 
 6. Select samples to plot, using any of:
-   - The **Samples** list in the plugin (multi-select as usual). When a **Category** field is chosen, each category is listed once with its sample count, and selecting it selects all of its samples
+   - The **Samples** list in the plugin (multi-select as usual). When a **Category** field is chosen, each category is listed once with its sample count, and selecting it selects all of its samples. Rows you tick also select those samples on the map and on open plots
    - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (the list follows it automatically)
-   - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first). All samples are selected by default when the layer has no QGIS selection, so you can click **Generate Plot** straight away
+   - The **All** button to select every feature, which also clears any QGIS selection (combine with a layer filter to narrow this down first). All samples are selected by default when the layer has no QGIS selection, so you can click **Generate Plot** straight away
 
 ![Map selection](map2plot.png)
 
 7. Click **Generate Plot**
-8. Click **Save...** to export the current plot as PNG, PDF or SVG, or **Copy PNG** in the plot window's toolbar to copy it to the clipboard
-9. Click **None** to clear the sample selection
+8. Use the plot window's toolbar to save the plot (Save icon: PNG, PDF, SVG...) or copy it to the clipboard (**Copy PNG**)
+9. Click **None** to untick every row of the Samples list, e.g. before ticking a few categories (any QGIS selection stays until you tick a row)
 
 ## Tabs
 
