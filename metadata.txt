@@ -7,7 +7,16 @@ version=1.0.0
 author=Julien Perret, Mark Jessell (Centre for Exploration Targeting, University of Western Australia)
 email=julien.perret@uwa.edu.au; mark.jessell@uwa.edu.au
 
-about=Plot geochemical data straight from QGIS point layers: spider diagrams with a choice of normalisations, tectonic discrimination and rock classification diagrams, mineral classification plots, petrophysics cross-plots, and custom XY and ternary plots built from any element, oxide or numeric field. Plots are interactive and linked to the map: selecting points on a plot selects them on the map, and the other way round. Samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR). Element and oxide fields are recognised automatically and converted to common units. Plot styles can be shared with the layer's symbology. Developed for the UWA EART3343 lab exercises.
+about=Plot geochemical data straight from QGIS point layers.
+ Supports:
+ - spider diagrams with a choice of normalisations,
+ - tectonic discrimination and rock classification diagrams,
+ - mineral classification plots, petrophysics cross-plots,
+ - custom XY and ternary plots built from any element, oxide or numeric field; 
+ - interactive plots linked to the map: selecting points on a plot selects them on the map, and the other way round, and plot styles can be shared with the layer's symbology,
+ - advanced plotting options: samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR), 
+ - automatic element and oxide field recognision and conversion to common units.
+ Firstly developed for the UWA EART3343 lab exercises.
 
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
