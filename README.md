@@ -3,10 +3,16 @@
 
 _October 2026 - version 1.0.0_
 
-A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. 
-Developed for UWA EART3343 Lab exercises.
-
-
+A geochemistry plotting tool for QGIS that plot geochemical data straight from QGIS point layers.
+ Supports:
+ - spider diagrams with a choice of normalisations,
+ - tectonic discrimination and rock classification diagrams,
+ - mineral classification plots, petrophysics cross-plots,
+ - custom XY and ternary plots built from any element, oxide or numeric field; 
+ - interactive plots linked to the map: selecting points on a plot selects them on the map, and the other way round, and plot styles can be shared with the layer's symbology,
+ - advanced plotting options: samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR), 
+ - automatic element and oxide field recognision and conversion to common units.
+ Firstly developed for the UWA EART3343 lab exercises.
 
 # Changelog 1.0.0
 
