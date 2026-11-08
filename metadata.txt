@@ -4,10 +4,10 @@ qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
 version=1.0.0
-author=Mark Jessell, Julien Perret (University of Western Australia)
-email=mark.jessell@uwa.edu.au; julien.perret@uwa.edu.au
+author=Julien Perret, Mark Jessell (Centre for Exploration Targeting, University of Western Australia)
+email=julien.perret@uwa.edu.au; mark.jessell@uwa.edu.au
 
-about=A simple geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots with different normalisation options. Developed for UWA EART3343 Lab exercises.
+about=Plot geochemical data straight from QGIS point layers: spider diagrams with a choice of normalisations, tectonic discrimination and rock classification diagrams, mineral classification plots, petrophysics cross-plots, and custom XY and ternary plots built from any element, oxide or numeric field. Plots are interactive and linked to the map: selecting points on a plot selects them on the map, and the other way round. Samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR). Element and oxide fields are recognised automatically and converted to common units. Plot styles can be shared with the layer's symbology. Developed for the UWA EART3343 lab exercises.
 
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
@@ -81,6 +81,7 @@ changelog=1.0.0
        * Add plot-type dropdown to the Minerals tab, ready for future classification schemes
        * Improve point label readability (white background) and stacking order (always drawn above points)
        * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment
+   
     0.0.4 
        * Allow selection of plotted points to update map selections
        * Assign field labels to points
@@ -91,18 +92,21 @@ changelog=1.0.0
        * Custom triangle plot added   
        * Add Sullivan 2020 Apatite classification  
        * Add density vs magnetic susceptibility plot    
+   
     0.0.3 
        * Add Winchester & Floyd 1977 plot
        * Allow any numeric field for Custom xy plots
        * Allow field names with Na_Sodium naming convention
+   
     0.0.2 
        * Fix QT6 issues for QGIS 4
+ 
     0.0.1 - Initial release
        * Spider diagrams with multiple normalization options
        * 7 discrimination diagrams
        * Custom XY plotting with REE normalization
 
-tags=geochemistry,plotting,spider diagram,REE,discrimination,petrology,geology
+tags=geochemistry,geology,petrology,mineralogy,petrophysics,plot,spider diagram,discrimination diagram,classification diagram,ternary diagram,REE
 
 homepage=https://github.com/swaxi/geochem-plots
 category=Analysis
