@@ -18,39 +18,21 @@ except ImportError:
     from qgis.PyQt.QtGui import QAction  # Qt6
 
 # Qt5/Qt6 Compatibility Layer
-try:
-    # Try Qt6 style first
-    _test = Qt.DockWidgetArea.RightDockWidgetArea
-    # Qt6 detected
-    QT6 = True
+# Scoped enums (e.g. Qt.DockWidgetArea.RightDockWidgetArea) work with both
+# PyQt6 (QGIS 4) and the PyQt5 5.15 shipped with QGIS 3, so the unscoped
+# Qt5-only forms are not needed.
+RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
+LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
+TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
+BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
 
-    # Qt6 style enums are already available
-    RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
-    LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
-    TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
-    BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+# QMessageBox buttons
+QMessageBox_Ok = QMessageBox.StandardButton.Ok
+QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+QMessageBox_Yes = QMessageBox.StandardButton.Yes
+QMessageBox_No = QMessageBox.StandardButton.No
 
-    # QMessageBox buttons
-    QMessageBox_Ok = QMessageBox.StandardButton.Ok
-    QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
-    QMessageBox_Yes = QMessageBox.StandardButton.Yes
-    QMessageBox_No = QMessageBox.StandardButton.No
 
-except AttributeError:
-    # Qt5 detected
-    QT6 = False
-
-    # Qt5 style enums
-    RightDockWidgetArea = Qt.RightDockWidgetArea
-    LeftDockWidgetArea = Qt.LeftDockWidgetArea
-    TopDockWidgetArea = Qt.TopDockWidgetArea
-    BottomDockWidgetArea = Qt.BottomDockWidgetArea
-
-    # QMessageBox buttons
-    QMessageBox_Ok = QMessageBox.Ok
-    QMessageBox_Cancel = QMessageBox.Cancel
-    QMessageBox_Yes = QMessageBox.Yes
-    QMessageBox_No = QMessageBox.No
 from .geochem_dock import GeochemistryDockWidget
 
 

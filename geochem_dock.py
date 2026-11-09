@@ -60,105 +60,52 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # Qt5/Qt6 Compatibility Layer
-try:
-    # Try Qt6 style first
-    _test = Qt.DockWidgetArea.RightDockWidgetArea
-    # Qt6 detected
-    QT6 = True
+# Scoped enums (e.g. Qt.DockWidgetArea.RightDockWidgetArea) work with both
+# PyQt6 (QGIS 4) and the PyQt5 5.15 shipped with QGIS 3, so the unscoped
+# Qt5-only forms are not needed.
+RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
+LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
+TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
+BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+Qt_Horizontal = Qt.Orientation.Horizontal
+Qt_Vertical = Qt.Orientation.Vertical
+Qt_SizeVerCursor = Qt.CursorShape.SizeVerCursor
 
-    # Qt6 style enums are already available
-    RightDockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
-    LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
-    TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
-    BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
-    Qt_Horizontal = Qt.Orientation.Horizontal
-    Qt_Vertical = Qt.Orientation.Vertical
-    Qt_SizeVerCursor = Qt.CursorShape.SizeVerCursor
+# QMessageBox buttons
+QMessageBox_Ok = QMessageBox.StandardButton.Ok
+QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
+QMessageBox_Yes = QMessageBox.StandardButton.Yes
+QMessageBox_No = QMessageBox.StandardButton.No
 
-    # QMessageBox buttons
-    QMessageBox_Ok = QMessageBox.StandardButton.Ok
-    QMessageBox_Cancel = QMessageBox.StandardButton.Cancel
-    QMessageBox_Yes = QMessageBox.StandardButton.Yes
-    QMessageBox_No = QMessageBox.StandardButton.No
+QListWidget_MultiSelection = QListWidget.SelectionMode.MultiSelection
+Qt_ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+Qt_ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
+Qt_UserRole = Qt.ItemDataRole.UserRole
 
-    QListWidget_MultiSelection = QListWidget.SelectionMode.MultiSelection
-    Qt_ScrollBarAlwaysOff = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    Qt_ScrollBarAsNeeded = Qt.ScrollBarPolicy.ScrollBarAsNeeded
-    Qt_UserRole = Qt.ItemDataRole.UserRole
+# Category style panel (interactive legend) enums
+Qt_NoBrush = Qt.BrushStyle.NoBrush
+QDialog_Accepted = QDialog.DialogCode.Accepted
+QDialogButtonBox_Ok = QDialogButtonBox.StandardButton.Ok
+QDialogButtonBox_Cancel = QDialogButtonBox.StandardButton.Cancel
+QSizePolicy_Fixed = QSizePolicy.Policy.Fixed
+QSizePolicy_Preferred = QSizePolicy.Policy.Preferred
+QSizePolicy_Ignored = QSizePolicy.Policy.Ignored
+QSizePolicy_Minimum = QSizePolicy.Policy.Minimum
+QSizePolicy_Maximum = QSizePolicy.Policy.Maximum
+QSizePolicy_Expanding = QSizePolicy.Policy.Expanding
+QDockWidget_Movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
+QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
+QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
 
-    # Category style panel (interactive legend) enums
-    Qt_NoBrush = Qt.BrushStyle.NoBrush
-    QDialog_Accepted = QDialog.DialogCode.Accepted
-    QDialogButtonBox_Ok = QDialogButtonBox.StandardButton.Ok
-    QDialogButtonBox_Cancel = QDialogButtonBox.StandardButton.Cancel
-    QSizePolicy_Fixed = QSizePolicy.Policy.Fixed
-    QSizePolicy_Preferred = QSizePolicy.Policy.Preferred
-    QSizePolicy_Ignored = QSizePolicy.Policy.Ignored
-    QSizePolicy_Minimum = QSizePolicy.Policy.Minimum
-    QSizePolicy_Maximum = QSizePolicy.Policy.Maximum
-    QSizePolicy_Expanding = QSizePolicy.Policy.Expanding
-    QDockWidget_Movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
-    QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
-    QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
-
-    # Multi-select (checkable) combo box enums
-    Qt_Checked = Qt.CheckState.Checked
-    Qt_Unchecked = Qt.CheckState.Unchecked
-    QEvent_MouseButtonRelease = QEvent.Type.MouseButtonRelease
-    QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
-    QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
-    QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-    Qt_ToolTipRole = Qt.ItemDataRole.ToolTipRole
-    QToolButton_InstantPopup = QToolButton.ToolButtonPopupMode.InstantPopup
-
-except AttributeError:
-    # Qt5 detected
-    QT6 = False
-
-    # Qt5 style enums
-    RightDockWidgetArea = Qt.RightDockWidgetArea
-    LeftDockWidgetArea = Qt.LeftDockWidgetArea
-    TopDockWidgetArea = Qt.TopDockWidgetArea
-    BottomDockWidgetArea = Qt.BottomDockWidgetArea
-    Qt_Horizontal = Qt.Horizontal
-    Qt_Vertical = Qt.Vertical
-    Qt_SizeVerCursor = Qt.SizeVerCursor
-
-    # QMessageBox buttons
-    QMessageBox_Ok = QMessageBox.Ok
-    QMessageBox_Cancel = QMessageBox.Cancel
-    QMessageBox_Yes = QMessageBox.Yes
-    QMessageBox_No = QMessageBox.No
-
-    QListWidget_MultiSelection = QListWidget.MultiSelection
-    Qt_ScrollBarAlwaysOff = Qt.ScrollBarAlwaysOff
-    Qt_ScrollBarAsNeeded = Qt.ScrollBarAsNeeded
-    Qt_UserRole = Qt.UserRole
-
-    # Category style panel (interactive legend) enums
-    Qt_NoBrush = Qt.NoBrush
-    QDialog_Accepted = QDialog.Accepted
-    QDialogButtonBox_Ok = QDialogButtonBox.Ok
-    QDialogButtonBox_Cancel = QDialogButtonBox.Cancel
-    QSizePolicy_Fixed = QSizePolicy.Fixed
-    QSizePolicy_Preferred = QSizePolicy.Preferred
-    QSizePolicy_Ignored = QSizePolicy.Ignored
-    QSizePolicy_Minimum = QSizePolicy.Minimum
-    QSizePolicy_Maximum = QSizePolicy.Maximum
-    QSizePolicy_Expanding = QSizePolicy.Expanding
-    QDockWidget_Movable = QDockWidget.DockWidgetMovable
-    QDockWidget_Floatable = QDockWidget.DockWidgetFloatable
-    QPainter_Antialiasing = QPainter.Antialiasing
-
-    # Multi-select (checkable) combo box enums
-    Qt_Checked = Qt.Checked
-    Qt_Unchecked = Qt.Unchecked
-    QEvent_MouseButtonRelease = QEvent.MouseButtonRelease
-    QStyle_CC_ComboBox = QStyle.CC_ComboBox
-    QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
-    QComboBox_AdjustToMinimumContents = QComboBox.AdjustToMinimumContentsLengthWithIcon
-    Qt_ToolTipRole = Qt.ToolTipRole
-    QToolButton_InstantPopup = QToolButton.InstantPopup
+# Multi-select (checkable) combo box enums
+Qt_Checked = Qt.CheckState.Checked
+Qt_Unchecked = Qt.CheckState.Unchecked
+QEvent_MouseButtonRelease = QEvent.Type.MouseButtonRelease
+QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
+QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
+QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+Qt_ToolTipRole = Qt.ItemDataRole.ToolTipRole
+QToolButton_InstantPopup = QToolButton.ToolButtonPopupMode.InstantPopup
 
 
 # =============================================================================
