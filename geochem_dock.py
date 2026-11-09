@@ -27,6 +27,7 @@ from qgis.PyQt.QtGui import (QColor, QImage, QPainter, QPen, QBrush, QPolygonF,
 from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer, QEvent
 
 from . import symbology_bridge
+from . import ree_lambdas
 
 try:
     import matplotlib
@@ -4098,6 +4099,22 @@ class GeochemistryDockWidget(QDockWidget):
         self.spider_markers.setChecked(True)
         spider_display_layout.addLayout(self._checkbox_row(self.spider_legend, self.spider_markers))
 
+        spider_lambda_layout = self._loose_section(spider_layout, "REE Shape Coefficients")
+        lambda_btn = QPushButton("Add λ0-λ4 to Layer (selected samples)")
+        lambda_btn.setToolTip(
+            "Fit each selected sample's REE pattern to the orthogonal polynomials of\n"
+            "O'Neill (2016, J. Petrology 57, 1463-1508) and write the shape coefficients\n"
+            f"to the layer fields {', '.join(ree_lambdas.FIELD_NAMES)}:\n"
+            "λ0 = average ln([REE]/[REE]CI), λ1 = slope, λ2 = curvature,\n"
+            "λ3 = sigmoidal term, λ4 = W-shaped term.\n\n"
+            "Uses the paper's own reference data (CI chondrite abundances and\n"
+            "Shannon ionic radii, Table 1; orthogonal polynomials, Table 2), whatever\n"
+            "normalisation is chosen above. Eu is excluded from the fit. A sample needs at\n"
+            f"least {ree_lambdas.MIN_FIT_ELEMENTS} REE (Eu excluded), including one of La-Nd and "
+            "one of Er-Lu;\notherwise its fields are left empty.")
+        lambda_btn.clicked.connect(self.add_ree_lambda_fields)
+        spider_lambda_layout.addWidget(lambda_btn)
+
         self._group_section(spider_layout, self._create_bubble_size_group('spider', CUSTOM_XY_ELEMENTS, editable=True))
         spider_layout.addStretch()
 
@@ -5782,6 +5799,88 @@ class GeochemistryDockWidget(QDockWidget):
         if self.id_field_combo.findData(field_name) < 0:
             self.id_field_combo.addItem(field_name, field_name)
         self.id_field_combo.setCurrentIndex(self.id_field_combo.findData(field_name))
+
+    def add_ree_lambda_fields(self):
+        """Add (or update) the O'Neill (2016) REE shape coefficient fields
+        lambda0-lambda4 for the samples selected in the list. Other features
+        are left unchanged; selected samples whose REE can't define the
+        pattern are set to NULL."""
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+        selected_fids = self._selected_feature_ids()
+        if not selected_fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return
+
+        available = [e for e in ree_lambdas.FIT_ELEMENTS if find_element_field(layer, e) is not None]
+        reason = ree_lambdas.missing_data_reason(available)
+        if reason is not None:
+            QMessageBox.warning(
+                self, "Not Enough REE Data",
+                f"The REE shape coefficients can't be calculated for layer '{layer.name()}'.\n\n"
+                f"REE fields found (Eu excluded): {', '.join(available) or 'none'}.\n"
+                f"At least {ree_lambdas.MIN_FIT_ELEMENTS} are needed, including one of La-Nd "
+                "and one of Er-Lu.")
+            return
+
+        global _FIELD_USAGE
+        _FIELD_USAGE = {}
+        results = {}
+        skipped = Counter()
+        try:
+            for fid in selected_fids:
+                feature = layer.getFeature(fid)
+                concentrations = {e: get_element_ppm(feature, layer, e) for e in available}
+                lambdas, reason = ree_lambdas.fit_lambdas(concentrations)
+                results[fid] = lambdas
+                if lambdas is None:
+                    skipped[reason] += 1
+        finally:
+            usage, _FIELD_USAGE = _FIELD_USAGE, None
+        if usage:
+            symbology_bridge.log(
+                f"REE shape coefficients of layer '{layer.name()}' - fields used: " +
+                ', '.join(f"{element} ← {' / '.join(sorted(fields))}"
+                          for element, fields in sorted(usage.items())))
+
+        if not layer.isEditable():
+            if not layer.startEditing():
+                QMessageBox.critical(self, "Error",
+                    f"Cannot edit layer '{layer.name()}'. Make sure it is not read-only.")
+                return
+
+        for field_name in ree_lambdas.FIELD_NAMES:
+            if layer.fields().indexOf(field_name) < 0:
+                layer.addAttribute(QgsField(field_name, QVariant.Double))
+        layer.updateFields()
+        field_indices = [layer.fields().indexOf(name) for name in ree_lambdas.FIELD_NAMES]
+        if any(idx < 0 for idx in field_indices):
+            QMessageBox.critical(self, "Error", "Could not create the λ fields on this layer.")
+            layer.rollBack()
+            return
+
+        for fid, lambdas in results.items():
+            values = lambdas if lambdas is not None else [NULL] * len(field_indices)
+            for idx, value in zip(field_indices, values):
+                layer.changeAttributeValue(fid, idx, value)
+
+        if not layer.commitChanges():
+            QMessageBox.critical(self, "Error",
+                "Could not save the λ fields:\n" + "\n".join(layer.commitErrors()))
+            layer.rollBack()
+            return
+        layer.updateFields()
+
+        n_done = len(results) - sum(skipped.values())
+        message = (f"Fields {', '.join(ree_lambdas.FIELD_NAMES)} written to layer "
+                   f"'{layer.name()}' for {n_done} of {len(results)} selected samples "
+                   f"({ree_lambdas.REFERENCE}, CI-normalised, Eu excluded).")
+        if skipped:
+            message += "\n\nLeft empty (not enough REE data):\n" + "\n".join(
+                f"  {count} sample(s): {reason}" for reason, count in skipped.most_common())
+        QMessageBox.information(self, "REE Shape Coefficients", message)
 
     def generate_discrimination_diagram(self, layer, features, sample_names):
         """Generate discrimination diagram."""

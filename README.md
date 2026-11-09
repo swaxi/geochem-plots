@@ -6,6 +6,7 @@ _October 2026 - version 1.0.0_
 A geochemistry plotting tool for QGIS that plot geochemical data straight from QGIS point layers.
  Supports:
  - spider diagrams with a choice of normalisations,
+ - REE shape coefficients (λ0-λ4, O'Neill 2016) written to the attribute table,
  - tectonic discrimination and rock classification diagrams,
  - mineral classification plots, petrophysics cross-plots,
  - custom XY and ternary plots built from any element, oxide or numeric field; 
@@ -50,6 +51,7 @@ A geochemistry plotting tool for QGIS that plot geochemical data straight from Q
       * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's **Selection** section; an **Add to selection** option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
       * Custom XY and Custom Ternary: Num and Denom lists are now the same width, and a **⋮** menu next to each one clears the ticked entries or saves them under a name for later use, in any project
       * Plots: new **Copy PNG** button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image. The **Save...** button of the plugin window is removed: plots are saved from the plot window's toolbar
+      * Spider tab: new **Add λ0-λ4 to Layer (selected samples)** button writing the REE shape coefficients λ0-λ4 of O'Neill (2016, *J. Petrology* 57, 1463-1508) to the layer fields `lambda0`-`lambda4`, using the paper's CI chondrite abundances, Shannon ionic radii and orthogonal polynomials (Eu excluded; a sample needs at least 6 REE, including one of La-Nd and one of Er-Lu). The fields can then be plotted (e.g. λ2 vs λ1) on the Custom XY tab with **Show all numeric fields**
       * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
       * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
@@ -113,6 +115,7 @@ The plugin window itself is made of three main groups - **Layer Selection**, **P
 - **Elements** - REE only (La-Lu), Extended (Ba-Yb, 19 trace elements) or Extended Alt (Cs-Lu, 27 trace elements)
 - **Legend** / **Markers** checkboxes
 - Y-axis is always log-scaled; oxide fields (e.g. `TiO2`) are automatically converted to their elemental ppm equivalent for normalisation
+- **REE Shape Coefficients** - see [REE shape coefficients (λ0-λ4)](#ree-shape-coefficients-λ0-λ4)
 - [Bubble Size](#bubble-size-all-tabs) section to scale each sample's line markers by an extra field
 
 ### Discrimination/Classification
@@ -259,6 +262,24 @@ In the **Samples** section, **Filter Layer to Selected** turns whatever is curre
 ### Assign classification fields to the layer
 
 For Discrimination/Classification and Minerals plots, **Add Classification Field to Layer** (Samples panel) writes a new/updated text field to the layer, containing the field name each feature falls into for the currently selected diagram (or `void` if outside all defined fields).
+
+### REE shape coefficients (λ0-λ4)
+
+On the Spider tab, **Add λ0-λ4 to Layer (selected samples)** (in the **REE Shape Coefficients** section) fits the chondrite-normalised REE pattern of each sample selected in the Samples list to the orthogonal polynomials of O'Neill (2016), and writes the shape coefficients to the numeric layer fields `lambda0` to `lambda4` (created if needed; other features are left unchanged):
+
+ln([REE]/[REE]CI) = λ0 + λ1·f1 + λ2·f2 + λ3·f3 + λ4·f4
+
+- **λ0**: average of ln([REE]/[REE]CI) (overall REE enrichment)
+- **λ1**: linear slope (positive for LREE-enriched patterns)
+- **λ2**: quadratic curvature
+- **λ3**: sigmoidal deviation (inflections at the ends of the pattern)
+- **λ4**: W/M-shaped term
+
+The calculation uses only the paper's reference data - CI chondrite abundances and REE³⁺ ionic radii in eight-fold coordination (Shannon, 1976) from its Table 1, and the orthogonal polynomials f1-f4 from its Table 2 - whatever normalisation is chosen for the spider diagram. Eu is never used in the fit (Eu anomalies), and the same polynomials are used whatever REE are missing, so the coefficients stay comparable between samples. A sample needs at least 6 REE with positive values (Eu excluded), including one of La-Nd and one of Er-Lu; otherwise its fields are left empty and the reason is given in the summary message. REE fields are found and converted to ppm as for the plots, and the fields used are listed in the QGIS **Log Messages** panel.
+
+λ0, λ1 and λ2 capture nearly all the information of common REE patterns; λ3 and λ4 are only significant with very precise analyses (about 2% or better). The classic **λ2 vs λ1** diagram can be drawn on the Custom XY tab with **Show all numeric fields** ticked.
+
+O'Neill, H. St. C. (2016). The Smoothness and Shapes of Chondrite-normalized Rare Earth Element Patterns in Basalts. *Journal of Petrology* 57, 1463-1508. [doi:10.1093/petrology/egw047](https://doi.org/10.1093/petrology/egw047). The same method is implemented in [pyrolite](https://pyrolite.readthedocs.io/en/main/examples/geochem/lambdas.html).
 
 ## Data Requirements
 

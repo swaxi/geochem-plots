@@ -2,7 +2,7 @@
 name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
-description=Create spider diagrams, discrimination diagrams, and custom XY plots for geochemical data
+description=Create spider diagrams, discrimination diagrams, custom XY and ternary plots, and REE shape coefficients for geochemical data
 version=1.0.0
 author=Julien Perret, Mark Jessell (Centre for Exploration Targeting, University of Western Australia)
 email=julien.perret@uwa.edu.au; mark.jessell@uwa.edu.au
@@ -10,6 +10,7 @@ email=julien.perret@uwa.edu.au; mark.jessell@uwa.edu.au
 about=Plot geochemical data straight from QGIS point layers.
  Supports:
  - spider diagrams with a choice of normalisations,
+ - REE shape coefficients (lambda0-lambda4, O'Neill 2016) written to the attribute table,
  - tectonic discrimination and rock classification diagrams,
  - mineral classification plots, petrophysics cross-plots,
  - custom XY and ternary plots built from any element, oxide or numeric field; 
@@ -60,6 +61,7 @@ changelog=1.0.0
        * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's Selection section; an Add to selection option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
        * Custom XY and Custom Ternary: Num and Denom lists are now the same width, and a menu next to each one clears the ticked entries or saves them under a name for later use, in any project
        * Plots: new Copy PNG button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image. The Save... button of the plugin window is removed: plots are saved from the plot window's toolbar
+       * Spider tab: new "Add lambda0-lambda4 to Layer (selected samples)" button writing the REE shape coefficients of O'Neill (2016, J. Petrology 57, 1463-1508) to the layer fields lambda0-lambda4, using the paper's CI chondrite abundances, Shannon ionic radii and orthogonal polynomials (Eu excluded; at least 6 REE including one of La-Nd and one of Er-Lu needed)
 
        **Dependencies & QGIS 4 (Qt6)**
        * requirements.txt now declares minimum versions only, harmonised with the GEOL-QMAPS and Stereoplot plugins (numpy>=1.21 ; matplotlib>=3.5). The previous upper caps (numpy<2.0, matplotlib<3.12) conflicted with the numpy 2.x that QGIS 3.44 and QGIS 4 ship, making qpip install an older duplicate numpy that shadows QGIS's own (which can break QGIS's GDAL bindings). The floors are the oldest versions the plugin actually needs (matplotlib 3.5 is the first with the QtAgg backend used under Qt6), so qpip never replaces the packages QGIS ships.
@@ -115,7 +117,7 @@ changelog=1.0.0
        * 7 discrimination diagrams
        * Custom XY plotting with REE normalization
 
-tags=geochemistry,geology,petrology,mineralogy,petrophysics,plot,spider diagram,discrimination diagram,classification diagram,ternary diagram,REE
+tags=geochemistry,geology,petrology,mineralogy,petrophysics,plot,spider diagram,discrimination diagram,classification diagram,ternary diagram,REE,REE shape coefficients,lambda
 
 homepage=https://github.com/swaxi/geochem-plots
 category=Analysis
