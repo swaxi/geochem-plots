@@ -4,21 +4,30 @@ Geochemistry Plotting Tools - Dock Widget
 Contains the main dockable widget with all plotting functionality.
 """
 
+import io
 import os
+import re
 import json
 import random
 from collections import Counter
-from qgis.core import QgsProject, QgsVectorLayer, QgsField, NULL
+from datetime import datetime
+from qgis.core import QgsProject, QgsSettings, QgsVectorLayer, QgsField, NULL
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QListWidget, QListWidgetItem, QCheckBox,
-    QFileDialog, QMessageBox, QGroupBox, QTabWidget,
+    QMessageBox, QGroupBox, QTabWidget,
     QGridLayout, QRadioButton, QButtonGroup, QScrollArea,
     QDialog, QFormLayout, QDoubleSpinBox, QSpinBox, QColorDialog, QInputDialog,
-    QDialogButtonBox, QSizePolicy
+    QDialogButtonBox, QSizePolicy, QSplitter, QToolButton,
+    QStyle, QStyleOptionComboBox, QStylePainter, QStyledItemDelegate,
+    QApplication, QLineEdit, QMenu, QPlainTextEdit
 )
-from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
-from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize
+from qgis.PyQt.QtGui import (QColor, QImage, QPainter, QPen, QBrush, QPolygonF,
+                             QStandardItem, QStandardItemModel)
+from qgis.PyQt.QtCore import Qt, QVariant, pyqtSignal, QPointF, QRectF, QSize, QTimer, QEvent
+
+from . import symbology_bridge
+from . import ree_lambdas
 
 try:
     import matplotlib
@@ -37,10 +46,12 @@ try:
     import matplotlib.pyplot as plt
 
     import matplotlib.ticker as ticker
-    from matplotlib.patches import Polygon
+    from matplotlib.patches import Polygon, Rectangle
     from matplotlib.lines import Line2D
     from matplotlib.container import ErrorbarContainer
-    from matplotlib.widgets import RectangleSelector, CheckButtons, Button
+    from matplotlib.collections import PathCollection
+    from matplotlib.transforms import IdentityTransform
+    from matplotlib.widgets import RectangleSelector, LassoSelector, CheckButtons, Button
     from matplotlib.path import Path
     from matplotlib.markers import MarkerStyle
     import numpy as np
@@ -60,6 +71,9 @@ try:
     LeftDockWidgetArea = Qt.DockWidgetArea.LeftDockWidgetArea
     TopDockWidgetArea = Qt.DockWidgetArea.TopDockWidgetArea
     BottomDockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+    Qt_Horizontal = Qt.Orientation.Horizontal
+    Qt_Vertical = Qt.Orientation.Vertical
+    Qt_SizeVerCursor = Qt.CursorShape.SizeVerCursor
 
     # QMessageBox buttons
     QMessageBox_Ok = QMessageBox.StandardButton.Ok
@@ -81,10 +95,21 @@ try:
     QSizePolicy_Preferred = QSizePolicy.Policy.Preferred
     QSizePolicy_Ignored = QSizePolicy.Policy.Ignored
     QSizePolicy_Minimum = QSizePolicy.Policy.Minimum
+    QSizePolicy_Maximum = QSizePolicy.Policy.Maximum
     QSizePolicy_Expanding = QSizePolicy.Policy.Expanding
     QDockWidget_Movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
     QDockWidget_Floatable = QDockWidget.DockWidgetFeature.DockWidgetFloatable
     QPainter_Antialiasing = QPainter.RenderHint.Antialiasing
+
+    # Multi-select (checkable) combo box enums
+    Qt_Checked = Qt.CheckState.Checked
+    Qt_Unchecked = Qt.CheckState.Unchecked
+    QEvent_MouseButtonRelease = QEvent.Type.MouseButtonRelease
+    QStyle_CC_ComboBox = QStyle.ComplexControl.CC_ComboBox
+    QStyle_CE_ComboBoxLabel = QStyle.ControlElement.CE_ComboBoxLabel
+    QComboBox_AdjustToMinimumContents = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    Qt_ToolTipRole = Qt.ItemDataRole.ToolTipRole
+    QToolButton_InstantPopup = QToolButton.ToolButtonPopupMode.InstantPopup
 
 except AttributeError:
     # Qt5 detected
@@ -95,6 +120,9 @@ except AttributeError:
     LeftDockWidgetArea = Qt.LeftDockWidgetArea
     TopDockWidgetArea = Qt.TopDockWidgetArea
     BottomDockWidgetArea = Qt.BottomDockWidgetArea
+    Qt_Horizontal = Qt.Horizontal
+    Qt_Vertical = Qt.Vertical
+    Qt_SizeVerCursor = Qt.SizeVerCursor
 
     # QMessageBox buttons
     QMessageBox_Ok = QMessageBox.Ok
@@ -116,10 +144,21 @@ except AttributeError:
     QSizePolicy_Preferred = QSizePolicy.Preferred
     QSizePolicy_Ignored = QSizePolicy.Ignored
     QSizePolicy_Minimum = QSizePolicy.Minimum
+    QSizePolicy_Maximum = QSizePolicy.Maximum
     QSizePolicy_Expanding = QSizePolicy.Expanding
     QDockWidget_Movable = QDockWidget.DockWidgetMovable
     QDockWidget_Floatable = QDockWidget.DockWidgetFloatable
     QPainter_Antialiasing = QPainter.Antialiasing
+
+    # Multi-select (checkable) combo box enums
+    Qt_Checked = Qt.Checked
+    Qt_Unchecked = Qt.Unchecked
+    QEvent_MouseButtonRelease = QEvent.MouseButtonRelease
+    QStyle_CC_ComboBox = QStyle.CC_ComboBox
+    QStyle_CE_ComboBoxLabel = QStyle.CE_ComboBoxLabel
+    QComboBox_AdjustToMinimumContents = QComboBox.AdjustToMinimumContentsLengthWithIcon
+    Qt_ToolTipRole = Qt.ToolTipRole
+    QToolButton_InstantPopup = QToolButton.InstantPopup
 
 
 # =============================================================================
@@ -143,6 +182,387 @@ STYLE_MARKER_OPTIONS = [
     ('Cross', 'X'), ('Star', '*'), ('Triangle left', '<'),
     ('Triangle right', '>'),
 ]
+
+# Further shapes offered by the style dialog but not used by the default
+# marker cycle - these match QGIS pentagon/hexagon/octagon simple markers
+# imported with "Use layer symbology".
+STYLE_MARKER_OPTIONS_ALL = STYLE_MARKER_OPTIONS + [
+    ('Pentagon', 'p'), ('Hexagon', 'h'), ('Octagon', '8'),
+]
+
+
+class _SectionDragBar(QLabel):
+    """Thin grab bar under a section: drag it to resize the section above,
+    double-click it to reset the section to its natural size."""
+
+    dragStarted = pyqtSignal()
+    dragged = pyqtSignal(int)  # vertical distance moved since the press, in pixels
+    resetRequested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(5)
+        self.setCursor(Qt_SizeVerCursor)
+        self.setToolTip('Drag to resize this section, double-click to reset its size')
+        self.setStyleSheet(
+            "QLabel { background: palette(midlight); border-radius: 2px; }"
+            "QLabel:hover { background: palette(highlight); }")
+        self._press_y = None
+
+    @staticmethod
+    def _global_y(event):
+        try:
+            return event.globalPosition().toPoint().y()  # Qt6
+        except AttributeError:
+            return event.globalPos().y()  # Qt5
+
+    def mousePressEvent(self, event):
+        self._press_y = self._global_y(event)
+        self.dragStarted.emit()
+
+    def mouseMoveEvent(self, event):
+        if self._press_y is not None:
+            self.dragged.emit(self._global_y(event) - self._press_y)
+
+    def mouseReleaseEvent(self, event):
+        self._press_y = None
+
+    def mouseDoubleClickEvent(self, event):
+        self._press_y = None
+        self.resetRequested.emit()
+
+
+class _CollapsibleSection(QWidget):
+    """A titled section whose body can be shown/hidden by clicking its header.
+
+    The header is a full-width flat button ("v Title" when expanded, "> Title"
+    when collapsed). When collapsed the section also caps its own height at
+    the header's, so a parent layout or splitter hands the freed space to its
+    neighbours instead of leaving a gap.
+
+    `main=True` gives the header a stronger look, for the window's top-level
+    groups (as opposed to the sub-sections inside a tab).
+
+    With `resizable=True` a drag bar sits under the body: dragging it changes
+    the body's height (the body then scrolls if it no longer fits) and
+    double-clicking it restores the natural, content-sized height. Until the
+    user drags, the body is laid out normally with no scroll area at all.
+
+    `toggling(bool)` is emitted just before the change (argument: the new
+    expanded state) and `toggled(bool)` just after, so a parent splitter can
+    save and restore its sizes around it.
+    """
+
+    toggling = pyqtSignal(bool)
+    toggled = pyqtSignal(bool)
+    resized = pyqtSignal()  # the body height was changed by dragging/resetting the bar
+
+    _MAX_HEIGHT = 16777215  # QWIDGETSIZE_MAX
+    _MIN_BODY_HEIGHT = 30
+
+    def __init__(self, title, body, expanded=True, parent=None, resizable=False, main=False):
+        super().__init__(parent)
+        self._title = title
+        self._content = body
+        self._expanded = expanded
+        self._scroll = None
+        self._drag_start_height = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self._header = QPushButton(self)
+        self._header.setFlat(True)
+        if main:
+            self._header.setStyleSheet(
+                "QPushButton { text-align: left; font-weight: bold; padding: 4px 8px;"
+                " border: none; border-radius: 3px; background: palette(mid); }"
+                "QPushButton:hover { background: palette(highlight); color: palette(highlighted-text); }")
+        else:
+            self._header.setStyleSheet(
+                "QPushButton { text-align: left; font-weight: bold; padding: 3px 6px;"
+                " border: none; border-radius: 3px; background: palette(midlight); }"
+                "QPushButton:hover { background: palette(mid); }")
+        self._header.setToolTip('Click to collapse / expand this section')
+        self._header.clicked.connect(self.toggle)
+
+        # The holder is what gets shown/hidden and sized; it contains either
+        # the body itself or, once the user has dragged the bar, a scroll area
+        # wrapping the body.
+        self._body = QWidget(self)
+        self._holder_layout = QVBoxLayout(self._body)
+        self._holder_layout.setContentsMargins(0, 0, 0, 0)
+        self._holder_layout.addWidget(body)
+
+        layout.addWidget(self._header)
+        # A section that is only resizable by its own drag bar keeps its
+        # natural height (no stretch, never grows to soak up spare space in
+        # its parent layout); otherwise the body fills whatever it is given.
+        layout.addWidget(self._body, 0 if resizable else 1)
+
+        self._bar = None
+        if resizable:
+            self.setSizePolicy(QSizePolicy_Preferred, QSizePolicy_Maximum)
+            self._bar = _SectionDragBar(self)
+            self._bar.dragStarted.connect(self._on_drag_started)
+            self._bar.dragged.connect(self._on_dragged)
+            self._bar.resetRequested.connect(self.reset_body_height)
+            layout.addWidget(self._bar)
+        self._apply()
+
+    def is_expanded(self):
+        return self._expanded
+
+    def toggle(self):
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded):
+        if expanded == self._expanded:
+            return
+        self.toggling.emit(expanded)
+        self._expanded = expanded
+        self._apply()
+        self.toggled.emit(expanded)
+
+    def _apply(self):
+        self._body.setVisible(self._expanded)
+        if self._bar is not None:
+            self._bar.setVisible(self._expanded)
+        self._header.setText(('\u25bc  ' if self._expanded else '\u25b6  ') + self._title)
+        if self._expanded:
+            self.setMaximumHeight(self._MAX_HEIGHT)
+        else:
+            self.setMaximumHeight(self._header.sizeHint().height() + 2)
+        self._refresh_layouts()
+
+    def _refresh_layouts(self):
+        """Invalidate the cached layout sizes of every ancestor, so size hints
+        read straight after a change (e.g. by the main window's auto-fit) are
+        up to date instead of waiting for Qt to process its layout requests."""
+        self.updateGeometry()
+        widget = self.parentWidget()
+        while widget is not None:
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+            if isinstance(widget, QDockWidget):
+                break
+            widget = widget.parentWidget()
+
+    # -- drag-to-resize ----------------------------------------------------
+
+    def _use_scroll(self, scrolling):
+        """Move the body into (or back out of) a scroll area inside the holder."""
+        if scrolling and self._scroll is None:
+            self._holder_layout.removeWidget(self._content)
+            scroll = QScrollArea(self._body)
+            scroll.setWidgetResizable(True)
+            scroll.setStyleSheet('QScrollArea { border: none; background: transparent; }')
+            scroll.setWidget(self._content)
+            self._holder_layout.addWidget(scroll)
+            self._scroll = scroll
+        elif not scrolling and self._scroll is not None:
+            scroll, self._scroll = self._scroll, None
+            self._content = scroll.takeWidget()
+            self._holder_layout.removeWidget(scroll)
+            scroll.deleteLater()
+            self._holder_layout.addWidget(self._content)
+            self._content.show()
+
+    def _on_drag_started(self):
+        self._drag_start_height = self._body.height()
+
+    def _on_dragged(self, dy):
+        height = max(self._MIN_BODY_HEIGHT, self._drag_start_height + dy)
+        self._use_scroll(True)
+        self._body.setFixedHeight(height)
+        self._refresh_layouts()
+        self.resized.emit()
+
+    def reset_body_height(self):
+        """Undo any drag-resize, returning the body to its natural height."""
+        self._body.setMinimumHeight(0)
+        self._body.setMaximumHeight(self._MAX_HEIGHT)
+        self._use_scroll(False)
+        self._refresh_layouts()
+        self.resized.emit()
+
+
+def fit_popup_width(combo, extra=0):
+    """Widen `combo`'s drop-down list to its widest entry (plus `extra`
+    pixels, e.g. for a tick box) so entries are never cut to '...', even when
+    the closed box is narrow. The closed box keeps its own width."""
+    view = combo.view()
+    metrics = view.fontMetrics()
+    # horizontalAdvance (Qt >= 5.11, only option in Qt6) or the older width().
+    advance = metrics.horizontalAdvance if hasattr(metrics, 'horizontalAdvance') else metrics.width
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    widest = max((advance(text) for text in texts), default=0)
+    scrollbar = view.verticalScrollBar().sizeHint().width()
+    view.setMinimumWidth(widest + extra + scrollbar + 24)
+
+
+class _CheckableComboBox(QComboBox):
+    """Drop-down whose entries are ticked rather than picked, so several can
+    be selected at once - used for the custom plots' numerators and
+    denominators, where ticked entries are added together (Na2O + K2O).
+    The closed box shows the ticked entries joined by ' + ', and
+    currentText()/setCurrentText() use that same ' + ' form.
+
+    `exclusive_item` (e.g. '1 (none)') cannot be combined with other
+    entries: ticking it clears the others and vice versa. Nothing is ticked
+    to start with, and the box can be left with nothing ticked - callers
+    that need at least one entry (a plot's numerator) must check for that
+    themselves and prompt the user, rather than have one silently forced on.
+    """
+
+    checkedChanged = pyqtSignal()
+    SEPARATOR = ' + '
+    INDICATOR_SIZE = 12
+
+    def __init__(self, exclusive_item=None, parent=None):
+        super().__init__(parent)
+        self._exclusive_item = exclusive_item
+        self._updating = False
+        self._tick_order = []  # ticked entries in the order they were ticked
+        # The click that opens the popup can land its mouse-release over the
+        # popup's own viewport (typically row 0, right under the combo box),
+        # which the eventFilter below would otherwise read as a deliberate
+        # click and toggle. Swallow exactly one release right after opening.
+        self._suppress_next_toggle = False
+        self.setModel(QStandardItemModel(self))
+        self.model().itemChanged.connect(self._on_item_changed)
+        # Toggle on click and keep the list open, so several entries can be
+        # ticked in one go.
+        self.view().viewport().installEventFilter(self)
+        # Draw rows as plain list items (the default combo delegate draws
+        # them as menu entries, with large menu-style check marks that
+        # ignore the indicator size), with compact tick boxes.
+        self.setItemDelegate(QStyledItemDelegate(self))
+        self.view().setStyleSheet(
+            f"QAbstractItemView::indicator {{ width: {self.INDICATOR_SIZE}px; "
+            f"height: {self.INDICATOR_SIZE}px; }}")
+
+    def addItems(self, texts):
+        self._updating = True
+        try:
+            for text in texts:
+                item = QStandardItem(str(text))
+                item.setCheckable(True)
+                item.setEditable(False)
+                item.setCheckState(Qt_Unchecked)
+                self.model().appendRow(item)
+        finally:
+            self._updating = False
+        # Room for the widest entry plus its tick box and spacing.
+        fit_popup_width(self, extra=self.INDICATOR_SIZE + 12)
+        self._after_change()
+
+    def addItem(self, text, *args):
+        self.addItems([text])
+
+    def set_items(self, texts):
+        """Replace the entries, keeping ticked entries that are still offered."""
+        previous = self.checked_items()
+        self.blockSignals(True)
+        self.clear()
+        self.addItems(texts)
+        self.blockSignals(False)
+        self.set_checked_items([text for text in previous if text in texts])
+
+    def checked_items(self):
+        """Ticked entries, in the order they were ticked (so a sum reads as
+        entered, e.g. Na2O + K2O)."""
+        model = self.model()
+        checked = [model.item(i).text() for i in range(model.rowCount())
+                   if model.item(i).checkState() == Qt_Checked]
+        self._tick_order = [t for t in self._tick_order if t in checked] + \
+            [t for t in checked if t not in self._tick_order]
+        return list(self._tick_order)
+
+    def set_checked_items(self, texts):
+        self._tick_order = [t for t in dict.fromkeys(texts)]
+        texts = set(texts)
+        self._updating = True
+        try:
+            model = self.model()
+            for i in range(model.rowCount()):
+                item = model.item(i)
+                item.setCheckState(Qt_Checked if item.text() in texts else Qt_Unchecked)
+        finally:
+            self._updating = False
+        self._after_change()
+
+    def currentText(self):
+        return self.SEPARATOR.join(self.checked_items())
+
+    def setCurrentText(self, text):
+        self.set_checked_items([part.strip() for part in str(text).split(self.SEPARATOR)])
+
+    def _on_item_changed(self, item):
+        if self._updating:
+            return
+        if item.checkState() == Qt_Checked:
+            self._tick_order = [t for t in self._tick_order if t != item.text()] + [item.text()]
+        self._updating = True
+        try:
+            if item.checkState() == Qt_Checked and self._exclusive_item is not None:
+                model = self.model()
+                for i in range(model.rowCount()):
+                    other = model.item(i)
+                    if other is item:
+                        continue
+                    # The exclusive entry clears everything else; any other
+                    # entry clears the exclusive one.
+                    if item.text() == self._exclusive_item or other.text() == self._exclusive_item:
+                        other.setCheckState(Qt_Unchecked)
+        finally:
+            self._updating = False
+        self._after_change()
+
+    def _after_change(self):
+        checked = self.checked_items()
+        self.setToolTip(
+            (self.currentText() + '\n\n' if len(checked) > 1 else '') +
+            'Tick several entries to add them together (e.g. Na2O + K2O).')
+        self.update()
+        self.checkedChanged.emit()
+
+    def showPopup(self):
+        super().showPopup()
+        # The press that opens the popup is followed by a release once it's
+        # already showing; if that release lands over the popup's viewport
+        # (commonly row 0, right under the combo box), it must not toggle.
+        self._suppress_next_toggle = True
+
+    def hidePopup(self):
+        super().hidePopup()
+        # Guard against a stale flag if the opening click's release never
+        # reached the viewport (e.g. the popup was opened from the keyboard),
+        # so it can't wrongly swallow a real click the next time it opens.
+        self._suppress_next_toggle = False
+
+    def eventFilter(self, obj, event):
+        if obj is self.view().viewport() and event.type() == QEvent_MouseButtonRelease:
+            if self._suppress_next_toggle:
+                self._suppress_next_toggle = False
+                return True  # swallow the release that opened the popup
+            pos = event.position().toPoint() if hasattr(event, 'position') else event.pos()
+            index = self.view().indexAt(pos)
+            if index.isValid():
+                item = self.model().itemFromIndex(index)
+                item.setCheckState(Qt_Unchecked if item.checkState() == Qt_Checked else Qt_Checked)
+            return True  # consume the release so the list stays open
+        return super().eventFilter(obj, event)
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = self.currentText()
+        painter.drawComplexControl(QStyle_CC_ComboBox, option)
+        painter.drawControl(QStyle_CE_ComboBoxLabel, option)
 
 
 class _MarkerSymbolWidget(QWidget):
@@ -225,6 +645,15 @@ class _MarkerSymbolWidget(QWidget):
             painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
             painter.drawLine(QPointF(cx - r * 0.72, cy - r * 0.72), QPointF(cx + r * 0.72, cy + r * 0.72))
             painter.drawLine(QPointF(cx - r * 0.72, cy + r * 0.72), QPointF(cx + r * 0.72, cy - r * 0.72))
+        elif m in ('p', 'h', '8'):
+            sides = {'p': 5, 'h': 6, '8': 8}[m]
+            # Pentagon and hexagon point up (as in matplotlib); the octagon
+            # has flat top/bottom edges.
+            offset = -math.pi / 2 if m != '8' else math.pi / 8
+            painter.drawPolygon(QPolygonF([
+                QPointF(cx + r * math.cos(offset + 2 * math.pi * k / sides),
+                        cy + r * math.sin(offset + 2 * math.pi * k / sides))
+                for k in range(sides)]))
         else:
             painter.drawEllipse(QPointF(cx, cy), r, r)
 
@@ -253,6 +682,32 @@ def create_categorical_color_map(sample_names):
     sample_markers = [category_markers[name] for name in sample_names]
     
     return category_colors, sample_colors, unique_categories, category_markers, sample_markers
+
+
+# Legend/panel labels end with a " (n=x/y)" count suffix (older plots used
+# " (n=x)"); this matches either, so it can be stripped or replaced.
+CATEGORY_COUNT_SUFFIX_RE = re.compile(r'\s*\(n=\d+(?:/\d+)?\)$')
+
+
+def category_count_pairs(selected_names, plotted_names):
+    """Return {category: (plotted, selected)} sample counts.
+
+    `selected_names` holds the category of every selected sample,
+    `plotted_names` the category of every sample actually drawn (i.e. with
+    all the variables the plot needs), so the two can differ.
+    """
+    selected = Counter(selected_names)
+    plotted = Counter(plotted_names)
+    return {category: (plotted.get(category, 0), n) for category, n in selected.items()}
+
+
+def format_category_count(category_counts, category):
+    """'n=x/y' (x plotted of y selected samples) for a category, or 'n=x'
+    when only a single count is known."""
+    count = category_counts.get(category, 0)
+    if isinstance(count, tuple):
+        return f'n={count[0]}/{count[1]}'
+    return f'n={count}'
 
 
 # =============================================================================
@@ -451,7 +906,7 @@ REE_ELEMENTS = ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er'
 CUSTOM_XY_ELEMENTS = [
     '1 (none)', 'Ag', 'Al', 'Al2O3', 'As', 'Au', 'B', 'Ba', 'Bi', 'Ca', 'CaO',
     'Cd', 'Ce', 'Co', 'Cr', 'Cr2O3', 'Cs', 'Cu', 'Dy', 'Er', 'Eu', 'F', 'Fe',
-    'Fe2O3', 'FeO', 'Ga', 'Gd', 'Ge', 'Hf', 'Ho', 'K', 'K2O', 'La', 'Lu',
+    'Fe2O3', 'Fe2O3-T', 'FeO', 'FeO-T', 'Ga', 'Gd', 'Ge', 'Hf', 'Ho', 'K', 'K2O', 'La', 'Lu',
     'Mg#', 'Mg', 'MgO', 'Mn', 'MnO', 'Mo', 'Na', 'Na2O', 'Nb', 'Nd', 'Ni',
     'NiO', 'P', 'P2O5', 'Pb', 'Pr', 'Rb', 'S', 'Sb', 'Sc', 'Se', 'Si', 'SiO2',
     'Sm', 'Sn', 'Sr', 'Ta', 'Tb', 'Th', 'Ti', 'TiO2', 'Tm', 'U', 'V', 'W',
@@ -487,6 +942,59 @@ OXIDE_COMPOSITION = {
 ELEMENT_TO_OXIDE = {element: oxide for oxide, (element, _, _) in OXIDE_COMPOSITION.items()
                     # Fe maps to Fe2O3 (total iron) by convention; FeO stays reachable via OXIDE_COMPOSITION.
                     if not (oxide == 'FeO')}
+
+# FeO and Fe2O3 are often reported as an explicit "total" - all iron
+# recalculated as that one oxide - under a field name that tags the base
+# oxide name with some spelling of "total": FeOT, FeOt, FeO*, FeOtot,
+# FeO-tot, FeO(T), FeO(t)... (and the same for Fe2O3). These report the same
+# species as a plain 'FeO'/'Fe2O3' field, just under a different name, so
+# they are recognised as if they were that oxide field - but only once a
+# genuine 'FeO'/'Fe2O3' field has been ruled out (see _find_element_field_in_names).
+TOTAL_IRON_OXIDES = ('FeO', 'Fe2O3')
+
+
+def _total_iron_field_variants(oxide):
+    """Field-name spellings for `oxide` ('FeO' or 'Fe2O3') reported as total
+    iron, e.g. 'FeOT', 'FeOt', 'FeO*', 'FeOtot', 'FeO-tot', 'FeO(T)', 'FeO(t)'."""
+    tags = ('T', 't', 'Tot', 'tot', 'TOT', 'Total', 'total', 'TOTAL')
+    seps = ('', '_', '-', ' ')
+    unit_suffixes = ('', '_pct', '_PCT', '_wt', '_WT')
+    variants = [f'{oxide}*']
+    for sep in seps:
+        for tag in tags:
+            for suffix in unit_suffixes:
+                variants.append(f'{oxide}{sep}{tag}{suffix}')
+    for tag in ('T', 't'):
+        variants.append(f'{oxide}({tag})')
+    return variants
+
+
+# Explicit "total iron" entries offered in the Custom XY/Ternary and bubble
+# "Size by" dropdowns, distinct from 'FeO'/'Fe2O3': those only fall back to
+# a FeOT-style field when no real FeO/Fe2O3 field exists (find_element_field),
+# so picking 'FeO-T'/'Fe2O3-T' explicitly always reads the total-iron field,
+# even when a separate (non-total) FeO/Fe2O3 field is also present.
+TOTAL_IRON_TERM_OXIDE = {'FeO-T': 'FeO', 'Fe2O3-T': 'Fe2O3'}
+
+
+def find_total_iron_field(layer, oxide):
+    """Field in `layer` reporting *total* iron as `oxide` ('FeO' or 'Fe2O3')
+    under one of its common "total" spellings (FeOT, FeOt, FeO*, FeOtot,
+    FeO-tot, FeO(T), FeO(t)...), or None if there isn't one. A plain
+    'FeO'/'Fe2O3' field is a different, unlabelled quantity, not this."""
+    variants = {v.upper() for v in _total_iron_field_variants(oxide)}
+    for field in layer.fields():
+        if field.name().upper() in variants:
+            return field.name()
+    return None
+
+
+def _is_custom_term_available(layer, term):
+    """Whether `term` (an entry from CUSTOM_XY_ELEMENTS, 'Mg#', or a plain
+    field name from "show all numeric fields") has a usable field in `layer`."""
+    if term in TOTAL_IRON_TERM_OXIDE:
+        return find_total_iron_field(layer, TOTAL_IRON_TERM_OXIDE[term]) is not None
+    return find_element_field(layer, term) is not None
 
 
 def _oxide_element_mass_fraction(oxide):
@@ -549,6 +1057,140 @@ def _value_to_pct(raw_value, field_name, default_unit='pct'):
 # FIELD NAME MATCHING UTILITIES
 # =============================================================================
 import re
+from functools import lru_cache
+
+# Naturally occurring isotopes of the elements that are commonly reported
+# with a mass number in LA-ICP-MS / ICP-MS datasets (e.g. Sr88, Y89, La139,
+# or 88Sr), most abundant first. When several isotopes of the same element
+# are present in a layer, the earliest one listed here is preferred.
+ELEMENT_ISOTOPE_MASSES = {
+    'Li': (7, 6), 'Be': (9,), 'B': (11, 10), 'C': (12, 13), 'N': (14, 15), 'F': (19,),
+    'Na': (23,), 'Mg': (24, 26, 25), 'Al': (27,), 'Si': (28, 29, 30), 'P': (31,),
+    'S': (32, 34, 33, 36), 'Cl': (35, 37), 'K': (39, 41, 40),
+    'Ca': (40, 44, 42, 48, 43, 46), 'Sc': (45,), 'Ti': (48, 46, 47, 49, 50),
+    'V': (51, 50), 'Cr': (52, 53, 50, 54), 'Mn': (55,), 'Fe': (56, 54, 57, 58),
+    'Co': (59,), 'Ni': (58, 60, 62, 61, 64), 'Cu': (63, 65),
+    'Zn': (64, 66, 68, 67, 70), 'Ga': (69, 71), 'Ge': (74, 72, 70, 73, 76),
+    'As': (75,), 'Se': (80, 78, 76, 82, 77, 74), 'Br': (79, 81),
+    'Rb': (85, 87), 'Sr': (88, 86, 87, 84), 'Y': (89,), 'Zr': (90, 94, 92, 91, 96),
+    'Nb': (93,), 'Mo': (98, 96, 95, 92, 94, 97, 100),
+    'Ru': (102, 101, 104, 100, 99, 96, 98), 'Rh': (103,),
+    'Pd': (106, 108, 105, 110, 104, 102), 'Ag': (107, 109),
+    'Cd': (114, 112, 111, 110, 113, 116, 106, 108), 'In': (115, 113),
+    'Sn': (120, 118, 116, 119, 117, 124, 122, 112, 114, 115), 'Sb': (121, 123),
+    'Te': (130, 128, 126, 125, 124, 122, 123, 120), 'I': (127,), 'Cs': (133,),
+    'Ba': (138, 137, 136, 135, 134, 130, 132), 'La': (139, 138),
+    'Ce': (140, 142, 138, 136), 'Pr': (141,),
+    'Nd': (142, 144, 146, 143, 145, 148, 150),
+    'Sm': (152, 154, 147, 149, 148, 150, 144), 'Eu': (153, 151),
+    'Gd': (158, 160, 156, 157, 155, 154, 152), 'Tb': (159,),
+    'Dy': (164, 162, 163, 161, 160, 158, 156), 'Ho': (165,),
+    'Er': (166, 168, 167, 170, 164, 162), 'Tm': (169,),
+    'Yb': (174, 172, 173, 171, 176, 170, 168), 'Lu': (175, 176),
+    'Hf': (180, 178, 179, 177, 176, 174), 'Ta': (181, 180),
+    'W': (184, 186, 182, 183, 180), 'Re': (187, 185),
+    'Os': (192, 190, 189, 188, 187, 186, 184), 'Ir': (193, 191),
+    'Pt': (195, 194, 196, 198, 192, 190), 'Au': (197,),
+    'Hg': (202, 200, 199, 201, 198, 204, 196), 'Tl': (205, 203),
+    'Pb': (208, 206, 207, 204), 'Bi': (209,), 'Th': (232,), 'U': (238, 235, 234),
+}
+
+# Element symbol -> accepted English name(s), for "Symbol_Fullname" style
+# fields (Na_Sodium, Y_Yttrium). Only a real element name counts, so fields
+# like Y_UTM (a coordinate) or Sr_Anomaly are not mistaken for an element.
+ELEMENT_NAMES = {
+    'H': ('hydrogen',), 'Li': ('lithium',), 'Be': ('beryllium',), 'B': ('boron',),
+    'C': ('carbon',), 'N': ('nitrogen',), 'O': ('oxygen',), 'F': ('fluorine',),
+    'Na': ('sodium',), 'Mg': ('magnesium',), 'Al': ('aluminium', 'aluminum'),
+    'Si': ('silicon',), 'P': ('phosphorus', 'phosphorous'), 'S': ('sulfur', 'sulphur'),
+    'Cl': ('chlorine',), 'K': ('potassium',), 'Ca': ('calcium',), 'Sc': ('scandium',),
+    'Ti': ('titanium',), 'V': ('vanadium',), 'Cr': ('chromium',), 'Mn': ('manganese',),
+    'Fe': ('iron',), 'Co': ('cobalt',), 'Ni': ('nickel',), 'Cu': ('copper',),
+    'Zn': ('zinc',), 'Ga': ('gallium',), 'Ge': ('germanium',), 'As': ('arsenic',),
+    'Se': ('selenium',), 'Br': ('bromine',), 'Rb': ('rubidium',), 'Sr': ('strontium',),
+    'Y': ('yttrium',), 'Zr': ('zirconium',), 'Nb': ('niobium',), 'Mo': ('molybdenum',),
+    'Ru': ('ruthenium',), 'Rh': ('rhodium',), 'Pd': ('palladium',), 'Ag': ('silver',),
+    'Cd': ('cadmium',), 'In': ('indium',), 'Sn': ('tin',), 'Sb': ('antimony',),
+    'Te': ('tellurium',), 'I': ('iodine',), 'Cs': ('caesium', 'cesium'), 'Ba': ('barium',),
+    'La': ('lanthanum',), 'Ce': ('cerium',), 'Pr': ('praseodymium',), 'Nd': ('neodymium',),
+    'Sm': ('samarium',), 'Eu': ('europium',), 'Gd': ('gadolinium',), 'Tb': ('terbium',),
+    'Dy': ('dysprosium',), 'Ho': ('holmium',), 'Er': ('erbium',), 'Tm': ('thulium',),
+    'Yb': ('ytterbium',), 'Lu': ('lutetium',), 'Hf': ('hafnium',), 'Ta': ('tantalum',),
+    'W': ('tungsten', 'wolfram'), 'Re': ('rhenium',), 'Os': ('osmium',), 'Ir': ('iridium',),
+    'Pt': ('platinum',), 'Au': ('gold',), 'Hg': ('mercury',), 'Tl': ('thallium',),
+    'Pb': ('lead',), 'Bi': ('bismuth',), 'Th': ('thorium',), 'U': ('uranium',),
+}
+
+# Optional unit suffix on an isotope-labelled field, e.g. Sr88_ppm, Y89 (ppm).
+_ISOTOPE_UNIT_SUFFIX = r"(?:[_\s]?[(\[]?(?:wt_pct|wtpct|wt%|wt|ppm|ppb|pct|%)[)\]]?)?"
+
+# Substrings / tokens marking a field that is *derived from* an element rather
+# than being its raw concentration (chondrite-/mantle-normalised values,
+# ratios, analytical errors, detection limits...). Such fields share the
+# element's name prefix (Sr_ChondriteNorm, La_N, Y_2SE...), so without this
+# they'd be picked up in place of the real concentration field.
+_DERIVED_FIELD_SUBSTRINGS = ('norm', 'chond', 'primitive', 'mantle', 'ratio', 'detect')
+_DERIVED_FIELD_TOKENS = frozenset({
+    'n', 'cn', 'pm', 'ch', 'c1', 'dmm', 'pum', 'morb', 'nmorb', 'emorb', 'oib',
+    'err', 'error', 'errors', 'sd', 'std', 'stdev', 'se', 'sem', 'rsd', 'unc',
+    'uncertainty', '1s', '2s', '1sd', '2sd', '1se', '2se', 'lod', 'loq', 'dl',
+    'mdl', 'bdl', 'flag', 'qual',
+})
+
+
+@lru_cache(maxsize=4096)
+def _is_derived_field_name(field_name):
+    """True if `field_name` looks like a normalised/ratio/error/detection-limit
+    field derived from an element rather than its raw concentration."""
+    lowered = field_name.lower()
+    if any(sub in lowered for sub in _DERIVED_FIELD_SUBSTRINGS):
+        return True
+    tokens = [t for t in re.split(r'[^a-z0-9]+', lowered) if t]
+    # The first token is the element/oxide itself (so a bare "N" or "Se" is
+    # never mistaken for a qualifier); only later tokens can mark a field derived.
+    if any(t in _DERIVED_FIELD_TOKENS for t in tokens[1:]):
+        return True
+    # A later token that is itself an element symbol (isotope mass numbers
+    # ignored) marks a ratio or anomaly: Sr_Y, Sr/Y, Sm_Nd, Eu_Eu*,
+    # Pb206_Pb204... Symbols are matched in their own case (or as a single
+    # capital letter, e.g. SR_Y), so words such as "in"/"as" or method codes
+    # like "LA" don't count.
+    raw_tokens = [t for t in re.split(r'[^A-Za-z0-9]+', field_name) if t]
+    for token in raw_tokens[1:]:
+        symbol = re.sub(r'\d+', '', token)
+        if symbol and symbol in ELEMENT_NAMES and symbol != 'O':
+            return True
+    return False
+
+
+def _find_isotope_field(field_names, element):
+    """Find a field reporting `element` by isotope mass number, e.g. Sr88,
+    Y89, La139, 88Sr, Sr_88 or Sr88_ppm (mass number before or after the
+    symbol, optionally followed by a unit). Returns the field for the most
+    abundant isotope present, or None."""
+    masses = ELEMENT_ISOTOPE_MASSES.get(element)
+    if not masses:
+        return None
+    mass_alt = '|'.join(str(m) for m in masses)
+    regex = re.compile(
+        rf"(?:(?P<pre>{mass_alt})[_\-\s]?)?{re.escape(element)}"
+        rf"(?:[_\-\s]?(?P<post>{mass_alt}))?{_ISOTOPE_UNIT_SUFFIX}",
+        re.IGNORECASE)
+    best_field, best_rank = None, len(masses)
+    for field_name in field_names:
+        match = regex.fullmatch(field_name)
+        if not match:
+            continue
+        pre, post = match.group('pre'), match.group('post')
+        if (pre is None) == (post is None):
+            # Exactly one mass number is required - a bare symbol is handled
+            # by the ordinary patterns, and two numbers is not an isotope label.
+            continue
+        rank = masses.index(int(pre or post))
+        if rank < best_rank:
+            best_field, best_rank = field_name, rank
+    return best_field
+
 
 def find_element_field(layer, element, allow_oxide_forms=True):
     """Find the field name in a layer that corresponds to a given element.
@@ -559,8 +1201,20 @@ def find_element_field(layer, element, allow_oxide_forms=True):
     to chemically-related alternate forms. This is used by the unit-aware
     value getters below, which perform their own explicit elemental<->oxide
     conversion instead of silently substituting one for the other.
+
+    Fields named after an isotope (Sr88, Y89, 139La...) are recognised as the
+    element, while normalised/ratio/error fields (Sr_ChondriteNorm, La_N,
+    Y_2SE...) are never considered a raw concentration.
     """
-    field_names = [f.name() for f in layer.fields()]
+    return _find_element_field_in_names(
+        tuple(f.name() for f in layer.fields()), element, allow_oxide_forms)
+
+
+@lru_cache(maxsize=4096)
+def _find_element_field_in_names(all_field_names, element, allow_oxide_forms):
+    """Cached worker for find_element_field(), keyed on the layer's field
+    names so it isn't re-run (regexes and all) for every feature plotted."""
+    field_names = [n for n in all_field_names if not _is_derived_field_name(n)]
     element_upper = element.upper()
 
     patterns = [
@@ -573,9 +1227,18 @@ def find_element_field(layer, element, allow_oxide_forms=True):
         f"{element}(ppm)", f"{element} (ppm)", f"{element}(PPM)", f"{element}_[ppm]",
     ]
 
+    # FeO/Fe2O3 reported as total iron (FeOT, FeOt, FeO*, FeOtot, FeO-tot,
+    # FeO(T)...) name the same oxide, not a different species to convert
+    # from/to, so these are recognised unconditionally - but appended after
+    # the exact-name patterns above, so a genuine 'FeO'/'Fe2O3' field (see
+    # the "exact pattern match" step below) always wins when both exist.
+    if element in TOTAL_IRON_OXIDES:
+        patterns.extend(_total_iron_field_variants(element))
+
     oxide_forms = {
         'Ti': ['TiO2_pct', 'TiO2_PCT', 'TiO2_wt', 'TiO2', 'tio2_pct', 'TIO2_PCT'],
-        'Fe': ['Fe2O3_pct', 'Fe2O3T_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeOT_pct', 'FeO_PCT'],
+        'Fe': ['Fe2O3_pct', 'FeO_pct', 'Fe2O3_PCT', 'FeO_PCT',
+               *_total_iron_field_variants('FeO'), *_total_iron_field_variants('Fe2O3')],
         'Mn': ['MnO_pct', 'MnO_PCT', 'MnO_wt', 'MnO'],
         'Mg': ['MgO_pct', 'MgO_PCT', 'MgO_wt', 'MgO'],
         'Ca': ['CaO_pct', 'CaO_PCT', 'CaO_wt', 'CaO'],
@@ -589,17 +1252,30 @@ def find_element_field(layer, element, allow_oxide_forms=True):
     if allow_oxide_forms and element in oxide_forms:
         patterns.extend(oxide_forms[element])
 
+    # Symbol_Fullname style (Na_Sodium, Y_Yttrium, CA_Calcium): the suffix
+    # must be the element's actual name, so ratio/coordinate/qualifier
+    # fields sharing the symbol prefix (Sr_Y, Y_UTM, Sr_Anomaly) don't match.
+    element_names = ELEMENT_NAMES.get(element, ())
+    fullname_regex = re.compile(rf"^{re.escape(element)}_([A-Za-z]+)$", re.IGNORECASE)
+
+    def _fullname_field():
+        for field_name in field_names:
+            match = fullname_regex.match(field_name)
+            if match and match.group(1).lower() in element_names:
+                return field_name
+        return None
+
     # 0. For single-character elements (Y, V, U, B, etc.), prefer Symbol_Fullname
     #    style FIRST to avoid matching bare coordinate/metadata fields like 'y' or 'v'.
     if len(element) == 1:
-        pre_regex = re.compile(
-            rf"^{re.escape(element)}_[A-Za-z]+$|"
-            rf"^{re.escape(element.upper())}_[A-Za-z]+$",
-            re.IGNORECASE
-        )
-        for field_name in field_names:
-            if pre_regex.match(field_name):
-                return field_name
+        fullname_field = _fullname_field()
+        if fullname_field is not None:
+            return fullname_field
+        # Isotope-labelled (Y89, 89Y...) also beats the bare-symbol patterns
+        # below, which would otherwise match e.g. a lowercase 'y' coordinate.
+        isotope_field = _find_isotope_field(field_names, element)
+        if isotope_field is not None:
+            return isotope_field
 
     # 1. Exact pattern match
     for pattern in patterns:
@@ -607,15 +1283,14 @@ def find_element_field(layer, element, allow_oxide_forms=True):
             return pattern
 
     # 2. Symbol_Fullname style match (e.g. Cl_Chlorine, K_Potassium, CA_Calcium)
-    symbol_name_regex = re.compile(
-        rf"^{re.escape(element)}_[A-Za-z]+$|"
-        rf"^{re.escape(element.upper())}_[A-Za-z]+$|"
-        rf"^{re.escape(element.lower())}_[A-Za-z]+$",
-        re.IGNORECASE
-    )
-    for field_name in field_names:
-        if symbol_name_regex.match(field_name):
-            return field_name
+    fullname_field = _fullname_field()
+    if fullname_field is not None:
+        return fullname_field
+
+    # 2b. Isotope-labelled style match (e.g. Sr88, La139, 88Sr, Ce140_ppm)
+    isotope_field = _find_isotope_field(field_names, element)
+    if isotope_field is not None:
+        return isotope_field
 
     # 3. Fallback: uppercase prefix match with known unit suffixes. The
     # oxide-composition suffixes (e.g. element='Ti' matching 'TiO2_PCT')
@@ -630,6 +1305,16 @@ def find_element_field(layer, element, allow_oxide_forms=True):
         if field_upper.startswith(element_upper):
             remainder = field_upper[len(element_upper):]
             if remainder in allowed_remainders:
+                return field_name
+
+    # 3b. Last resort for multi-letter symbols: "Symbol_word" with any word
+    # (e.g. Sr_ICPMS), as accepted before element names were checked. Ratio
+    # fields are already filtered out above; single-letter symbols are
+    # excluded since Y_UTM, V_Coord... are far more likely to be metadata.
+    if len(element) > 1:
+        loose_regex = re.compile(rf"^{re.escape(element)}_[A-Za-z]+$", re.IGNORECASE)
+        for field_name in field_names:
+            if loose_regex.match(field_name):
                 return field_name
 
     if not allow_oxide_forms:
@@ -717,6 +1402,17 @@ def _read_numeric_field(feature, field_name):
         return None
 
 
+# While a plot is being built, {element/oxide: {layer field, ...}} of the
+# fields its values were actually read from, reported in the QGIS log so the
+# field recognition can be checked (None when not recording).
+_FIELD_USAGE = None
+
+
+def _record_field_use(element, field_name):
+    if _FIELD_USAGE is not None and field_name:
+        _FIELD_USAGE.setdefault(element, set()).add(field_name)
+
+
 def get_element_ppm(feature, layer, element):
     """Return `element`'s concentration in ppm (trace-element basis).
 
@@ -729,6 +1425,7 @@ def get_element_ppm(feature, layer, element):
     if field_name is not None:
         raw = _read_numeric_field(feature, field_name)
         if raw is not None:
+            _record_field_use(element, field_name)
             return _value_to_ppm(raw, field_name, default_unit='ppm')
 
     oxide = ELEMENT_TO_OXIDE.get(element)
@@ -737,6 +1434,7 @@ def get_element_ppm(feature, layer, element):
         if oxide_field is not None:
             raw = _read_numeric_field(feature, oxide_field)
             if raw is not None:
+                _record_field_use(element, f'{oxide_field} (as {oxide})')
                 pct = _value_to_pct(raw, oxide_field, default_unit='pct')
                 return oxide_pct_to_element_ppm(oxide, pct)
     return None
@@ -754,6 +1452,7 @@ def get_oxide_pct(feature, layer, oxide):
     if field_name is not None:
         raw = _read_numeric_field(feature, field_name)
         if raw is not None:
+            _record_field_use(oxide, field_name)
             return _value_to_pct(raw, field_name, default_unit='pct')
 
     composition = OXIDE_COMPOSITION.get(oxide)
@@ -763,9 +1462,21 @@ def get_oxide_pct(feature, layer, oxide):
         if elem_field is not None:
             raw = _read_numeric_field(feature, elem_field)
             if raw is not None:
+                _record_field_use(oxide, f'{elem_field} (as {element})')
                 ppm = _value_to_ppm(raw, elem_field, default_unit='ppm')
                 return element_ppm_to_oxide_pct(oxide, ppm)
     return None
+
+
+def get_oxide_ppm(feature, layer, oxide):
+    """Return `oxide`'s concentration in ppm (i.e. wt% x 10000), for ratios
+    that are defined on oxide ppm such as Zr/TiO2 (Winchester & Floyd 1977).
+
+    A measured oxide field is used when present; otherwise it is calculated
+    from the elemental field (e.g. TiO2 ppm = Ti ppm x 1.6685).
+    """
+    pct = get_oxide_pct(feature, layer, oxide)
+    return None if pct is None else pct * 10000.0
 
 
 def get_element_value(feature, layer, element, convert_to_ppm=True):
@@ -779,6 +1490,7 @@ def get_element_value(feature, layer, element, convert_to_ppm=True):
         field_name = find_element_field(layer, element)
         if field_name is None:
             return None
+        _record_field_use(element, field_name)
         return _read_numeric_field(feature, field_name)
     if element in OXIDE_COMPOSITION:
         return get_oxide_pct(feature, layer, element)
@@ -798,6 +1510,84 @@ def get_available_elements(layer, element_list):
     return found, not_found
 
 
+# -----------------------------------------------------------------------------
+# Summed terms (custom plots: several ticked numerator/denominator entries)
+# -----------------------------------------------------------------------------
+
+# Multipliers bringing each kind of value to ppm, for sums mixing units.
+_UNIT_TO_PPM = {'ppm': 1.0, 'wt%': 1e4, 'field:ppm': 1.0, 'field:ppb': 1e-3, 'field:pct': 1e4}
+_UNIT_DESCRIPTIONS = {
+    'ppm': 'ppm', 'wt%': 'wt%', 'normalised': 'normalised', 'Mg#': 'Mg#',
+    'field:ppm': 'ppm', 'field:ppb': 'ppb', 'field:pct': 'wt%', 'field:unknown': 'unit unknown',
+}
+
+
+def custom_term_unit(layer, term, norm_values=None):
+    """Unit of the value get_custom_element_value() returns for `term`:
+    'wt%' (oxide), 'ppm' (element), 'normalised' (REE with normalisation
+    on), 'Mg#', or 'field:<ppm|ppb|pct|unknown>' for a plain layer field,
+    whose unit can only be guessed from a suffix in its name."""
+    if term == 'Mg#':
+        return 'Mg#'
+    if norm_values and term in REE_ELEMENTS and norm_values.get(term):
+        return 'normalised'
+    if term in OXIDE_COMPOSITION or term in TOTAL_IRON_TERM_OXIDE:
+        return 'wt%'
+    if term in CUSTOM_XY_ELEMENTS:
+        return 'ppm'
+    field = find_element_field(layer, term)
+    hint = _field_unit_hint(field) if field else None
+    return f'field:{hint}' if hint else 'field:unknown'
+
+
+def custom_sum_plan(layer, terms, norm_values=None):
+    """Work out how to add `terms` together.
+
+    Returns (factors, unit_label, problem):
+      factors    {term: multiplier} bringing every term to a common unit,
+      unit_label ' (wt%)' / ' (ppm)' / '' for the axis label of a sum,
+      problem    None, or why the terms' units can't be reconciled (they are
+                 then added as stored).
+    Built-in oxides (wt%) and elements (ppm), and layer fields whose names
+    carry a ppm/ppb/wt% suffix, are converted to ppm when they differ; all
+    oxides stay in wt%.
+    """
+    units = {term: custom_term_unit(layer, term, norm_values) for term in terms}
+    kinds = set(units.values())
+    as_stored = {term: 1.0 for term in terms}
+    if len(terms) <= 1:
+        return as_stored, '', None
+    if len(kinds) == 1:
+        kind = next(iter(kinds))
+        problem = None
+        if kind == 'field:unknown':
+            problem = (f"the unit of {', '.join(terms)} cannot be read from the field names, "
+                       "so they are added as stored")
+        return as_stored, {'wt%': ' (wt%)', 'ppm': ' (ppm)'}.get(kind, ''), problem
+    if all(kind in _UNIT_TO_PPM for kind in kinds):
+        return {term: _UNIT_TO_PPM[units[term]] for term in terms}, ' (ppm)', None
+    return as_stored, '', 'different units that cannot be converted: ' + ', '.join(
+        f'{term} ({_UNIT_DESCRIPTIONS[units[term]]})' for term in terms)
+
+
+def custom_sum_value(feature, layer, terms, factors=None, norm_values=None, transform=None):
+    """Sum of the (unit-converted) values of `terms` for a feature, or None
+    if any term has no value. REE terms are normalised when `norm_values`
+    is given; `transform` (e.g. below-detection-limit substitution) is
+    applied to each raw term value first."""
+    total = 0.0
+    for term in terms:
+        value = get_custom_element_value(
+            feature, layer, term,
+            normalize=(norm_values is not None and term in REE_ELEMENTS), norm_values=norm_values)
+        if transform is not None:
+            value = transform(value)
+        if value is None:
+            return None
+        total += value * (factors or {}).get(term, 1.0)
+    return total
+
+
 def get_custom_element_value(feature, layer, element_name, normalize=False, norm_values=None):
     """Get element/oxide value for custom XY plots."""
     if element_name == '1 (none)':
@@ -806,9 +1596,7 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
     if element_name == 'Mg#':
         mgo_field = find_element_field(layer, 'MgO')
         feo_field = find_element_field(layer, 'FeO')
-        
-        if feo_field is None:
-            feo_field = find_element_field(layer, 'FeOT')
+
         if feo_field is None:
             fe2o3_field = find_element_field(layer, 'Fe2O3')
             if fe2o3_field:
@@ -848,12 +1636,23 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
         except (ValueError, TypeError, ZeroDivisionError):
             return None
     
+    if element_name in TOTAL_IRON_TERM_OXIDE:
+        oxide = TOTAL_IRON_TERM_OXIDE[element_name]
+        field_name = find_total_iron_field(layer, oxide)
+        if field_name is None:
+            return None
+        raw = _read_numeric_field(feature, field_name)
+        if raw is None:
+            return None
+        _record_field_use(element_name, field_name)
+        value = _value_to_pct(raw, field_name, default_unit='pct')
+
     # Recognised element symbols are returned in ppm and recognised oxide
     # formulas in wt%, auto-converting from whichever unit/form (ppm, ppb,
     # pct, elemental or oxide) the layer actually stores. A field picked
     # directly via "show all numeric fields" isn't a known species, so it's
     # returned as stored, with no conversion.
-    if element_name in OXIDE_COMPOSITION:
+    elif element_name in OXIDE_COMPOSITION:
         value = get_oxide_pct(feature, layer, element_name)
     elif element_name in CUSTOM_XY_ELEMENTS:
         value = get_element_ppm(feature, layer, element_name)
@@ -861,6 +1660,7 @@ def get_custom_element_value(feature, layer, element_name, normalize=False, norm
         field_name = find_element_field(layer, element_name)
         if field_name is None:
             return None
+        _record_field_use(element_name, field_name)
         value = _read_numeric_field(feature, field_name)
 
     if value is None:
@@ -932,10 +1732,21 @@ def ternary_to_cartesian(a, b, c):
     return x, y
 
 
+def subscript_formula(text, bold=False):
+    """Return text with chemical formula digits (e.g. the 2 in TiO2) written as
+    matplotlib mathtext subscripts. Only digits directly following a letter or
+    ')' are converted, so 'Zr/4', 'Nb×2' and '(n=12)' are left untouched.
+    Unicode subscript characters (₂) are avoided because the default plot font
+    has no glyph for them and renders a square instead."""
+    fmt = r'$_{\mathbf{%s}}$' if bold else r'$_{%s}$'
+    return re.sub(r'(?<=[A-Za-z)])(\d+)', lambda m: fmt % m.group(1), text)
+
+
 def plot_ternary_axes(ax, labels):
     """Draw ternary diagram axes with labels at apexes."""
     vertices = np.array([[0, 0], [1, 0], [0.5, np.sqrt(3)/2], [0, 0]])
     ax.plot(vertices[:, 0], vertices[:, 1], 'k-', linewidth=1.5)
+    labels = [subscript_formula(label, bold=True) for label in labels]
     ax.text(0, -0.05, labels[0], ha='center', va='top', fontsize=11, fontweight='bold')
     ax.text(1, -0.05, labels[1], ha='center', va='top', fontsize=11, fontweight='bold')
     ax.text(0.5, np.sqrt(3)/2 + 0.05, labels[2], ha='center', va='bottom', fontsize=11, fontweight='bold')
@@ -1028,16 +1839,22 @@ def _scatter_grouped(ax, data, fids, sample_names, sample_colors, sample_markers
 
 
 # =============================================================================
-# CATEGORY MEAN +/- 2-SIGMA STATISTICS OVERLAYS
+# CATEGORY STATISTICS OVERLAYS (MEAN +/- 2 SIGMA, MEDIAN, IQR)
 # =============================================================================
 # Every generate_*_plot() method draws its normal per-sample points/lines as
 # before, then additionally builds one of these overlay artist sets per
-# category - a mean +/- 2 sigma marker/error-bar and a convex-hull/min-max
-# envelope - both created hidden (visible=False). The interactive category
-# panel (_open_category_panel) then reveals them and fades the raw points on
-# a "Show mean +/- 2 sigma" toggle, so switching modes is instant (no
-# re-plotting) and still leaves the underlying points clickable for QGIS
-# feature selection.
+# category - a mean +/- 2 sigma marker/error-bar, a median marker/line, an
+# interquartile range box/band and a convex-hull/min-max envelope - all
+# created hidden (visible=False). The interactive category panel
+# (_open_category_panel) then reveals them and fades the raw points on its
+# Statistics checkboxes, so switching modes is instant (no re-plotting) and
+# still leaves the underlying points clickable for QGIS feature selection.
+# stats_registry entries are {'artist': ..., 'kind': 'mean'|'median'|'iqr'}.
+
+# The median marker is drawn this much larger than the mean marker, so its
+# open ring stays visible around the mean when the two coincide.
+MEDIAN_MARKER_SCALE = 1.4
+
 
 def _convex_hull(points):
     """Andrew's monotone-chain convex hull, in counter-clockwise order.
@@ -1076,6 +1893,14 @@ def _group_mean_2sigma(xs, ys):
     return mean_x, mean_y, err_x, err_y
 
 
+def _group_median_iqr(xs, ys):
+    """Return (median_x, median_y, q1_x, q3_x, q1_y, q3_y): the medians and
+    25th/75th percentiles of a category's points."""
+    q1_x, median_x, q3_x = np.nanpercentile(np.asarray(xs, dtype=float), [25, 50, 75])
+    q1_y, median_y, q3_y = np.nanpercentile(np.asarray(ys, dtype=float), [25, 50, 75])
+    return float(median_x), float(median_y), float(q1_x), float(q3_x), float(q1_y), float(q3_y)
+
+
 def _build_cat_groups_from_points(pts_data, sample_names, category_colors, category_markers, sizes=None):
     """Group already-computed (x, y) points by category name.
 
@@ -1112,8 +1937,13 @@ def _group_color(g):
 
 
 def _build_xy_stat_artists(ax, cat_groups):
-    """Build hidden mean +/- 2-sigma and convex-hull envelope overlays for
-    XY-style scatter plots, one per category.
+    """Build hidden mean +/- 2-sigma, median, IQR and convex-hull envelope
+    overlays for XY-style scatter plots, one set per category.
+
+    The median is an open ring marker, drawn slightly larger than the mean
+    marker so both stay visible when they coincide; the IQR is an unfilled
+    box from Q1 to Q3 on both axes, so it can't be confused with the mean's
+    error-bar cross.
 
     `cat_groups`: {key: {'xs': [...], 'ys': [...], 'name': str, plus either
     'color'/'marker' (custom-ternary/discrimination/minerals) or
@@ -1142,7 +1972,19 @@ def _build_xy_stat_artists(ax, cat_groups):
             fmt=marker, ms=ms, mfc=color, mec=color, mew=1.3,
             ecolor=color, elinewidth=1.8, capsize=6, capthick=1.8,
             zorder=16, visible=False)
-        stats_registry.setdefault(name, []).append(err)
+        stats_registry.setdefault(name, []).append({'artist': err, 'kind': 'mean'})
+
+        median_x, median_y, q1_x, q3_x, q1_y, q3_y = _group_median_iqr(xs, ys)
+        median = ax.errorbar(
+            median_x, median_y, fmt=marker, ms=ms * MEDIAN_MARKER_SCALE, mfc='none', mec=color,
+            mew=1.8, zorder=17, visible=False)
+        stats_registry[name].append({'artist': median, 'kind': 'median'})
+
+        if q3_x > q1_x or q3_y > q1_y:
+            box = Rectangle((q1_x, q1_y), q3_x - q1_x, q3_y - q1_y, fill=False, edgecolor=color,
+                            linewidth=1.8, zorder=15, visible=False)
+            ax.add_patch(box)
+            stats_registry[name].append({'artist': box, 'kind': 'iqr'})
 
         if len(xs) >= 3:
             hull = _convex_hull(list(zip(xs, ys)))
@@ -1154,21 +1996,27 @@ def _build_xy_stat_artists(ax, cat_groups):
     return stats_registry, envelope_registry
 
 
-def _restyle_stats_artist(artist, style, lock_size=False):
-    """Recolour/re-marker a mean +/- 2-sigma errorbar (or a dict/list of
-    them) to match a category's current style, leaving its computed
-    position/error-bar geometry untouched.
+def _restyle_stats_artist(artist, style, lock_size=False, kind='mean'):
+    """Recolour/re-marker a statistics overlay (mean +/- 2-sigma or median
+    errorbar, IQR box or band, or a dict/list of them) to match a category's
+    current style, leaving its computed position/geometry untouched.
 
     `lock_size=True` (bubble sizing active) leaves the marker's size alone,
     matching how _apply_style_to_matplotlib_artist() locks raw-point sizes.
+    The median keeps its open, slightly larger ring whatever the style's fill.
     """
     if artist is None:
         return
     if isinstance(artist, dict):
-        return _restyle_stats_artist(artist.get('artist'), style, lock_size)
+        return _restyle_stats_artist(artist.get('artist'), style, lock_size,
+                                     artist.get('kind', kind))
     if isinstance(artist, ErrorbarContainer):
         colour = style.get('color', '#000000')
-        face = 'white' if style.get('fill') == 'hollow' else colour
+        if kind == 'median':
+            face = 'none'
+        else:
+            face = 'white' if style.get('fill') == 'hollow' else colour
+        size_scale = MEDIAN_MARKER_SCALE if kind == 'median' else 1.0
         data_line, caplines, barlinecols = artist.lines
         if data_line is not None:
             if hasattr(data_line, 'set_marker'):
@@ -1184,7 +2032,8 @@ def _restyle_stats_artist(artist, style, lock_size=False):
             if hasattr(data_line, 'set_color'):
                 data_line.set_color(colour)
             if not lock_size and hasattr(data_line, 'set_markersize'):
-                data_line.set_markersize(max(6.0, float(style.get('markersize', 8)) * 1.5))
+                data_line.set_markersize(
+                    max(6.0, float(style.get('markersize', 8)) * 1.5) * size_scale)
         for cap in caplines:
             cap.set_color(colour)
             # Cap "ticks" are themselves marker-based Line2D's, subject to
@@ -1196,7 +2045,14 @@ def _restyle_stats_artist(artist, style, lock_size=False):
         return
     if isinstance(artist, (list, tuple)):
         for item in artist:
-            _restyle_stats_artist(item, style, lock_size)
+            _restyle_stats_artist(item, style, lock_size, kind)
+        return
+    # IQR overlay: an unfilled box (Patch) or a shaded band (PolyCollection).
+    colour = style.get('color', '#000000')
+    if hasattr(artist, 'set_edgecolor'):
+        artist.set_edgecolor(colour)
+    if hasattr(artist, 'set_facecolor') and not isinstance(artist, Rectangle):
+        artist.set_facecolor(colour)
 
 
 def _restyle_envelope_artist(artist, style):
@@ -1224,13 +2080,14 @@ def _restyle_envelope_artist(artist, style):
 def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
                                category_colors, category_markers, markers_enabled=True,
                                sample_markersizes=None):
-    """Build hidden mean +/- 2-sigma and min/max-envelope overlays for a
-    spider diagram, one per category.
+    """Build hidden mean +/- 2-sigma, median, IQR and min/max-envelope
+    overlays for a spider diagram, one set per category.
 
     Statistics are computed in log10 space (spider diagrams use a log
     y-axis and geochemical ratios are roughly log-normal), then mapped back
-    to linear values for display. Returns (stats_registry, envelope_registry)
-    with the same shape as _build_xy_stat_artists().
+    to linear values for display. The median is a dashed line with open
+    markers, the IQR a shaded band from Q1 to Q3. Returns (stats_registry,
+    envelope_registry) with the same shape as _build_xy_stat_artists().
 
     `sample_markersizes`, if given, is a per-sample list of the markersize
     (already sqrt-of-area, matching each raw sample line's own bubble-scaled
@@ -1263,6 +2120,7 @@ def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
             elem_max = np.nanmax(arr, axis=0)
             mean_log = np.nanmean(log_arr, axis=0)
             std_log = np.nanstd(log_arr, axis=0) if arr.shape[0] > 1 else np.zeros_like(mean_log)
+            q1_log, median_log, q3_log = np.nanpercentile(log_arr, [25, 50, 75], axis=0)
 
         valid = np.isfinite(mean_log)
         if not np.any(valid):
@@ -1279,7 +2137,19 @@ def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
             color=color, ecolor=color, elinewidth=1.6, capsize=4, capthick=1.6,
             markerfacecolor='white', markeredgecolor=color,
             markeredgewidth=1.5, zorder=16, visible=False)
-        stats_registry.setdefault(name, []).append(err)
+        stats_registry.setdefault(name, []).append({'artist': err, 'kind': 'mean'})
+
+        median = ax.errorbar(
+            x_positions[valid], 10 ** median_log[valid], fmt='--', marker=marker,
+            markersize=mean_markersize * MEDIAN_MARKER_SCALE, linewidth=2.5, color=color,
+            markerfacecolor='none', markeredgecolor=color, markeredgewidth=1.5,
+            zorder=17, visible=False)
+        stats_registry[name].append({'artist': median, 'kind': 'median'})
+
+        band = ax.fill_between(
+            x_positions[valid], 10 ** q1_log[valid], 10 ** q3_log[valid], facecolor=color,
+            edgecolor=color, linewidth=1.8, alpha=0.3, zorder=15, visible=False)
+        stats_registry[name].append({'artist': band, 'kind': 'iqr'})
 
         if np.any(np.isfinite(elem_min) & np.isfinite(elem_max)):
             band = ax.fill_between(x_positions, elem_min, elem_max, facecolor=color,
@@ -1446,7 +2316,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
         ax.set_xlabel('Nb/Y', fontsize=12)
         ax.set_ylabel('Zr/Ti', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
         ax.set_ylim(0.001, 1)
         
@@ -1459,9 +2329,9 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
 
 
 class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
-    """Nb/Y vs Zr/Ti diagram (Winchester & Floyd 1977)."""
+    """Nb/Y vs Zr/TiO2 diagram (Winchester & Floyd 1977), Zr and TiO2 both in ppm."""
 
-    name = "Zr/Ti vs Nb/Y"
+    name = "Zr/TiO2 vs Nb/Y"
     reference = "Winchester & Floyd (1977)"
     field_name = "WF1977_NbY"
 
@@ -1540,7 +2410,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
 
     @classmethod
     def classify_point(cls, x, y):
-        """Return field name for point (x=Nb/Y, y=Zr/Ti) in log space, or None if outside all fields."""
+        """Return field name for point (x=Nb/Y, y=Zr/TiO2) in log space, or None if outside all fields."""
         import math
         if x is None or y is None or x <= 0 or y <= 0:
             return None
@@ -1555,13 +2425,16 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
 
     @classmethod
     def calculate_coordinates(cls, feature, layer):
+        # Winchester & Floyd (1977) ratio Zr/TiO2 with both terms in ppm, i.e.
+        # TiO2 wt% x 10000. A measured TiO2 field is preferred; if the layer
+        # only has Ti (ppm) it is converted (TiO2 ppm = Ti ppm x 1.6685).
         zr = get_element_value(feature, layer, 'Zr')
-        ti = get_element_value(feature, layer, 'Ti')
+        tio2_ppm = get_oxide_ppm(feature, layer, 'TiO2')
         nb = get_element_value(feature, layer, 'Nb')
         y = get_element_value(feature, layer, 'Y')
 
-        if all(v is not None and v > 0 for v in [zr, ti, nb, y]):
-            return nb/y, zr/ti
+        if all(v is not None and v > 0 for v in [zr, tio2_ppm, nb, y]):
+            return nb/y, zr/tio2_ppm
         return None, None
 
     @classmethod
@@ -1569,18 +2442,18 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
         ax.set_xscale('log')
         ax.set_yscale('log')
         cls.draw_fields(ax)
-        
+
         if sample_colors is None:
             sample_colors = plt.cm.tab10(np.linspace(0, 1, min(len(data), 10)))
         fid_to_scatter, category_artists = _scatter_grouped(ax, data, fids or [], sample_names,
                                           sample_colors, sample_markers,
                                           show_category_legend, category_colors,
                                           sample_sizes=sample_sizes)
-        
+
         ax.set_xlabel('Nb/Y', fontsize=12)
-        ax.set_ylabel('Zr/Ti', fontsize=12)
+        ax.set_ylabel(subscript_formula('Zr/TiO2 (in ppm)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.01, 10)
         ax.set_ylim(0.001, 1)
         
@@ -1675,7 +2548,7 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
         
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
             n_categories = len(category_colors)
@@ -1841,7 +2714,7 @@ class Hasterok2018_Sedimentary(PolygonDiagramMixin):
                                           sample_sizes=sample_sizes)
 
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
 
         if show_category_legend and category_colors and len(category_colors) > 0:
             n_categories = len(category_colors)
@@ -1917,7 +2790,7 @@ class Pearce1984_YNb:
         ax.set_xlabel('Y (ppm)', fontsize=12)
         ax.set_ylabel('Nb (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 1000)
         ax.set_ylim(1, 2000)
         
@@ -1999,7 +2872,7 @@ class Pearce1984_YNbRb:
         ax.set_xlabel('Y + Nb (ppm)', fontsize=12)
         ax.set_ylabel('Rb (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(1, 10000)
         ax.set_ylim(1, 10000)
         
@@ -2075,7 +2948,7 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
         ax.set_xlabel('Zr (ppm)', fontsize=12)
         ax.set_ylabel('Ti (ppm)', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0, 110)
         ax.set_ylim(0, 9000)
 
@@ -2250,10 +3123,10 @@ class Wilson1989_TAS(PolygonDiagramMixin):
                 [1.9, 3.4, 5.2, 5.7, 7.0, 7.7, 8.0, 8.3, 8.4], 'g--', linewidth=1.)  
         ax.text(58.3, 7.3, 'Alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')
         ax.text(58.6, 6.6, 'Sub-alkaline', fontsize=10, ha='center', va='center', rotation=20, color='g')    
-        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
-        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_xlabel(subscript_formula('SiO2 (wt%)'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Na2O + K2O (wt%)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(30, 80)
         ax.set_ylim(0, 17)
         
@@ -2390,10 +3263,10 @@ class Cox1979_TAS(PolygonDiagramMixin):
                                           show_category_legend, category_colors,
                                           sample_sizes=sample_sizes)
         
-        ax.set_xlabel('SiO2 (wt%)', fontsize=12)
-        ax.set_ylabel('Na2O + K2O (wt%)', fontsize=12)
+        ax.set_xlabel(subscript_formula('SiO2 (wt%)'), fontsize=12)
+        ax.set_ylabel(subscript_formula('Na2O + K2O (wt%)'), fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(40, 80)
         ax.set_ylim(0, 17)
         
@@ -2409,7 +3282,7 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
     """Sr/Y vs Sum(La+Ce+Pr+Nd) apatite group classification diagram."""
 
     name = "Σ(La+Ce+Pr+Nd) vs Sr/Y"
-    reference = "Apatite Group Classification"
+    reference = "O’Sullivan et al. (2020)"
     field_name = "Ap_Class"
 
     @classmethod
@@ -2606,7 +3479,7 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
         ax.set_xlabel('Σ(La+Ce+Pr+Nd) (ppm)', fontsize=12)
         ax.set_ylabel('Sr/Y', fontsize=12)
         n_str = f' (n={n_samples})' if n_samples is not None else ''
-        ax.set_title(f'{cls.name}{n_str}\n{cls.reference}', fontsize=11)
+        ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         ax.set_xlim(0.1, 1e6)
         ax.set_ylim(0.001, 1000)
 
@@ -2622,7 +3495,7 @@ DISCRIMINATION_DIAGRAMS = {
     'Na2O + K2O vs SiO2 Plutonic (Wilson 1989)': Wilson1989_TAS,
     'Na2O + K2O vs SiO2 Volcanic (Cox et al 1979)': Cox1979_TAS,
     'Zr/Ti vs Nb/Y (Pearce 1996)': Pearce1996_NbY_ZrTi,
-    'Zr/Ti vs Nb/Y (Winchester & Floyd 1977)': Winchester_Floyd1977_NbY_ZrTi,
+    'Zr/TiO₂ vs Nb/Y (Winchester & Floyd 1977)': Winchester_Floyd1977_NbY_ZrTi,
     'Zr/4-Nb×2-Y Ternary (Meschede 1986)': Meschede1986_Ternary,
     'SiO2-Al2O3+Fe2O3-CaO+MgO Sedimentary Rocks (Hasterok et al. 2018)': Hasterok2018_Sedimentary,
     'Nb vs Y (Pearce et al. 1984)': Pearce1984_YNb,
@@ -2634,7 +3507,7 @@ DISCRIMINATION_DIAGRAMS = {
 # Currently a single entry; more classification schemes can be added here
 # without any other code changes.
 MINERALS_DIAGRAMS = {
-    'Detrital Apatite Classification (Sullivan, 2020)': ApatiteGroupPlot,
+    'Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020)': ApatiteGroupPlot,
 }
 
 
@@ -2652,6 +3525,13 @@ class GeochemistryDockWidget(QDockWidget):
         self.iface = iface
         self.current_fig = None
         self._category_controls = None
+        # Area-selection tool last chosen in a plot's style panel, for new plots.
+        self._plot_selection_prefs = {'tool': 'freehand', 'add': False}
+        # {layer id: [selection entries]}, see _record_selection().
+        self._selection_history = {}
+        self._selection_watched_layer = None
+        self._restoring_selection = False
+        self._list_driving_selection = False
         self.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
         self.setup_ui()
         self.load_layers()
@@ -2659,11 +3539,125 @@ class GeochemistryDockWidget(QDockWidget):
         # Connect to layer registry for updates
         QgsProject.instance().layersAdded.connect(self.load_layers)
         QgsProject.instance().layersRemoved.connect(self.load_layers)
+        # Follow the layer selected in the QGIS Layers panel.
+        self.iface.currentLayerChanged.connect(self.on_active_layer_changed)
 
     def closeEvent(self, event):
         """Handle close event."""
         self.closingPlugin.emit()
         event.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_splitter_fit()
+
+    def _schedule_splitter_fit(self, *_args):
+        """Fit the main splitter after a change to the groups' heights
+        (deferred, and coalesced if several changes arrive together)."""
+        self._fit_repeats = 0
+        self._queue_splitter_fit(0)
+
+    def _queue_splitter_fit(self, delay_ms):
+        if getattr(self, '_fit_pending', True):
+            return
+        self._fit_pending = True
+        QTimer.singleShot(delay_ms, self._fit_main_splitter)
+
+    def _content_height(self, widget):
+        """Height `widget` needs to show its current content.
+
+        QTabWidget.sizeHint() can report the height of its tallest tab rather
+        than the visible one, so for tab widgets (also when nested one level
+        inside a page, as for Custom XY's sub-tabs) this measures the current
+        page directly instead. Collapsed sections need just their header.
+        """
+        if isinstance(widget, _CollapsibleSection):
+            header = widget._header.sizeHint().height() + 2
+            if not widget.is_expanded():
+                return header
+            return header + 2 + self._content_height(widget._content)
+        if isinstance(widget, QTabWidget):
+            page = widget.currentWidget()
+            frame = 8  # tab-pane frame and margins
+            return widget.tabBar().sizeHint().height() + frame + (
+                self._content_height(page) if page is not None else 0)
+        nested = [child for child in widget.children() if isinstance(child, QTabWidget)]
+        if nested:
+            other = max(widget.sizeHint().height() - nested[0].sizeHint().height(), 0)
+            return other + self._content_height(nested[0])
+        return widget.sizeHint().height()
+
+    def _fit_main_splitter(self):
+        """Size the Layer Selection / Plot Options / Samples groups to use the
+        available height well.
+
+        Each expanded group gets the height its contents need and each
+        collapsed group just its header. If that is more than is available,
+        the Samples group gives up height first (down to a usable size), then
+        the Plot Options tab (which scrolls), then Samples further, then Layer
+        Selection. Any spare height goes to the Samples list (or, if Samples
+        is collapsed, to the Plot Options).
+        """
+        self._fit_pending = False
+        splitter = getattr(self, 'main_splitter', None)
+        if splitter is None or splitter.height() <= 0:
+            return
+        available = splitter.height() - splitter.handleWidth() * (splitter.count() - 1)
+        pad = 6  # pane frame/scrollbar slack
+        sections = self._main_sections
+        wants = [self._content_height(section) + pad for section in sections]
+        expanded = [section.is_expanded() for section in sections]
+
+        alloc = list(wants)
+        excess = sum(alloc) - available
+        for index, floor in ((2, 170), (1, 120), (2, 60), (0, 60)):
+            if excess <= 0:
+                break
+            if not expanded[index]:
+                continue
+            take = min(excess, max(alloc[index] - min(floor, wants[index]), 0))
+            alloc[index] -= take
+            excess -= take
+        if excess < 0:
+            spare = -excess
+            target = next((i for i in (2, 1, 0) if expanded[i]), 2)
+            alloc[target] += spare
+        splitter.setSizes(alloc)
+
+        # Qt can still be re-laying-out nested widgets right after a change, so
+        # the heights measured above may be stale. Always measure once more
+        # shortly after, then keep going only while successive passes disagree
+        # (bounded, so it can't loop).
+        key = (tuple(wants), tuple(expanded), available)
+        first_pass = self._fit_repeats == 0
+        changed = key != self._fit_key
+        self._fit_key = key
+        if (first_pass or changed) and self._fit_repeats < 3:
+            self._fit_repeats += 1
+            self._queue_splitter_fit(30)
+
+    def _add_section(self, parent_layout, title, body, expanded=True):
+        """Add `body` to `parent_layout` as a collapsible, drag-resizable section."""
+        section = _CollapsibleSection(title, body, expanded=expanded, resizable=True)
+        parent_layout.addWidget(section)
+        return section
+
+    def _loose_section(self, parent_layout, title, expanded=True):
+        """Add a new collapsible section to `parent_layout` and return the
+        QVBoxLayout inside it, for controls that don't live in a QGroupBox."""
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(4, 2, 4, 2)
+        body_layout.setSpacing(3)
+        self._add_section(parent_layout, title, body, expanded)
+        return body_layout
+
+    def _group_section(self, parent_layout, group, expanded=True):
+        """Turn an existing QGroupBox into a collapsible section: the group's
+        title moves to the section header so it isn't shown twice."""
+        title = group.title()
+        group.setTitle('')
+        return self._add_section(parent_layout, title, group, expanded)
 
     def _label_row(self, label_text, *controls, spacing=20, trailing_stretch=False, expand_index=-1):
         """Build a QHBoxLayout: a label sized to its own text, a fixed
@@ -2708,6 +3702,118 @@ class GeochemistryDockWidget(QDockWidget):
         row.addStretch()
         return row
 
+    def _add_num_denom_lists(self, group):
+        """Build the even-width Num and Denom tick lists of a custom plot axis
+        in `group`, each with its ⋮ menu. Returns (num_combo, denom_combo)."""
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(3)
+        combos = []
+        for offset, (label, exclusive_item, items) in enumerate((
+                ("Num:", None, CUSTOM_XY_ELEMENTS[1:]),
+                ("Denom:", '1 (none)', CUSTOM_XY_ELEMENTS))):
+            column = offset * 3
+            text = QLabel(label)
+            text.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
+            grid.addWidget(text, 0, column)
+            combo = _CheckableComboBox(exclusive_item=exclusive_item)
+            combo.addItems(items)
+            # Width independent of the content, so both stay even.
+            combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+            combo.setMinimumContentsLength(6)
+            combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+            grid.addWidget(combo, 0, column + 1)
+            grid.setColumnStretch(column + 1, 1)
+            grid.addWidget(self._tick_list_menu_button(combo), 0, column + 2)
+            combos.append(combo)
+        return combos
+
+    def _tick_list_menu_button(self, combo):
+        """A ⋮ button clearing a tick list, or saving/applying its entries."""
+        button = QToolButton()
+        button.setText('⋮')
+        button.setToolTip("Clear the ticked entries, or save them for later use")
+        button.setPopupMode(QToolButton_InstantPopup)
+        menu = QMenu(button)
+        menu.aboutToShow.connect(lambda: self._fill_tick_list_menu(menu, combo))
+        button.setMenu(menu)
+        return button
+
+    def _fill_tick_list_menu(self, menu, combo):
+        """Rebuild a tick list's ⋮ menu, as saved selections are shared by all lists."""
+        menu.clear()
+        menu.addAction("Clear").triggered.connect(lambda _checked=False: combo.set_checked_items([]))
+        menu.addAction("Save ticked entries as…").triggered.connect(
+            lambda _checked=False: self._save_field_preset(combo))
+        presets = self._load_field_presets()
+        if not presets:
+            return
+        menu.addSeparator()
+        for name, terms in presets.items():
+            action = menu.addAction(f"{name}: {_CheckableComboBox.SEPARATOR.join(terms)}")
+            action.triggered.connect(
+                lambda _checked=False, terms=terms: self._apply_field_preset(combo, terms))
+        delete_menu = menu.addMenu("Delete")
+        for name in presets:
+            delete_menu.addAction(name).triggered.connect(
+                lambda _checked=False, name=name: self._delete_field_preset(name))
+
+    # Saved Num/Denom selections: {name: [entries]}, in the QGIS user settings
+    # so they are available in every project.
+    FIELD_PRESETS_KEY = 'geochem_plotting/field_presets'
+
+    def _load_field_presets(self):
+        try:
+            presets = json.loads(QgsSettings().value(self.FIELD_PRESETS_KEY, '{}'))
+        except (TypeError, ValueError):
+            return {}
+        return presets if isinstance(presets, dict) else {}
+
+    def _store_field_presets(self, presets):
+        QgsSettings().setValue(self.FIELD_PRESETS_KEY, json.dumps(presets))
+
+    def _save_field_preset(self, combo):
+        terms = [term for term in combo.checked_items() if term != '1 (none)']
+        if not terms:
+            QMessageBox.warning(self, "Warning", "Please tick at least one entry first.")
+            return
+        name, ok = QInputDialog.getText(
+            self, "Save selection", f"Name for {_CheckableComboBox.SEPARATOR.join(terms)}:")
+        name = str(name).strip()
+        if ok and name:
+            presets = self._load_field_presets()
+            presets[name] = terms
+            self._store_field_presets(presets)
+
+    def _delete_field_preset(self, name):
+        presets = self._load_field_presets()
+        presets.pop(name, None)
+        self._store_field_presets(presets)
+
+    def _apply_field_preset(self, combo, terms):
+        """Tick a saved selection's entries, reporting any not offered by the
+        list (e.g. layer fields missing from the current layer)."""
+        offered = {combo.itemText(i) for i in range(combo.count())}
+        combo.set_checked_items([term for term in terms if term in offered])
+        missing = [term for term in terms if term not in offered]
+        if missing:
+            self.iface.messageBar().pushWarning(
+                "Geochemistry Plotting Tools",
+                f"Not available in this list, so not ticked: {', '.join(missing)}")
+
+    def _sum_fields_hint(self, lists='a Num or Denom list'):
+        """Note under tick lists (custom plots' Num/Denom, bubble "Size by")
+        explaining how ticked entries are added together."""
+        hint = QLabel(
+            f"Tick several entries in {lists} to add them together "
+            "(e.g. Na2O + K2O). Built-in elements (ppm) and oxides (wt%) are converted "
+            "to a common unit automatically. For layer fields, only ppm/ppb/wt% suffixes "
+            "in field names can be converted, so make sure fields added together are "
+            "concentrations reported in the same unit.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-style: italic;")
+        return hint
+
     def _create_bubble_size_group(self, prefix, field_items, editable=False):
         """Build a reusable 'Bubble Size (optional)' control group.
 
@@ -2716,6 +3822,11 @@ class GeochemistryDockWidget(QDockWidget):
         self.<prefix>_bubble_max_size_spin and self.<prefix>_bubble_range_label,
         so each plot tab keeps an independent set of bubble-size controls.
         Returns the QGroupBox to add to the tab's layout.
+
+        "Size by" is a tick list: several ticked entries are added together.
+        `editable=True` tabs (whose list used to accept a typed field name)
+        also list the layer's own numeric fields, after the built-in ones
+        (see refresh_bubble_field_lists).
         """
         group = QGroupBox("Bubble Size (optional)")
         grid = QGridLayout(group)
@@ -2725,14 +3836,15 @@ class GeochemistryDockWidget(QDockWidget):
         size_by_label = QLabel("Size by:")
         size_by_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
         grid.addWidget(size_by_label, 0, 0)
-        field_combo = QComboBox()
+        field_combo = _CheckableComboBox(exclusive_item='1 (none)')
         field_combo.addItems(field_items)
-        field_combo.setEditable(editable)
         field_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        if editable:
-            field_combo.setToolTip("Pick a field, or type an exact layer field name.")
         grid.addWidget(field_combo, 0, 1, 1, 3)
         setattr(self, f'{prefix}_bubble_field_combo', field_combo)
+        if editable:
+            self._bubble_lists_with_layer_fields = getattr(
+                self, '_bubble_lists_with_layer_fields', {})
+            self._bubble_lists_with_layer_fields[prefix] = list(field_items)
 
         scaling_label = QLabel("Scaling:")
         scaling_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
@@ -2773,13 +3885,89 @@ class GeochemistryDockWidget(QDockWidget):
         grid.addWidget(range_label, 3, 0, 1, 4)
         setattr(self, f'{prefix}_bubble_range_label', range_label)
 
+        grid.addWidget(self._sum_fields_hint('the "Size by" list'), 4, 0, 1, 4)
+
         return group
+
+    def refresh_bubble_field_lists(self):
+        """On tabs whose "Size by" list used to accept a typed field name,
+        offer the layer's numeric fields after the built-in entries."""
+        extra_fields = self.get_numeric_field_names()
+        for prefix, base_items in getattr(self, '_bubble_lists_with_layer_fields', {}).items():
+            self._repopulate_combo(
+                getattr(self, f'{prefix}_bubble_field_combo'),
+                base_items + [f for f in extra_fields if f not in base_items])
+
+    def _bubble_terms(self, prefix):
+        """The ticked "Size by" entries of a tab ([] when bubble sizing is off)."""
+        terms = getattr(self, f'{prefix}_bubble_field_combo').checked_items()
+        return [] if terms in ([], ['1 (none)']) else terms
+
+    def _bubble_value(self, feature, layer, prefix, transform=None, raw_fields=False):
+        """Bubble-size value of a feature: the ticked "Size by" entries added
+        together, converted to a common unit (see custom_sum_plan).
+        `raw_fields=True` reads the entries as plain layer fields (Petrophysics)."""
+        terms = self._bubble_terms(prefix)
+        if not terms:
+            return None
+        factors, _unit, _problem = self._bubble_plan(layer, prefix)
+        if not raw_fields:
+            return custom_sum_value(feature, layer, terms, factors, transform=transform)
+        total = 0.0
+        for term in terms:
+            try:
+                value = feature[term]
+                value = float(value) if value is not None and value != NULL else None
+            except (KeyError, ValueError, TypeError):
+                value = None
+            if value is None:
+                return None
+            total += value * factors.get(term, 1.0)
+        return total
+
+    def _bubble_plan(self, layer, prefix):
+        """custom_sum_plan() for a tab's ticked "Size by" entries (cached per plot)."""
+        terms = tuple(self._bubble_terms(prefix))
+        cache = getattr(self, '_bubble_plan_cache', None)
+        if cache is None:
+            cache = self._bubble_plan_cache = {}
+        key = (layer.id(), prefix, terms)
+        if key not in cache:
+            cache[key] = custom_sum_plan(layer, list(terms))
+        return cache[key]
+
+    def _bubble_label(self, layer, prefix):
+        """Legend title for the bubble sizes: the field (with its unit), or
+        the sum of ticked entries with their common unit."""
+        terms = self._bubble_terms(prefix)
+        if len(terms) == 1:
+            return self._field_display_label(terms[0])
+        return ' + '.join(terms) + self._bubble_plan(layer, prefix)[1]
+
+    def _confirm_bubble_units(self, layer, prefix):
+        """Warn, before plotting, when the ticked "Size by" entries can't be
+        brought to a common unit. Returns False if the user cancels."""
+        if prefix is None or len(self._bubble_terms(prefix)) < 2:
+            return True
+        _factors, _unit, problem = self._bubble_plan(layer, prefix)
+        if not problem:
+            return True
+        reply = QMessageBox.warning(
+            self, "Adding fields with different units",
+            "Some ticked \"Size by\" entries are added together although their units could "
+            f"not be brought to a common unit:\n\n{' + '.join(self._bubble_terms(prefix))}: "
+            f"{problem}\n\nMake sure that fields added together are concentrations reported "
+            "in the same unit. Plot anyway?",
+            QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+        return reply == QMessageBox_Ok
 
     def _read_bubble_controls(self, prefix):
         """Return (size_field, bubble_active, min_size, max_size, method) for a
-        tab's bubble-size controls created by _create_bubble_size_group()."""
+        tab's bubble-size controls created by _create_bubble_size_group().
+        `size_field` is the ticked entries joined by ' + ' (for labels); use
+        _bubble_value() to read a feature's value."""
         size_field = getattr(self, f'{prefix}_bubble_field_combo').currentText().strip()
-        bubble_active = bool(size_field) and size_field != '1 (none)'
+        bubble_active = bool(self._bubble_terms(prefix))
         min_size = getattr(self, f'{prefix}_bubble_min_size_spin').value()
         max_size = getattr(self, f'{prefix}_bubble_max_size_spin').value()
         method = BUBBLE_SCALE_METHODS.get(getattr(self, f'{prefix}_bubble_scale_combo').currentText(), 'linear')
@@ -2802,6 +3990,11 @@ class GeochemistryDockWidget(QDockWidget):
         range_label.setText(
             f"Data range: {vmin:.4g} – {vmax:.4g}  →  size {min_size:.0f} – {max_size:.0f} pt² ({method_label})")
         range_label.setStyleSheet("color: black;")
+        # Remembered for the plot's "Apply to layer…" (data-defined size).
+        self._last_bubble_info = {
+            'prefix': prefix, 'size_field': self._read_bubble_controls(prefix)[0],
+            'vmin': vmin, 'vmax': vmax, 'min_size': min_size, 'max_size': max_size, 'method': method,
+        }
         return vmin, vmax, True
 
     def _resize_tab_widget_to_current(self, index, tab_widget=None):
@@ -2842,17 +4035,36 @@ class GeochemistryDockWidget(QDockWidget):
         layer_layout.addLayout(self._label_row("Layer:", self.layer_combo))
 
         self.id_field_combo = QComboBox()
+        # Long aliases mustn't widen the whole panel (the list itself opens
+        # wide enough, see fit_popup_width).
+        self.id_field_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.id_field_combo.setMinimumContentsLength(12)
         self.id_field_combo.currentIndexChanged.connect(self.on_id_field_changed)
         layer_layout.addLayout(self._label_row("Category:", self.id_field_combo))
 
+        # Opt-in: take category colours/markers/sizes/labels from the layer's
+        # Categorized renderer. Enabled only when that renderer classifies
+        # on the selected Category field (see _update_layer_symbology_option).
+        self.use_layer_symbology = QCheckBox("Use layer symbology")
+        self.use_layer_symbology.setChecked(False)
+        self.use_layer_symbology.setEnabled(False)
+        layer_layout.addWidget(self.use_layer_symbology)
+        self._symbology_watched_layer = None
+
         self.label_field_combo = QComboBox()
+        self.label_field_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.label_field_combo.setMinimumContentsLength(12)
         self.discrim_label = QCheckBox()
         self.discrim_label.setChecked(False)
         self.discrim_label.setToolTip("Label selected points using this field")
         layer_layout.addLayout(
             self._label_row("Add label:", self.label_field_combo, self.discrim_label, expand_index=0))
 
-        main_layout.addWidget(layer_group)
+        layer_container = QWidget()
+        layer_container_layout = QVBoxLayout(layer_container)
+        layer_container_layout.setContentsMargins(0, 0, 0, 0)
+        layer_container_layout.setSpacing(5)
+        layer_container_layout.addWidget(layer_group)
 
         style_hint = QLabel(
             "Category colours, markers and visibility can be edited from the "
@@ -2860,7 +4072,7 @@ class GeochemistryDockWidget(QDockWidget):
         )
         style_hint.setWordWrap(True)
         style_hint.setStyleSheet("color: gray; font-style: italic;")
-        main_layout.addWidget(style_hint)
+        layer_container_layout.addWidget(style_hint)
 
         # Tabs
         self.tab_widget = QTabWidget()
@@ -2870,22 +4082,40 @@ class GeochemistryDockWidget(QDockWidget):
         spider_layout = QVBoxLayout(spider_tab)
         spider_layout.setSpacing(5)
 
+        spider_setup_layout = self._loose_section(spider_layout, "Normalization and Elements")
         self.norm_combo = QComboBox()
         for norm_name, norm_values in NORMALIZATION_OPTIONS:
             self.norm_combo.addItem(norm_name, norm_values)
-        spider_layout.addLayout(self._label_row("Normalize:", self.norm_combo))
+        spider_setup_layout.addLayout(self._label_row("Normalize:", self.norm_combo))
 
         self.order_combo = QComboBox()
         self.order_combo.addItems(["REE Only (La-Lu)", "Extended (Ba-Yb)", "Extended Alt (Cs-Lu)"])
-        spider_layout.addLayout(self._label_row("Elements:", self.order_combo))
+        spider_setup_layout.addLayout(self._label_row("Elements:", self.order_combo))
 
+        spider_display_layout = self._loose_section(spider_layout, "Display")
         self.spider_legend = QCheckBox("Legend")
         self.spider_legend.setChecked(True)
         self.spider_markers = QCheckBox("Markers")
         self.spider_markers.setChecked(True)
-        spider_layout.addLayout(self._checkbox_row(self.spider_legend, self.spider_markers))
+        spider_display_layout.addLayout(self._checkbox_row(self.spider_legend, self.spider_markers))
 
-        spider_layout.addWidget(self._create_bubble_size_group('spider', CUSTOM_XY_ELEMENTS, editable=True))
+        spider_lambda_layout = self._loose_section(spider_layout, "REE Shape Coefficients")
+        lambda_btn = QPushButton("Add λ0-λ4 to Layer (selected samples)")
+        lambda_btn.setToolTip(
+            "Fit each selected sample's REE pattern to the orthogonal polynomials of\n"
+            "O'Neill (2016, J. Petrology 57, 1463-1508) and write the shape coefficients\n"
+            f"to the layer fields {', '.join(ree_lambdas.FIELD_NAMES)}:\n"
+            "λ0 = average ln([REE]/[REE]CI), λ1 = slope, λ2 = curvature,\n"
+            "λ3 = sigmoidal term, λ4 = W-shaped term.\n\n"
+            "Uses the paper's own reference data (CI chondrite abundances and\n"
+            "Shannon ionic radii, Table 1; orthogonal polynomials, Table 2), whatever\n"
+            "normalisation is chosen above. Eu is excluded from the fit. A sample needs at\n"
+            f"least {ree_lambdas.MIN_FIT_ELEMENTS} REE (Eu excluded), including one of La-Nd and "
+            "one of Er-Lu;\notherwise its fields are left empty.")
+        lambda_btn.clicked.connect(self.add_ree_lambda_fields)
+        spider_lambda_layout.addWidget(lambda_btn)
+
+        self._group_section(spider_layout, self._create_bubble_size_group('spider', CUSTOM_XY_ELEMENTS, editable=True))
         spider_layout.addStretch()
 
         self.tab_widget.addTab(spider_tab, "Spider")
@@ -2895,15 +4125,17 @@ class GeochemistryDockWidget(QDockWidget):
         discrim_layout = QVBoxLayout(discrim_tab)
         discrim_layout.setSpacing(5)
 
+        discrim_diagram_layout = self._loose_section(discrim_layout, "Diagram")
         self.diagram_combo = QComboBox()
         self.diagram_combo.addItems(list(DISCRIMINATION_DIAGRAMS.keys()))
-        discrim_layout.addWidget(self.diagram_combo)
+        discrim_diagram_layout.addWidget(self.diagram_combo)
 
+        discrim_display_layout = self._loose_section(discrim_layout, "Display Options")
         self.discrim_legend = QCheckBox("Field Legend")
         self.discrim_legend.setChecked(True)
         self.discrim_category_legend = QCheckBox("Category Legend")
         self.discrim_category_legend.setChecked(True)
-        discrim_layout.addLayout(self._checkbox_row(self.discrim_legend, self.discrim_category_legend))
+        discrim_display_layout.addLayout(self._checkbox_row(self.discrim_legend, self.discrim_category_legend))
 
         self.discrim_bdl_as_zero = QCheckBox("Treat below-LOD (negative-coded) oxide values as 0")
         self.discrim_bdl_as_zero.setChecked(False)
@@ -2911,9 +4143,9 @@ class GeochemistryDockWidget(QDockWidget):
             "Applies to diagrams that support it (e.g. Hasterok et al. 2018).\n"
             "Unchecked (default): points with a negative-coded oxide value are discarded.\n"
             "Checked: negative-coded oxide values are substituted with 0 instead.")
-        discrim_layout.addWidget(self.discrim_bdl_as_zero)
+        discrim_display_layout.addWidget(self.discrim_bdl_as_zero)
 
-        discrim_layout.addWidget(self._create_bubble_size_group('discrim', CUSTOM_XY_ELEMENTS, editable=True))
+        self._group_section(discrim_layout, self._create_bubble_size_group('discrim', CUSTOM_XY_ELEMENTS, editable=True))
         discrim_layout.addStretch()
 
         self.tab_widget.addTab(discrim_tab, "Discrimination/Classification")
@@ -2930,68 +4162,24 @@ class GeochemistryDockWidget(QDockWidget):
 
         # X-axis
         x_group = QGroupBox("X-Axis")
-        x_grid = QGridLayout(x_group)
-        x_grid.setHorizontalSpacing(20)
-        x_grid.setVerticalSpacing(3)
-        x_num_label = QLabel("Num:")
-        x_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        x_grid.addWidget(x_num_label, 0, 0)
-        self.x_num_combo = QComboBox()
-        self.x_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-        self.x_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-        x_grid.addWidget(self.x_num_combo, 0, 1)
-        x_denom_label = QLabel("Denom:")
-        x_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        x_grid.addWidget(x_denom_label, 0, 2)
-        self.x_denom_combo = QComboBox()
-        self.x_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-        self.x_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        x_grid.addWidget(self.x_denom_combo, 0, 3)
-        custom_xy_layout.addWidget(x_group)
+        self.x_num_combo, self.x_denom_combo = self._add_num_denom_lists(x_group)
+        self._group_section(custom_xy_layout, x_group)
 
         # Y-axis
         y_group = QGroupBox("Y-Axis")
-        y_grid = QGridLayout(y_group)
-        y_grid.setHorizontalSpacing(20)
-        y_grid.setVerticalSpacing(3)
-        y_num_label = QLabel("Num:")
-        y_num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        y_grid.addWidget(y_num_label, 0, 0)
-        self.y_num_combo = QComboBox()
-        self.y_num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-        self.y_num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-        y_grid.addWidget(self.y_num_combo, 0, 1)
-        y_denom_label = QLabel("Denom:")
-        y_denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-        y_grid.addWidget(y_denom_label, 0, 2)
-        self.y_denom_combo = QComboBox()
-        self.y_denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-        self.y_denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-        y_grid.addWidget(self.y_denom_combo, 0, 3)
-        custom_xy_layout.addWidget(y_group)
+        self.y_num_combo, self.y_denom_combo = self._add_num_denom_lists(y_group)
+        self._group_section(custom_xy_layout, y_group)
+        custom_xy_layout.addWidget(self._sum_fields_hint())
 
         # Show all numeric fields checkbox
-        self.custom_show_all_fields = QCheckBox("Show all numeric fields")
+        custom_fields_layout = self._loose_section(custom_xy_layout, "Fields")
+        self.custom_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
         self.custom_show_all_fields.setChecked(False)
         self.custom_show_all_fields.toggled.connect(self.refresh_custom_xy_combos)
-        custom_xy_layout.addWidget(self.custom_show_all_fields)
-
-        # Bubble size (optional third variable, scaled by symbol size)
-        custom_xy_layout.addWidget(self._create_bubble_size_group('custom', CUSTOM_XY_ELEMENTS))
-
-        # REE Normalization
-        ree_group = QGroupBox("REE Normalization")
-        ree_layout = QVBoxLayout(ree_group)
-        self.ree_norm_combo = QComboBox()
-        self.ree_norm_combo.addItem("None")
-        for norm_name, norm_values in NORMALIZATION_OPTIONS:
-            self.ree_norm_combo.addItem(norm_name)
-        self.ree_norm_combo.setCurrentIndex(0)
-        ree_layout.addLayout(self._label_row("Normalization:", self.ree_norm_combo))
-        ree_group.setMaximumHeight(70)
-        custom_xy_layout.addWidget(ree_group)
+        custom_fields_layout.addWidget(self.custom_show_all_fields)
 
         # Axis scales
+        custom_display_layout = self._loose_section(custom_xy_layout, "Axis Scales and Display")
         scale_row = QHBoxLayout()
         scale_row.setSpacing(20)
         x_scale_label = QLabel("X:")
@@ -3008,13 +4196,27 @@ class GeochemistryDockWidget(QDockWidget):
         self.y_scale_combo.addItems(["Linear", "Log"])
         self.y_scale_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         scale_row.addWidget(self.y_scale_combo, 1)
-        custom_xy_layout.addLayout(scale_row)
+        custom_display_layout.addLayout(scale_row)
 
         self.custom_legend = QCheckBox("Legend")
         self.custom_legend.setChecked(True)
         self.custom_markers = QCheckBox("Markers")
         self.custom_markers.setChecked(True)
-        custom_xy_layout.addLayout(self._checkbox_row(self.custom_legend, self.custom_markers))
+        custom_display_layout.addLayout(self._checkbox_row(self.custom_legend, self.custom_markers))
+
+        # REE Normalization
+        ree_group = QGroupBox("REE Normalization")
+        ree_layout = QVBoxLayout(ree_group)
+        self.ree_norm_combo = QComboBox()
+        self.ree_norm_combo.addItem("None")
+        for norm_name, norm_values in NORMALIZATION_OPTIONS:
+            self.ree_norm_combo.addItem(norm_name)
+        self.ree_norm_combo.setCurrentIndex(0)
+        ree_layout.addLayout(self._label_row("Normalization:", self.ree_norm_combo))
+        self._group_section(custom_xy_layout, ree_group)
+
+        # Bubble size (optional third variable, scaled by symbol size)
+        self._group_section(custom_xy_layout, self._create_bubble_size_group('custom', CUSTOM_XY_ELEMENTS))
         custom_xy_layout.addStretch()
 
         custom_xy_subtabs.addTab(plot_setup_tab, "Plot Setup")
@@ -3024,6 +4226,7 @@ class GeochemistryDockWidget(QDockWidget):
         preprocess_layout = QVBoxLayout(preprocess_tab)
         preprocess_layout.setSpacing(5)
 
+        bdl_layout = self._loose_section(preprocess_layout, "Below-Detection-Limit Handling")
         bdl_intro = QLabel(
             "Exploration datasets often code values below detection as negative "
             "numbers (e.g. -5 means “below detection limit of 5”). By "
@@ -3031,11 +4234,11 @@ class GeochemistryDockWidget(QDockWidget):
             "substitute them with a positive proxy instead."
         )
         bdl_intro.setWordWrap(True)
-        preprocess_layout.addWidget(bdl_intro)
+        bdl_layout.addWidget(bdl_intro)
 
         self.custom_bdl_enabled = QCheckBox("Treat negative values as below-detection-limit codes")
         self.custom_bdl_enabled.setChecked(False)
-        preprocess_layout.addWidget(self.custom_bdl_enabled)
+        bdl_layout.addWidget(self.custom_bdl_enabled)
 
         self.custom_bdl_method_combo = QComboBox()
         self.custom_bdl_method_combo.addItems([
@@ -3044,7 +4247,7 @@ class GeochemistryDockWidget(QDockWidget):
             "Random value (0 to detection limit)",
             "Fixed value",
         ])
-        preprocess_layout.addLayout(self._label_row("Substitution:", self.custom_bdl_method_combo))
+        bdl_layout.addLayout(self._label_row("Substitution:", self.custom_bdl_method_combo))
 
         self.custom_bdl_fixed_spin = QDoubleSpinBox()
         self.custom_bdl_fixed_spin.setRange(0.0, 1e9)
@@ -3052,12 +4255,13 @@ class GeochemistryDockWidget(QDockWidget):
         self.custom_bdl_fixed_spin.setSingleStep(0.001)
         self.custom_bdl_fixed_spin.setValue(0.001)
         self.custom_bdl_fixed_spin.setEnabled(False)
-        preprocess_layout.addLayout(self._label_row("Fixed value:", self.custom_bdl_fixed_spin))
+        bdl_layout.addLayout(self._label_row("Fixed value:", self.custom_bdl_fixed_spin))
 
         def _update_bdl_fixed_enabled(text):
             self.custom_bdl_fixed_spin.setEnabled(text == "Fixed value")
         self.custom_bdl_method_combo.currentTextChanged.connect(_update_bdl_fixed_enabled)
 
+        bdl_review_layout = self._loose_section(preprocess_layout, "Review Negative Values")
         review_btn = QPushButton("Review Negative Values in Selected Fields")
         review_btn.setToolTip(
             "Scan the currently selected samples' X/Y fields for negative "
@@ -3065,12 +4269,12 @@ class GeochemistryDockWidget(QDockWidget):
             "plus a histogram, to help choose an appropriate substitution."
         )
         review_btn.clicked.connect(self._review_custom_xy_negatives)
-        preprocess_layout.addWidget(review_btn)
+        bdl_review_layout.addWidget(review_btn)
 
         self.custom_bdl_review_label = QLabel("No review run yet.")
         self.custom_bdl_review_label.setWordWrap(True)
         self.custom_bdl_review_label.setStyleSheet("color: gray; font-style: italic;")
-        preprocess_layout.addWidget(self.custom_bdl_review_label)
+        bdl_review_layout.addWidget(self.custom_bdl_review_label)
 
         preprocess_layout.addStretch()
 
@@ -3095,39 +4299,37 @@ class GeochemistryDockWidget(QDockWidget):
             ("C (bottom-right apex)", "tern_c_num_combo", "tern_c_denom_combo"),
         ]:
             grp = QGroupBox(apex_label)
-            grid = QGridLayout(grp)
-            grid.setHorizontalSpacing(20)
-            grid.setVerticalSpacing(3)
-            num_label = QLabel("Num:")
-            num_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-            grid.addWidget(num_label, 0, 0)
-            num_combo = QComboBox()
-            num_combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-            num_combo.setSizePolicy(QSizePolicy_Minimum, QSizePolicy_Fixed)
-            grid.addWidget(num_combo, 0, 1)
-            denom_label = QLabel("Denom:")
-            denom_label.setSizePolicy(QSizePolicy_Fixed, QSizePolicy_Fixed)
-            grid.addWidget(denom_label, 0, 2)
-            denom_combo = QComboBox()
-            denom_combo.addItems(CUSTOM_XY_ELEMENTS)
-            denom_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
-            grid.addWidget(denom_combo, 0, 3)
+            num_combo, denom_combo = self._add_num_denom_lists(grp)
             setattr(self, num_attr, num_combo)
             setattr(self, denom_attr, denom_combo)
-            custom_tern_layout.addWidget(grp)
+            self._group_section(custom_tern_layout, grp)
+        custom_tern_layout.addWidget(self._sum_fields_hint())
 
-        self.tern_show_all_fields = QCheckBox("Show all numeric fields")
+        tern_fields_layout = self._loose_section(custom_tern_layout, "Fields")
+        self.tern_show_all_fields = QCheckBox("Show all numeric fields (including data different from concentrations)")
         self.tern_show_all_fields.setChecked(False)
         self.tern_show_all_fields.toggled.connect(self.refresh_custom_ternary_combos)
-        custom_tern_layout.addWidget(self.tern_show_all_fields)
+        tern_fields_layout.addWidget(self.tern_show_all_fields)
+
+        # Axis scale, shared by all three apexes (logging only some of them
+        # rarely spreads the data well).
+        tern_display_layout = self._loose_section(custom_tern_layout, "Axis Scales and Display")
+        self.tern_scale_combo = QComboBox()
+        self.tern_scale_combo.addItems(["Linear", "Log"])
+        self.tern_scale_combo.setToolTip(
+            "Log plots log10(value) for all three apexes, before they are normalised to "
+            "100%. If any plotted sample has a value below 1, which plain log10 would turn "
+            "negative, log10(1 + value) is used for all three instead. The apex labels "
+            "show which one was used.")
+        tern_display_layout.addLayout(self._label_row("Scale:", self.tern_scale_combo))
 
         self.tern_legend = QCheckBox("Legend")
         self.tern_legend.setChecked(True)
         self.tern_markers = QCheckBox("Markers")
         self.tern_markers.setChecked(True)
-        custom_tern_layout.addLayout(self._checkbox_row(self.tern_legend, self.tern_markers))
+        tern_display_layout.addLayout(self._checkbox_row(self.tern_legend, self.tern_markers))
 
-        custom_tern_layout.addWidget(self._create_bubble_size_group('tern', CUSTOM_XY_ELEMENTS))
+        self._group_section(custom_tern_layout, self._create_bubble_size_group('tern', CUSTOM_XY_ELEMENTS))
         custom_tern_layout.addStretch()
 
         self.tab_widget.addTab(custom_tern_tab, "Custom Ternary")
@@ -3137,17 +4339,19 @@ class GeochemistryDockWidget(QDockWidget):
         minerals_layout = QVBoxLayout(minerals_tab)
         minerals_layout.setSpacing(5)
 
+        minerals_scheme_layout = self._loose_section(minerals_layout, "Classification Scheme")
         self.minerals_combo = QComboBox()
         self.minerals_combo.addItems(list(MINERALS_DIAGRAMS.keys()))
-        minerals_layout.addWidget(self.minerals_combo)
+        minerals_scheme_layout.addWidget(self.minerals_combo)
 
+        minerals_display_layout = self._loose_section(minerals_layout, "Display Options")
         self.minerals_legend = QCheckBox("Field Legend")
         self.minerals_legend.setChecked(True)
         self.minerals_category_legend = QCheckBox("Category Legend")
         self.minerals_category_legend.setChecked(True)
-        minerals_layout.addLayout(self._checkbox_row(self.minerals_legend, self.minerals_category_legend))
+        minerals_display_layout.addLayout(self._checkbox_row(self.minerals_legend, self.minerals_category_legend))
 
-        minerals_layout.addWidget(self._create_bubble_size_group('minerals', CUSTOM_XY_ELEMENTS, editable=True))
+        self._group_section(minerals_layout, self._create_bubble_size_group('minerals', CUSTOM_XY_ELEMENTS, editable=True))
         minerals_layout.addStretch()
 
         self.tab_widget.addTab(minerals_tab, "Minerals")
@@ -3179,7 +4383,7 @@ class GeochemistryDockWidget(QDockWidget):
         ])
         self.petro_x_unit_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_x_grid.addWidget(self.petro_x_unit_combo, 1, 1, 1, 3)
-        petro_layout.addWidget(petro_x_group)
+        self._group_section(petro_layout, petro_x_group)
 
         # Y Axis (Magnetic Susceptibility)
         petro_y_group = QGroupBox("Y-Axis (Magnetic Susceptibility)")
@@ -3204,15 +4408,16 @@ class GeochemistryDockWidget(QDockWidget):
         ])
         self.petro_y_unit_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
         petro_y_grid.addWidget(self.petro_y_unit_combo, 1, 1, 1, 3)
-        petro_layout.addWidget(petro_y_group)
+        self._group_section(petro_layout, petro_y_group)
 
+        petro_display_layout = self._loose_section(petro_layout, "Display")
         self.petro_legend = QCheckBox("Legend")
         self.petro_legend.setChecked(True)
         self.petro_markers = QCheckBox("Markers")
         self.petro_markers.setChecked(True)
-        petro_layout.addLayout(self._checkbox_row(self.petro_legend, self.petro_markers))
+        petro_display_layout.addLayout(self._checkbox_row(self.petro_legend, self.petro_markers))
 
-        petro_layout.addWidget(self._create_bubble_size_group('petro', ['1 (none)']))
+        self._group_section(petro_layout, self._create_bubble_size_group('petro', ['1 (none)']))
         petro_layout.addStretch()
 
         self.tab_widget.addTab(petro_tab, "Petrophysics")
@@ -3223,8 +4428,6 @@ class GeochemistryDockWidget(QDockWidget):
         self.tab_widget.currentChanged.connect(self._resize_tab_widget_to_current)
         self._resize_tab_widget_to_current(self.tab_widget.currentIndex())
 
-        main_layout.addWidget(self.tab_widget)
-
         # Sample selection
         sample_group = QGroupBox("Samples")
         sample_layout = QVBoxLayout(sample_group)
@@ -3232,8 +4435,9 @@ class GeochemistryDockWidget(QDockWidget):
         
         self.feature_list = QListWidget()
         self.feature_list.setSelectionMode(QListWidget_MultiSelection)
-        self.feature_list.setMaximumHeight(150)
-        sample_layout.addWidget(self.feature_list)
+        self.feature_list.setMinimumHeight(60)
+        self.feature_list.itemSelectionChanged.connect(self._on_list_selection_changed)
+        sample_layout.addWidget(self.feature_list, 1)
 
         btn_row = QHBoxLayout()
         select_all_btn = QPushButton("All")
@@ -3246,6 +4450,56 @@ class GeochemistryDockWidget(QDockWidget):
         btn_row.addWidget(select_all_btn)
         btn_row.addWidget(deselect_all_btn)
         sample_layout.addLayout(btn_row)
+
+        # Recall of earlier selections of this layer (map or plots).
+        selection_row = QHBoxLayout()
+        selection_row.setSpacing(3)
+        self.selection_combo = QComboBox()
+        self.selection_combo.setSizeAdjustPolicy(QComboBox_AdjustToMinimumContents)
+        self.selection_combo.setMinimumContentsLength(12)
+        self.selection_combo.setSizePolicy(QSizePolicy_Expanding, QSizePolicy_Fixed)
+        self.selection_combo.setToolTip(
+            "Selections made on the map or on plots while the plugin is open. "
+            "Pick one to select those samples again.")
+        self.selection_combo.activated.connect(self._restore_selection_at)
+        previous_selection_btn = QToolButton()
+        previous_selection_btn.setText('◀')
+        previous_selection_btn.setToolTip("Go back to the previous selection")
+        previous_selection_btn.clicked.connect(lambda: self._step_selection(-1))
+        next_selection_btn = QToolButton()
+        next_selection_btn.setText('▶')
+        next_selection_btn.setToolTip("Go forward to the next selection")
+        next_selection_btn.clicked.connect(lambda: self._step_selection(1))
+        save_selection_btn = QPushButton("Save…")
+        save_selection_btn.setToolTip(
+            "Give the current selection a name and notes. Saved selections are kept "
+            "with the layer in the QGIS project.")
+        save_selection_btn.clicked.connect(self.save_current_selection)
+        delete_selection_btn = QPushButton("Delete")
+        delete_selection_btn.setToolTip("Remove the selection shown in the list")
+        delete_selection_btn.clicked.connect(self.delete_listed_selection)
+        selection_row.addWidget(QLabel("Selections:"), 0)
+        selection_row.addWidget(self.selection_combo, 1)
+        selection_row.addWidget(previous_selection_btn, 0)
+        selection_row.addWidget(next_selection_btn, 0)
+        selection_row.addWidget(save_selection_btn, 0)
+        selection_row.addWidget(delete_selection_btn, 0)
+        sample_layout.addLayout(selection_row)
+
+        copy_row = QHBoxLayout()
+        copy_table_btn = QPushButton("Copy Table")
+        copy_table_btn.setToolTip(
+            "Copy the attribute table of the samples selected in the list above to the "
+            "clipboard (tab-separated, pastes into a spreadsheet).")
+        copy_table_btn.clicked.connect(self.copy_selection_table)
+        copy_labels_btn = QPushButton("Copy Labels")
+        copy_labels_btn.setToolTip(
+            "Copy the values of the \"Add label\" field for the samples selected in the "
+            "list above to the clipboard, one per line.")
+        copy_labels_btn.clicked.connect(self.copy_selection_labels)
+        copy_row.addWidget(copy_table_btn)
+        copy_row.addWidget(copy_labels_btn)
+        sample_layout.addLayout(copy_row)
 
         classify_btn = QPushButton("Add Classification Field to Layer")
         classify_btn.setToolTip(
@@ -3270,17 +4524,64 @@ class GeochemistryDockWidget(QDockWidget):
         filter_row.addWidget(clear_filter_btn)
         sample_layout.addLayout(filter_row)
 
-        main_layout.addWidget(sample_group)
+        # The three main groups - Layer Selection, Plot Options (the tabs) and
+        # Samples - are collapsible sections stacked in a vertical splitter:
+        # click a header to collapse/expand a group, drag the bars between them
+        # to trade height. Each pane scrolls, so it can be made smaller than
+        # its contents. The group titles move onto the section headers.
+        layer_group.setTitle('')
+        sample_group.setTitle('')
+        layer_section = _CollapsibleSection('Layer Selection', layer_container, True, main=True)
+        options_section = _CollapsibleSection('Plot Options', self.tab_widget, True, main=True)
+        samples_section = _CollapsibleSection('Samples', sample_group, True, main=True)
+        self._main_sections = [layer_section, options_section, samples_section]
 
-        # Action buttons
-        button_layout = QHBoxLayout()
+        self.main_splitter = QSplitter(Qt_Vertical)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(7)
+        self.main_splitter.setStyleSheet(
+            "QSplitter::handle { background: palette(mid); border-radius: 2px; margin: 1px 0px; }"
+            "QSplitter::handle:hover { background: palette(highlight); }")
+        for section in self._main_sections:
+            pane = QScrollArea()
+            pane.setWidgetResizable(True)
+            pane.setStyleSheet('QScrollArea { border: none; background: transparent; }')
+            # Explicit minimum: a scroll area's own minimum hint (about 70 px)
+            # would stop a collapsed, header-only group shrinking to its header.
+            pane.setMinimumHeight(24)
+            pane.setWidget(section)
+            self.main_splitter.addWidget(pane)
+        for index in (1, 2):
+            self.main_splitter.handle(index).setToolTip('Drag to resize the groups above and below')
+        # Spare height goes to the Samples list.
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 0)
+        self.main_splitter.setStretchFactor(2, 1)
+        main_layout.addWidget(self.main_splitter, 1)
+
+        # Re-fit the splitter whenever the plot options change height (a
+        # sub-section or main group collapsed/expanded/resized, or another tab
+        # shown) so the space available is used well.
+        self._fit_pending = False
+        self._fit_key = None
+        self._fit_repeats = 0
+        for section in self._main_sections + self.tab_widget.findChildren(_CollapsibleSection):
+            section.toggled.connect(self._schedule_splitter_fit)
+            section.resized.connect(self._schedule_splitter_fit)
+        self.tab_widget.currentChanged.connect(self._schedule_splitter_fit)
+        custom_xy_subtabs.currentChanged.connect(self._schedule_splitter_fit)
+
+        # "Use layer symbology" also brings in any data-defined symbol size
+        # as the current tab's Bubble Size settings.
+        self.use_layer_symbology.toggled.connect(
+            lambda checked: checked and self._apply_layer_bubble_settings())
+        self.tab_widget.currentChanged.connect(
+            lambda _index: self.use_layer_symbology.isChecked() and self._apply_layer_bubble_settings())
+
+        # Action button (plots are saved or copied from their own window's toolbar)
         plot_btn = QPushButton("Generate Plot")
         plot_btn.clicked.connect(self.generate_plot)
-        button_layout.addWidget(plot_btn)
-        save_btn = QPushButton("Save...")
-        save_btn.clicked.connect(self.save_plot)
-        button_layout.addWidget(save_btn)
-        main_layout.addLayout(button_layout)
+        main_layout.addWidget(plot_btn)
 
         # Wrap in scroll area
         scroll_area = QScrollArea()
@@ -3305,7 +4606,8 @@ class GeochemistryDockWidget(QDockWidget):
         variables.update(EXTENDED_ORDER_ALT)
         variables.update(REE_ORDER)
         variables.update(REE_ELEMENTS)
-        variables.update([v for v in CUSTOM_XY_ELEMENTS if v not in ('1 (none)', 'Mg#')])
+        variables.update([v for v in CUSTOM_XY_ELEMENTS
+                         if v not in ('1 (none)', 'Mg#') and v not in TOTAL_IRON_TERM_OXIDE])
 
         return sorted(variables)
 
@@ -3361,16 +4663,44 @@ class GeochemistryDockWidget(QDockWidget):
             if self._is_candidate_data_layer(layer):
                 self.layer_combo.addItem(layer.name(), layer.id())
         
-        # Try to restore previous selection
-        if current_layer_id:
-            index = self.layer_combo.findData(current_layer_id)
-            if index >= 0:
-                self.layer_combo.setCurrentIndex(index)
-        
+        # Keep the previous selection if it's still listed, otherwise start
+        # from the layer selected in the QGIS Layers panel, if it's suitable.
+        index = self.layer_combo.findData(current_layer_id) if current_layer_id else -1
+        if index < 0:
+            index = self._active_layer_index()
+        if index >= 0:
+            self.layer_combo.setCurrentIndex(index)
+
         self.layer_combo.blockSignals(False)
-        
+
         if self.layer_combo.count() > 0:
             self.on_layer_changed(self.layer_combo.currentIndex())
+
+    def _layer_index(self, layer):
+        """Position of `layer` in the layer list, or -1 if it isn't listed
+        (the list only holds layers suitable for the plugin)."""
+        if not isinstance(layer, QgsVectorLayer):
+            return -1
+        return self.layer_combo.findData(layer.id())
+
+    def _active_layer_index(self):
+        """Position in the layer list of the QGIS active layer, or -1."""
+        return self._layer_index(self.iface.activeLayer())
+
+    def on_active_layer_changed(self, layer):
+        """Select the layer chosen in the QGIS Layers panel, if it's suitable."""
+        index = self._layer_index(layer)
+        if index >= 0:
+            self.layer_combo.setCurrentIndex(index)
+
+    @staticmethod
+    def _field_list_label(field):
+        """Text for a field in the Category/Add label lists: 'alias (fieldname)'
+        when the layer defines an alias, else the field name."""
+        alias = (field.alias() or '').strip()
+        if alias and alias != field.name():
+            return f"{alias} ({field.name()})"
+        return field.name()
 
     def on_layer_changed(self, index):
         """Handle layer selection change."""
@@ -3384,13 +4714,18 @@ class GeochemistryDockWidget(QDockWidget):
         if layer is None:
             return
         
+        # The list text may show an alias; the item data is always the real
+        # field name, which is what every reader of these lists uses.
         self.id_field_combo.clear()
         self.label_field_combo.clear()
-        self.id_field_combo.addItem(NO_CATEGORY_OPTION)
+        self.id_field_combo.addItem(NO_CATEGORY_OPTION, NO_CATEGORY_OPTION)
         field_names = [field.name() for field in layer.fields()]
-        for field_name in field_names:
-            self.id_field_combo.addItem(field_name)
-            self.label_field_combo.addItem(field_name)
+        for field in layer.fields():
+            list_label = self._field_list_label(field)
+            self.id_field_combo.addItem(list_label, field.name())
+            self.label_field_combo.addItem(list_label, field.name())
+        fit_popup_width(self.id_field_combo)
+        fit_popup_width(self.label_field_combo)
 
         # Auto-select ID field. Default to "no category" (single shared
         # symbol) unless a recognisable sample/category field is found.
@@ -3410,10 +4745,15 @@ class GeochemistryDockWidget(QDockWidget):
 
         self.id_field_combo.setCurrentIndex(best_index)
         self.update_feature_list(layer)
+        self._watch_layer_renderer(layer)
+        self._update_layer_symbology_option()
+        self._watch_layer_selection(layer)
+        self._refresh_selection_combo(layer)
 
         # Refresh custom XY dropdowns if showing all numeric fields
         self.refresh_custom_xy_combos()
         self.refresh_petrophysics_combos()
+        self.refresh_bubble_field_lists()
 
         
     def on_layer_changed_old(self, index):
@@ -3457,65 +4797,577 @@ class GeochemistryDockWidget(QDockWidget):
         layer = QgsProject.instance().mapLayer(layer_id)
         if layer:
             self.update_feature_list(layer)
+        self._update_layer_symbology_option()
+
+    # ------------------------------------------------------------------
+    # Layer symbology bridge (map <-> plot category styles)
+    # ------------------------------------------------------------------
+
+    def _current_category_field(self):
+        """The selected Category field name, or None for "no category"."""
+        id_field = self.id_field_combo.currentData()
+        if not id_field or id_field == NO_CATEGORY_OPTION:
+            return None
+        return id_field
+
+    def _watch_layer_renderer(self, layer):
+        """Re-check the "Use layer symbology" option whenever the selected
+        layer's renderer changes (e.g. the user re-classifies it)."""
+        previous = self._symbology_watched_layer
+        if previous is layer:
+            return
+        if previous is not None:
+            for slot in (self._update_layer_symbology_option, self._on_watched_renderer_changed):
+                try:
+                    previous.rendererChanged.disconnect(slot)
+                except (TypeError, RuntimeError):  # already disconnected or layer deleted
+                    pass
+        self._symbology_watched_layer = layer
+        if layer is not None and hasattr(layer, 'rendererChanged'):
+            layer.rendererChanged.connect(self._update_layer_symbology_option)
+            layer.rendererChanged.connect(self._on_watched_renderer_changed)
+        # Selected samples on top on the map, as soon as the layer is chosen.
+        self._ensure_selected_on_top(layer)
+
+    def _on_watched_renderer_changed(self):
+        """A new renderer (restyled layer, "Apply to layer…") drops the
+        selected-on-top rendering order, so put it back."""
+        self._ensure_selected_on_top(self._symbology_watched_layer)
+
+    def _update_layer_symbology_option(self):
+        """Enable "Use layer symbology" only when the layer's renderer is
+        Categorized on the selected Category field; the tooltip says why not."""
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData()) \
+            if self.layer_combo.currentData() else None
+        usable, reason = symbology_bridge.layer_symbology_status(layer, self._current_category_field())
+        self.use_layer_symbology.setEnabled(usable)
+        self.use_layer_symbology.setToolTip(reason)
+
+    def _layer_symbology_styles(self):
+        """Imported {category: partial style} for the next plot, or {} when
+        the option is off or not applicable."""
+        if not (self.use_layer_symbology.isEnabled() and self.use_layer_symbology.isChecked()):
+            return {}
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        return symbology_bridge.read_layer_category_styles(layer, self._current_category_field())
+
+    BUBBLE_TAB_PREFIXES = ('spider', 'discrim', 'custom', 'tern', 'minerals', 'petro')
+
+    def _tab_bubble_prefix(self, index=None):
+        """Bubble-size control prefix of a plot tab (current tab by default)."""
+        index = self.tab_widget.currentIndex() if index is None else index
+        return self.BUBBLE_TAB_PREFIXES[index] if 0 <= index < len(self.BUBBLE_TAB_PREFIXES) else None
+
+    def _bubble_value_expression(self, layer, size_field):
+        """QGIS expression computing the value bubble sizing reads for
+        `size_field`: one entry, or several joined by ' + ' that are added
+        together with the same unit conversion as the plot (custom_sum_plan).
+        None if an entry can't be expressed."""
+        terms = [t.strip() for t in size_field.split(_CheckableComboBox.SEPARATOR)] \
+            if size_field else []
+        if len(terms) <= 1:
+            return self._bubble_term_expression(layer, size_field)
+        factors, _unit, _problem = custom_sum_plan(layer, terms)
+        parts = []
+        for term in terms:
+            expression = self._bubble_term_expression(layer, term)
+            if expression is None:
+                return None
+            factor = factors.get(term, 1.0)
+            parts.append(expression if factor == 1.0
+                         else f'({expression} * {symbology_bridge.expr_number(factor)})')
+        # '+' gives NULL when any entry is NULL, as the plot skips such sums.
+        return f"({' + '.join(parts)})"
+
+    def _bubble_term_expression(self, layer, size_field):
+        """QGIS expression computing the value bubble sizing reads for a
+        single `size_field` (as get_custom_element_value() does: the same
+        source field(s) and ppm/ppb/pct and element/oxide conversions), or None."""
+        from qgis.core import QgsExpression
+        q = QgsExpression.quotedColumnRef
+        num = symbology_bridge.expr_number
+
+        def term(field, factor):
+            return q(field) if factor == 1.0 else f'({q(field)} * {num(factor)})'
+
+        if not size_field or size_field == '1 (none)':
+            return None
+        if size_field == 'Mg#':
+            mgo = find_element_field(layer, 'MgO')
+            feo = find_element_field(layer, 'FeO')
+            fe2o3 = None if feo else find_element_field(layer, 'Fe2O3')
+            feo_expr = q(feo) if feo else (f'({q(fe2o3)} * 0.8998)' if fe2o3 else None)
+            if not mgo or not feo_expr:
+                return None
+            mg = f'({q(mgo)} / {num(MW_MGO)})'
+            return f'(100 * {mg} / ({mg} + 0.9 * {feo_expr} / {num(MW_FEO)}))'
+        if size_field in TOTAL_IRON_TERM_OXIDE:
+            field = find_total_iron_field(layer, TOTAL_IRON_TERM_OXIDE[size_field])
+            if not field:
+                return None
+            return term(field, _value_to_pct(1.0, field, default_unit='pct'))
+
+        # (field, factor) candidates in the order get_*_value() tries them;
+        # coalesce() reproduces its per-feature fallback.
+        terms = []
+        if size_field in OXIDE_COMPOSITION:
+            field = find_element_field(layer, size_field, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, _value_to_pct(1.0, field, default_unit='pct')))
+            element = OXIDE_COMPOSITION[size_field][0]
+            field = find_element_field(layer, element, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, element_ppm_to_oxide_pct(
+                    size_field, _value_to_ppm(1.0, field, default_unit='ppm'))))
+        elif size_field in CUSTOM_XY_ELEMENTS:
+            field = find_element_field(layer, size_field, allow_oxide_forms=False)
+            if field:
+                terms.append(term(field, _value_to_ppm(1.0, field, default_unit='ppm')))
+            oxide = ELEMENT_TO_OXIDE.get(size_field)
+            field = find_element_field(layer, oxide, allow_oxide_forms=False) if oxide else None
+            if field:
+                terms.append(term(field, oxide_pct_to_element_ppm(
+                    oxide, _value_to_pct(1.0, field, default_unit='pct'))))
+        else:
+            field = find_element_field(layer, size_field)
+            if field:
+                terms.append(q(field))
+        if not terms:
+            return None
+        return terms[0] if len(terms) == 1 else f"coalesce({', '.join(terms)})"
+
+    def _apply_layer_bubble_settings(self, prefix=None):
+        """Copy a data-defined symbol size from the layer's Categorized
+        symbology into a tab's Bubble Size controls (current tab by default).
+
+        Returns the settings applied (see symbology_bridge.
+        bubble_settings_from_layer) or None when there was nothing to apply.
+        """
+        if not self.use_layer_symbology.isEnabled():
+            return None
+        prefix = prefix or self._tab_bubble_prefix()
+        if prefix is None:
+            return None
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        settings = symbology_bridge.bubble_settings_from_layer(layer, self._current_category_field())
+        if not settings or not settings.get('size_field'):
+            if settings and settings.get('note'):
+                symbology_bridge.log(settings['note'])
+            return None
+
+        field_combo = getattr(self, f'{prefix}_bubble_field_combo')
+        # One entry, or several joined by ' + ' (a sum exported by this plugin).
+        terms = [t.strip() for t in settings['size_field'].split(_CheckableComboBox.SEPARATOR)]
+        offered = [field_combo.itemText(i) for i in range(field_combo.count())]
+        for term in terms:
+            if term not in offered:
+                # A layer field not offered on this tab (e.g. only elements
+                # are listed): add it so it can be ticked.
+                field_combo.addItem(term)
+        field_combo.set_checked_items(terms)
+        fit_popup_width(field_combo, extra=field_combo.INDICATOR_SIZE + 12)
+        if settings.get('method'):
+            labels = {method: label for label, method in BUBBLE_SCALE_METHODS.items()}
+            getattr(self, f'{prefix}_bubble_scale_combo').setCurrentText(labels[settings['method']])
+        for key, spin_name in (('min_size', 'min_size_spin'), ('max_size', 'max_size_spin')):
+            if settings.get(key):
+                spin = getattr(self, f'{prefix}_bubble_{spin_name}')
+                spin.setValue(max(spin.minimum(), min(spin.maximum(), float(settings[key]))))
+        if settings.get('note'):
+            symbology_bridge.log(settings['note'])
+        return settings
+
+    def _export_styles_to_layer(self, parent, layer_id, field_name, categories,
+                                category_styles, visible_state, bubble=None):
+        """Apply a plot's category styles to its layer as a Categorized
+        renderer, after confirmation. The previous layer style is kept in
+        the layer's style manager so it can be restored.
+
+        `bubble` is the plot's bubble sizing (see _compute_bubble_range), if
+        any; it becomes a matching data-defined symbol size."""
+        layer = QgsProject.instance().mapLayer(layer_id) if layer_id else None
+        if layer is None:
+            QMessageBox.warning(parent, 'Apply styles to layer',
+                                'The layer this plot was made from is no longer available.')
+            return
+        if not field_name or layer.fields().indexOf(field_name) < 0:
+            QMessageBox.warning(
+                parent, 'Apply styles to layer',
+                'This plot has no Category field on the layer, so its styles cannot '
+                'be turned into a Categorized symbology.')
+            return
+        size_note = ''
+        bubble_export = None
+        if bubble:
+            value_expression = self._bubble_value_expression(layer, bubble['size_field'])
+            if value_expression:
+                bubble_export = dict(bubble, value_expression=value_expression)
+                size_note = (f"\n\nSymbol sizes will be data-defined from '{bubble['size_field']}', "
+                             "matching the plot's bubble sizing.")
+            else:
+                size_note = (f"\n\nNote: the plot's bubble size field '{bubble['size_field']}' "
+                             "could not be expressed on the layer, so symbol sizes are fixed.")
+        reply = QMessageBox.question(
+            parent, 'Apply styles to layer',
+            f"Replace the symbology of layer '{layer.name()}' with a Categorized "
+            f"symbology on '{field_name}', using the colours, markers and sizes of the "
+            f"{len(categories)} plot categories?{size_note}\n\n"
+            "The current layer style will be saved first, so you can switch back to it "
+            "from Layer Properties > Symbology > Style.",
+            QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
+        if reply != QMessageBox_Yes:
+            return
+        try:
+            backup_name = symbology_bridge.apply_plot_styles_to_layer(
+                layer, field_name, categories, category_styles, visible_state,
+                bubble=bubble_export)
+        except Exception as exc:
+            QMessageBox.critical(parent, 'Apply styles to layer',
+                                 f'Could not apply the plot styles to the layer:\n{exc}')
+            return
+        self._ensure_selected_on_top(layer)
+        try:
+            self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        except Exception:  # nosec B110 - legend refresh is cosmetic only
+            pass
+        message = f"Plot styles applied to layer '{layer.name()}'."
+        if backup_name:
+            message += f"\n\nThe previous style was saved as \"{backup_name}\"."
+        QMessageBox.information(parent, 'Apply styles to layer', message)
 
     def _category_field_label(self):
         """Return a clean template-key label for the current 'Category:' selection."""
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
         if not id_field or id_field == NO_CATEGORY_OPTION:
             return NO_CATEGORY_LABEL
         return id_field
 
     def update_feature_list(self, layer):
-        """Update the feature list."""
+        """Update the sample list.
+
+        With a Category field chosen, each distinct category value is listed
+        once (with its sample count) and selecting that row selects every
+        sample in it, which makes picking groups from large datasets easy.
+        With "no category", every feature is listed individually.
+
+        If the layer has a QGIS selection, rows containing selected samples
+        are highlighted and only those selected samples are carried by the
+        row (shown as "n of m samples selected"), so a subsequent plot
+        contains exactly what is selected on the map. Otherwise every row
+        is selected, so a plot can be generated straight away.
+        """
         self.feature_list.setUpdatesEnabled(False)
+        # Rebuilding must not read as the user ticking rows.
+        self.feature_list.blockSignals(True)
         self.feature_list.clear()
-        id_field = self.id_field_combo.currentText()
-        
+        id_field = self.id_field_combo.currentData()
+
         selected_ids = set(layer.selectedFeatureIds())
         field_names = [f.name() for f in layer.fields()]
-        use_id_field = id_field and id_field in field_names
-        
-        items_to_add = []
-        
+        use_id_field = bool(id_field) and id_field in field_names
+
+        # label -> [fids], in feature order
+        groups = {}
         for feature in layer.getFeatures():
-            label = None
             fid = feature.id()
-            
             if use_id_field:
                 value = feature[id_field]
                 if value is not None and value != NULL and str(value).strip() not in ('', 'NULL', 'None'):
                     label = str(value)
-            
-            if label is None:
+                else:
+                    label = "(no value)"
+            else:
                 label = f"Feature {fid}"
-            
-            items_to_add.append((label, fid))
-        
-        items_to_add.sort(key=lambda x: x[0].lower())
-        
+            groups.setdefault(label, []).append(fid)
+
         items_to_select = []
-        for label, fid in items_to_add:
-            item = QListWidgetItem(label)
-            item.setData(Qt_UserRole, fid)
+        for label in sorted(groups, key=str.lower):
+            all_fids = groups[label]
+            picked_fids = [fid for fid in all_fids if fid in selected_ids]
+            row_fids = picked_fids or all_fids
+
+            if len(all_fids) == 1:
+                text = label
+            elif picked_fids and len(picked_fids) < len(all_fids):
+                text = f"{label} ({len(picked_fids)} of {len(all_fids)} samples selected)"
+            else:
+                text = f"{label} ({len(all_fids)} samples)"
+
+            item = QListWidgetItem(text)
+            item.setData(Qt_UserRole, list(row_fids))
             self.feature_list.addItem(item)
-            
-            if fid in selected_ids:
+            if picked_fids or not selected_ids:
                 items_to_select.append(item)
-        
+
         for item in items_to_select:
             item.setSelected(True)
-        
+
+        self.feature_list.blockSignals(False)
         self.feature_list.setUpdatesEnabled(True)
 
-    def select_all_features(self):
-        """Select all features."""
+    def _on_list_selection_changed(self):
+        """Rows ticked by the user become the QGIS selection, so the map and
+        open plots follow. Every sample ticked means no selection, as on start."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        fids = self._selected_feature_ids()
+        self._list_driving_selection = True
+        try:
+            if not fids or len(set(fids)) >= layer.featureCount():
+                layer.removeSelection()
+            else:
+                layer.selectByIds(fids)
+        finally:
+            self._list_driving_selection = False
+
+    # ------------------------------------------------------------------
+    # Selection history (recall earlier selections of a layer)
+    # ------------------------------------------------------------------
+    # Each layer has a list of entries {'name': str, 'notes': str, 'fids': [int],
+    # 'saved': bool}. Every selection made on the map or a plot adds one for this
+    # session; saved ones (named by the user) also live on the layer as a custom
+    # property, so they are stored in the QGIS project.
+
+    SAVED_SELECTIONS_PROPERTY = 'geochem_plotting/saved_selections'
+    MAX_UNSAVED_SELECTIONS = 30
+
+    def _current_layer(self):
+        layer_id = self.layer_combo.currentData()
+        return QgsProject.instance().mapLayer(layer_id) if layer_id else None
+
+    def _selection_entries(self, layer):
+        """The layer's selection entries, loading saved ones on first use."""
+        entries = self._selection_history.get(layer.id())
+        if entries is None:
+            entries = []
+            try:
+                stored = json.loads(layer.customProperty(self.SAVED_SELECTIONS_PROPERTY) or '[]')
+            except (TypeError, ValueError):
+                stored = []
+            for item in stored:
+                entries.append({'name': str(item.get('name', '')), 'notes': str(item.get('notes', '')),
+                                'fids': [int(fid) for fid in item.get('fids', [])], 'saved': True})
+            self._selection_history[layer.id()] = entries
+        return entries
+
+    def _store_saved_selections(self, layer):
+        """Write the layer's saved selections to the layer (and so the project)."""
+        saved = [{'name': e['name'], 'notes': e['notes'], 'fids': e['fids']}
+                 for e in self._selection_entries(layer) if e['saved']]
+        layer.setCustomProperty(self.SAVED_SELECTIONS_PROPERTY, json.dumps(saved))
+        QgsProject.instance().setDirty(True)
+
+    def _record_selection(self, layer, fids):
+        """Add `fids` to the layer's history, unless already listed. Returns its entry."""
+        entries = self._selection_entries(layer)
+        fid_set = set(fids)
+        for entry in entries:
+            if set(entry['fids']) == fid_set:
+                return entry
+        entry = {'name': f"{len(fids)} samples, {datetime.now().strftime('%H:%M:%S')}",
+                 'notes': '', 'fids': list(fids), 'saved': False}
+        entries.append(entry)
+        unsaved = [e for e in entries if not e['saved']]
+        if len(unsaved) > self.MAX_UNSAVED_SELECTIONS:
+            entries.remove(unsaved[0])
+        return entry
+
+    def _refresh_selection_combo(self, layer, current=None):
+        """List the layer's selection entries, showing `current`."""
+        self.selection_combo.clear()
+        if layer is None:
+            return
+        entries = self._selection_entries(layer)
+        for i, entry in enumerate(entries):
+            text = f"★ {entry['name']} ({len(entry['fids'])})" if entry['saved'] else entry['name']
+            self.selection_combo.addItem(text)
+            if entry['notes']:
+                self.selection_combo.setItemData(i, entry['notes'], Qt_ToolTipRole)
+        self.selection_combo.setCurrentIndex(entries.index(current) if current in entries else -1)
+        fit_popup_width(self.selection_combo)
+
+    def _watch_layer_selection(self, layer):
+        """Follow the selection of the layer shown in the plugin."""
+        previous = self._selection_watched_layer
+        if previous is layer:
+            return
+        if previous is not None:
+            try:
+                previous.selectionChanged.disconnect(self._on_watched_selection_changed)
+            except (TypeError, RuntimeError):  # already disconnected or layer deleted
+                pass
+        self._selection_watched_layer = layer
+        if layer is not None:
+            layer.selectionChanged.connect(self._on_watched_selection_changed)
+
+    def _on_watched_selection_changed(self, *_args):
+        """Keep the sample list current and record new selections."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        if self._list_driving_selection:
+            # Keep the rows as ticked, and no history entry per ticked row.
+            self.selection_combo.setCurrentIndex(-1)
+            return
+        self.update_feature_list(layer)
+        fids = layer.selectedFeatureIds()
+        if self._restoring_selection:
+            return
+        self._refresh_selection_combo(layer, self._record_selection(layer, fids) if fids else None)
+
+    def _restore_selection_at(self, index):
+        """Select again the samples of the entry at `index` of the list."""
+        layer = self._current_layer()
+        if layer is None:
+            return
+        entries = self._selection_entries(layer)
+        if not 0 <= index < len(entries):
+            return
+        self._restoring_selection = True
+        try:
+            layer.selectByIds(entries[index]['fids'])
+        finally:
+            self._restoring_selection = False
+        self._refresh_selection_combo(layer, entries[index])
+
+    def _step_selection(self, step):
+        """Go back (-1) or forward (+1) through the layer's selections."""
+        count = self.selection_combo.count()
+        if count == 0:
+            return
+        index = self.selection_combo.currentIndex()
+        target = (count - 1 if step < 0 else 0) if index < 0 else index + step
+        self._restore_selection_at(max(0, min(count - 1, target)))
+
+    def _ask_selection_details(self, name, notes):
+        """Ask for a selection's name and notes; returns (name, notes) or None."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save selection")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        name_edit = QLineEdit(name, dialog)
+        notes_edit = QPlainTextEdit(notes, dialog)
+        form.addRow("Name:", name_edit)
+        form.addRow("Notes:", notes_edit)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox_Ok | QDialogButtonBox_Cancel, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog_Accepted or not name_edit.text().strip():
+            return None
+        return name_edit.text().strip(), notes_edit.toPlainText().strip()
+
+    def save_current_selection(self):
+        """Name the current selection and keep it with the layer."""
+        layer = self._current_layer()
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+        fids = layer.selectedFeatureIds() or self._selected_feature_ids()
+        if not fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return
+        entry = self._record_selection(layer, fids)
+        details = self._ask_selection_details(entry['name'] if entry['saved'] else '', entry['notes'])
+        if details is None:
+            self._refresh_selection_combo(layer, entry)
+            return
+        entry['name'], entry['notes'] = details
+        entry['saved'] = True
+        self._store_saved_selections(layer)
+        self._refresh_selection_combo(layer, entry)
+
+    def delete_listed_selection(self):
+        """Remove the selection shown in the list (the samples stay selected)."""
+        layer = self._current_layer()
+        index = self.selection_combo.currentIndex()
+        if layer is None or index < 0:
+            return
+        entries = self._selection_entries(layer)
+        entry = entries.pop(index)
+        if entry['saved']:
+            self._store_saved_selections(layer)
+        self._refresh_selection_combo(layer)
+
+    # ------------------------------------------------------------------
+    # Copy the selection to the clipboard
+    # ------------------------------------------------------------------
+
+    def _selected_features_for_copy(self):
+        """(layer, features) of the samples selected in the sample list, or None."""
+        layer = self._current_layer()
+        fids = self._selected_feature_ids()
+        if layer is None or not fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return None
+        return layer, [layer.getFeature(fid) for fid in fids]
+
+    @staticmethod
+    def _clipboard_cell(value):
+        """A field value as clipboard text (no tabs/line breaks, NULL as empty)."""
+        if value is None or value == NULL:
+            return ''
+        return ' '.join(str(value).split())
+
+    def _copy_to_clipboard(self, text, description):
+        QApplication.clipboard().setText(text)
+        self.iface.messageBar().pushInfo("Geochemistry Plotting Tools", f"{description} copied to the clipboard.")
+
+    def copy_selection_table(self):
+        """Copy the selected samples' attribute table as tab-separated text."""
+        selection = self._selected_features_for_copy()
+        if selection is None:
+            return
+        layer, features = selection
+        names = [field.name() for field in layer.fields()]
+        lines = ['\t'.join(names)]
+        for feature in features:
+            lines.append('\t'.join(self._clipboard_cell(feature[name]) for name in names))
+        self._copy_to_clipboard('\n'.join(lines), f"Attribute table of {len(features)} sample(s)")
+
+    def copy_selection_labels(self):
+        """Copy the "Add label" field's values of the selected samples, one per line."""
+        selection = self._selected_features_for_copy()
+        if selection is None:
+            return
+        layer, features = selection
+        label_field = self.label_field_combo.currentData()
+        if not label_field or layer.fields().indexOf(label_field) < 0:
+            QMessageBox.warning(self, "Warning", "Please choose a field under \"Add label\".")
+            return
+        values = [self._clipboard_cell(feature[label_field]) for feature in features]
+        values = [value for value in values if value]
+        self._copy_to_clipboard('\n'.join(values), f"{len(values)} '{label_field}' label(s)")
+
+    def _selected_feature_ids(self):
+        """Feature ids carried by the selected rows of the sample list, in list order."""
+        fids = []
         for i in range(self.feature_list.count()):
-            self.feature_list.item(i).setSelected(True)
+            item = self.feature_list.item(i)
+            if item.isSelected():
+                fids.extend(item.data(Qt_UserRole))
+        return fids
+
+    def _set_all_rows_selected(self, selected):
+        self.feature_list.blockSignals(True)
+        for i in range(self.feature_list.count()):
+            self.feature_list.item(i).setSelected(selected)
+        self.feature_list.blockSignals(False)
+
+    def select_all_features(self):
+        """Select every sample of the layer: rows only carry their selected
+        samples while a QGIS selection exists, so that is cleared first."""
+        layer = self._current_layer()
+        if layer is not None and layer.selectedFeatureCount():
+            layer.removeSelection()  # the list then rebuilds with all rows selected
+        else:
+            self._set_all_rows_selected(True)
 
     def deselect_all_features(self):
-        """Deselect all features."""
-        for i in range(self.feature_list.count()):
-            self.feature_list.item(i).setSelected(False)
+        """Untick every row, leaving any QGIS selection as it is."""
+        self._set_all_rows_selected(False)
 
     def refresh_selection(self):
         """Refresh feature list from QGIS selection."""
@@ -3639,17 +5491,17 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.warning(self, "Warning", "Please select a valid layer.")
             return
 
-        selected_items = self.feature_list.selectedItems()
-        if not selected_items:
+        selected_fids = self._selected_feature_ids()
+        if not selected_fids:
             QMessageBox.warning(self, "Warning", "Please select at least one sample.")
             return
 
-        id_field = self.id_field_combo.currentText()
+        id_field = self.id_field_combo.currentData()
         use_category_field = bool(id_field) and id_field != NO_CATEGORY_OPTION
+        self._last_bubble_info = None
         features = []
         sample_names = []
-        for item in selected_items:
-            fid = item.data(Qt_UserRole)
+        for fid in selected_fids:
             feature = layer.getFeature(fid)
             features.append(feature)
             if use_category_field:
@@ -3658,19 +5510,38 @@ class GeochemistryDockWidget(QDockWidget):
                 sample_names.append(NO_CATEGORY_LABEL)
 
         plt.ion()
-        
-        if self.tab_widget.currentIndex() == 0:
-            self.generate_spider_diagram(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 1:
-            self.generate_discrimination_diagram(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 2:
-            self.generate_custom_xy_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 3:
-            self.generate_custom_ternary_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 4:
-            self.generate_minerals_plot(layer, features, sample_names)
-        elif self.tab_widget.currentIndex() == 5:
-            self.generate_petrophysics_plot(layer, features, sample_names)
+
+        # Several ticked "Size by" entries are added together: warn first
+        # if their units can't be reconciled.
+        self._bubble_plan_cache = {}
+        if not self._confirm_bubble_units(layer, self._tab_bubble_prefix()):
+            return
+
+        # Record which layer fields each element/oxide is read from, and
+        # report them in the QGIS log so the field recognition can be checked.
+        global _FIELD_USAGE
+        _FIELD_USAGE = {}
+        try:
+            if self.tab_widget.currentIndex() == 0:
+                self.generate_spider_diagram(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 1:
+                self.generate_discrimination_diagram(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 2:
+                self.generate_custom_xy_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 3:
+                self.generate_custom_ternary_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 4:
+                self.generate_minerals_plot(layer, features, sample_names)
+            elif self.tab_widget.currentIndex() == 5:
+                self.generate_petrophysics_plot(layer, features, sample_names)
+        finally:
+            usage, _FIELD_USAGE = _FIELD_USAGE, None
+            if usage:
+                plot_name = self.tab_widget.tabText(self.tab_widget.currentIndex())
+                symbology_bridge.log(
+                    f"{plot_name} plot of layer '{layer.name()}' - fields used: " +
+                    ', '.join(f"{element} ← {' / '.join(sorted(fields))}"
+                              for element, fields in sorted(usage.items())))
 
     def generate_spider_diagram(self, layer, features, sample_names):
         """Generate spider diagram."""
@@ -3679,7 +5550,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('spider')
-        size_data = [get_custom_element_value(feature, layer, size_field) if bubble_active else None
+        size_data = [self._bubble_value(feature, layer, 'spider') if bubble_active else None
                     for feature in features]
         bubble_vmin = bubble_vmax = None
         if bubble_active:
@@ -3770,7 +5641,9 @@ class GeochemistryDockWidget(QDockWidget):
                         if sv is not None else bubble_min_size)
                 line_markersize = math.sqrt(area)
             else:
-                line_markersize = 8
+                # 8 unless the category's size was imported from the layer.
+                line_markersize = float(category_styles[name].get('markersize', 8)) \
+                    if category_styles[name].get('source') == 'layer' else 8
             sample_line_markersizes.append(line_markersize)
 
             lines = ax.plot(x_positions, values, marker=marker, markersize=line_markersize, linewidth=1.5,
@@ -3791,7 +5664,17 @@ class GeochemistryDockWidget(QDockWidget):
         ax.grid(True, which='major', axis='y', linestyle='-', alpha=0.3)
         ax.grid(True, which='minor', axis='y', linestyle=':', alpha=0.2)
 
-        n_samples = len(plot_data)
+        # A sample counts as plotted only if something of it is visible:
+        # missing elements leave gaps in its line, so it needs one usable
+        # value with markers on, or two adjacent ones (a line segment)
+        # without markers.
+        markers_on = self.spider_markers.isChecked()
+        plotted_names = []
+        for values, name in zip(plot_data, sample_names):
+            finite = np.isfinite(np.asarray(values, dtype=float))
+            if finite.any() if markers_on else np.any(finite[:-1] & finite[1:]):
+                plotted_names.append(name)
+        n_samples = len(plotted_names)
         ax.set_title(f'Multi-Element Spider Diagram (n={n_samples})\nNormalised to {norm_name}', fontsize=14)
 
         stats_registry, envelope_registry = _build_spider_stat_artists(
@@ -3799,7 +5682,7 @@ class GeochemistryDockWidget(QDockWidget):
             markers_enabled=self.spider_markers.isChecked(),
             sample_markersizes=sample_line_markersizes if bubble_active else None)
 
-        category_counts = Counter(sample_names)
+        category_counts = category_count_pairs(sample_names, plotted_names)
         export_legend_artists = {}
         category_legend_obj = None
         if self.spider_legend.isChecked():
@@ -3811,7 +5694,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
@@ -3821,7 +5704,8 @@ class GeochemistryDockWidget(QDockWidget):
             fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Spider Diagram Categories', bubble_active=bubble_active,
-            stats_registry=stats_registry, envelope_registry=envelope_registry)
+            stats_registry=stats_registry, envelope_registry=envelope_registry,
+            restyle_layer_categories=False)
         self.current_fig = fig
 
     def _prepare_diagram_for_run(self, diagram_class, layer):
@@ -3912,10 +5796,91 @@ class GeochemistryDockWidget(QDockWidget):
         )
 
         # Add the new field to the category dropdown if not already present, then select it
-        existing_fields = [self.id_field_combo.itemText(i) for i in range(self.id_field_combo.count())]
-        if field_name not in existing_fields:
-            self.id_field_combo.addItem(field_name)
-        self.id_field_combo.setCurrentText(field_name)
+        if self.id_field_combo.findData(field_name) < 0:
+            self.id_field_combo.addItem(field_name, field_name)
+        self.id_field_combo.setCurrentIndex(self.id_field_combo.findData(field_name))
+
+    def add_ree_lambda_fields(self):
+        """Add (or update) the O'Neill (2016) REE shape coefficient fields
+        lambda0-lambda4 for the samples selected in the list. Other features
+        are left unchanged; selected samples whose REE can't define the
+        pattern are set to NULL."""
+        layer = QgsProject.instance().mapLayer(self.layer_combo.currentData())
+        if layer is None:
+            QMessageBox.warning(self, "Warning", "Please select a valid layer.")
+            return
+        selected_fids = self._selected_feature_ids()
+        if not selected_fids:
+            QMessageBox.warning(self, "Warning", "Please select at least one sample.")
+            return
+
+        available = [e for e in ree_lambdas.FIT_ELEMENTS if find_element_field(layer, e) is not None]
+        reason = ree_lambdas.missing_data_reason(available)
+        if reason is not None:
+            QMessageBox.warning(
+                self, "Not Enough REE Data",
+                f"The REE shape coefficients can't be calculated for layer '{layer.name()}'.\n\n"
+                f"REE fields found (Eu excluded): {', '.join(available) or 'none'}.\n"
+                f"At least {ree_lambdas.MIN_FIT_ELEMENTS} are needed, including one of La-Nd "
+                "and one of Er-Lu.")
+            return
+
+        global _FIELD_USAGE
+        _FIELD_USAGE = {}
+        results = {}
+        skipped = Counter()
+        try:
+            for fid in selected_fids:
+                feature = layer.getFeature(fid)
+                concentrations = {e: get_element_ppm(feature, layer, e) for e in available}
+                lambdas, reason = ree_lambdas.fit_lambdas(concentrations)
+                results[fid] = lambdas
+                if lambdas is None:
+                    skipped[reason] += 1
+        finally:
+            usage, _FIELD_USAGE = _FIELD_USAGE, None
+        if usage:
+            symbology_bridge.log(
+                f"REE shape coefficients of layer '{layer.name()}' - fields used: " +
+                ', '.join(f"{element} ← {' / '.join(sorted(fields))}"
+                          for element, fields in sorted(usage.items())))
+
+        if not layer.isEditable():
+            if not layer.startEditing():
+                QMessageBox.critical(self, "Error",
+                    f"Cannot edit layer '{layer.name()}'. Make sure it is not read-only.")
+                return
+
+        for field_name in ree_lambdas.FIELD_NAMES:
+            if layer.fields().indexOf(field_name) < 0:
+                layer.addAttribute(QgsField(field_name, QVariant.Double))
+        layer.updateFields()
+        field_indices = [layer.fields().indexOf(name) for name in ree_lambdas.FIELD_NAMES]
+        if any(idx < 0 for idx in field_indices):
+            QMessageBox.critical(self, "Error", "Could not create the λ fields on this layer.")
+            layer.rollBack()
+            return
+
+        for fid, lambdas in results.items():
+            values = lambdas if lambdas is not None else [NULL] * len(field_indices)
+            for idx, value in zip(field_indices, values):
+                layer.changeAttributeValue(fid, idx, value)
+
+        if not layer.commitChanges():
+            QMessageBox.critical(self, "Error",
+                "Could not save the λ fields:\n" + "\n".join(layer.commitErrors()))
+            layer.rollBack()
+            return
+        layer.updateFields()
+
+        n_done = len(results) - sum(skipped.values())
+        message = (f"Fields {', '.join(ree_lambdas.FIELD_NAMES)} written to layer "
+                   f"'{layer.name()}' for {n_done} of {len(results)} selected samples "
+                   f"({ree_lambdas.REFERENCE}, CI-normalised, Eu excluded).")
+        if skipped:
+            message += "\n\nLeft empty (not enough REE data):\n" + "\n".join(
+                f"  {count} sample(s): {reason}" for reason, count in skipped.most_common())
+        QMessageBox.information(self, "REE Shape Coefficients", message)
 
     def generate_discrimination_diagram(self, layer, features, sample_names):
         """Generate discrimination diagram."""
@@ -3933,7 +5898,7 @@ class GeochemistryDockWidget(QDockWidget):
         for feature in features:
             coords = diagram_class.calculate_coordinates(feature, layer)
             data.append(coords)
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
 
@@ -3988,7 +5953,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), ax.get_legend())
+                self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -3999,7 +5964,8 @@ class GeochemistryDockWidget(QDockWidget):
             pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
         stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_count_pairs(sample_names, valid_names),
+            category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Discrimination Diagram Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -4018,12 +5984,13 @@ class GeochemistryDockWidget(QDockWidget):
         for feature in features:
             coords = minerals_class.calculate_coordinates(feature, layer)
             data.append(coords)
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         valid_count = sum(1 for coords in data if coords[0] is not None)
         if valid_count == 0:
             QMessageBox.warning(self, "Warning",
-                "No valid data points. Layer needs La, Ce, Pr, Nd, Sr and Y fields.")
+                "No valid data points. Layer needs La, Ce, Pr, Nd, Sr and Y fields\n"
+                "(element names such as Sr_Strontium, or isotope names such as Sr88, Y89, La139).")
             return
 
         pts_data = []
@@ -4067,7 +6034,7 @@ class GeochemistryDockWidget(QDockWidget):
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), ax.get_legend())
+                self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
@@ -4078,7 +6045,8 @@ class GeochemistryDockWidget(QDockWidget):
             pts_data, valid_names, category_colors, category_markers, sizes=valid_sizes)
         stats_registry, envelope_registry = _build_xy_stat_artists(ax, stat_groups)
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_count_pairs(sample_names, valid_names),
+            category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Mineral Classification Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -4134,14 +6102,7 @@ class GeochemistryDockWidget(QDockWidget):
                 yv = None
             x_data.append(xv)
             y_data.append(yv)
-            if bubble_active:
-                try:
-                    sv = feature[size_field]
-                    sv = float(sv) if sv is not None and sv != NULL else None
-                except (ValueError, TypeError):
-                    sv = None
-            else:
-                sv = None
+            sv = self._bubble_value(feature, layer, 'petro', raw_fields=True) if bubble_active else None
             size_data.append(sv)
             if xv is not None and yv is not None:
                 valid_count += 1
@@ -4215,25 +6176,27 @@ class GeochemistryDockWidget(QDockWidget):
         ax.set_title(f"{y_field} vs {x_field} (n={valid_count})", fontsize=14)
         ax.grid(True, alpha=0.3)
 
+        category_counts = category_count_pairs(
+            sample_names, [name for name, valid in zip(sample_names, valid_mask) if valid])
         export_legend_artists = {}
         category_legend_obj = None
         if self.petro_legend.isChecked() and unique_categories:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(sample_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.12), fontsize=8)
             category_legend_obj = ax.get_legend()
 
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Petrophysics Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
@@ -4276,16 +6239,16 @@ class GeochemistryDockWidget(QDockWidget):
             QMessageBox.warning(self, "Warning", "Please select a valid layer.")
             return
 
-        selected_items = self.feature_list.selectedItems()
-        if not selected_items:
+        selected_fids = self._selected_feature_ids()
+        if not selected_fids:
             QMessageBox.warning(self, "Warning", "Please select at least one sample.")
             return
-        features = [layer.getFeature(item.data(Qt_UserRole)) for item in selected_items]
+        features = [layer.getFeature(fid) for fid in selected_fids]
 
-        fields = [f for f in dict.fromkeys([
-            self.x_num_combo.currentText(), self.x_denom_combo.currentText(),
-            self.y_num_combo.currentText(), self.y_denom_combo.currentText(),
-        ]) if f not in ('1 (none)', 'Mg#')]
+        fields = [f for f in dict.fromkeys(
+            self.x_num_combo.checked_items() + self.x_denom_combo.checked_items() +
+            self.y_num_combo.checked_items() + self.y_denom_combo.checked_items()
+        ) if f not in ('1 (none)', 'Mg#')]
 
         if not fields:
             self.custom_bdl_review_label.setText("No fields selected to review.")
@@ -4320,11 +6283,20 @@ class GeochemistryDockWidget(QDockWidget):
             plt.show()
 
     def generate_custom_xy_plot(self, layer, features, sample_names):
-        """Generate custom XY plot."""
-        x_num = self.x_num_combo.currentText()
-        x_denom = self.x_denom_combo.currentText()
-        y_num = self.y_num_combo.currentText()
-        y_denom = self.y_denom_combo.currentText()
+        """Generate custom XY plot.
+
+        Each numerator/denominator is a list of ticked entries, added
+        together (e.g. Na2O + K2O); see custom_sum_plan() for units.
+        """
+        x_num = self.x_num_combo.checked_items()
+        x_denom = self.x_denom_combo.checked_items() or ['1 (none)']
+        y_num = self.y_num_combo.checked_items()
+        y_denom = self.y_denom_combo.checked_items() or ['1 (none)']
+
+        if not x_num or not y_num:
+            QMessageBox.warning(self, "Warning", "Please select X and Y fields.")
+            return
+
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('custom')
 
@@ -4338,15 +6310,27 @@ class GeochemistryDockWidget(QDockWidget):
                 norm_values = None
                 norm_name = ""
         
-        def build_label(num, denom, norm_values):
-            num_is_ree = num in REE_ELEMENTS
-            denom_is_ree = denom in REE_ELEMENTS if denom != '1 (none)' else False
-            
-            norm_suffix = ""
-            if norm_values:
-                if num_is_ree or denom_is_ree:
-                    norm_suffix = "ₙ"
-            
+        # How each (possibly multi-entry) sum is added up, and whether its
+        # entries' units could not be reconciled.
+        sum_factors, sum_units, unit_problems = {}, {}, []
+        for key, terms in (('x_num', x_num), ('x_denom', x_denom),
+                           ('y_num', y_num), ('y_denom', y_denom)):
+            sum_factors[key], sum_units[key], problem = custom_sum_plan(layer, terms, norm_values)
+            if problem:
+                unit_problems.append(f"{' + '.join(terms)}: {problem}")
+
+        def build_label(num_terms, denom_terms, num_unit, norm_values):
+            none_denom = denom_terms == ['1 (none)']
+            norm_on = bool(norm_values) and any(
+                t in REE_ELEMENTS for t in num_terms + ([] if none_denom else denom_terms))
+
+            def term_str(term):
+                return f"{term}ₙ" if norm_on and term in REE_ELEMENTS else term
+
+            def sum_str(terms, bracket):
+                text = ' + '.join(term_str(t) for t in terms)
+                return f"({text})" if bracket and len(terms) > 1 else text
+
             def get_unit(elem):
                 # A field picked via "show all numeric fields" isn't a
                 # recognised symbol - its raw name already carries its own
@@ -4358,23 +6342,29 @@ class GeochemistryDockWidget(QDockWidget):
                 if elem in OXIDE_COMPOSITION:
                     return ' (wt%)'
                 return ' (ppm)'
-            
-            if denom == '1 (none)':
-                unit = get_unit(num)
-                if norm_suffix and num_is_ree:
-                    return f"{num}{norm_suffix}{unit}"
-                return f"{num}{unit}"
-            else:
-                num_str = f"{num}{norm_suffix}" if norm_suffix and num_is_ree else num
-                denom_str = f"{denom}{norm_suffix}" if norm_suffix and denom_is_ree else denom
-                return f"{num_str} / {denom_str}"
-        
-        x_label = build_label(x_num, x_denom, norm_values)
-        y_label = build_label(y_num, y_denom, norm_values)
-        
+
+            if none_denom:
+                unit = get_unit(num_terms[0]) if len(num_terms) == 1 else num_unit
+                return f"{sum_str(num_terms, False)}{unit}"
+            return f"{sum_str(num_terms, True)} / {sum_str(denom_terms, True)}"
+
+        x_label = build_label(x_num, x_denom, sum_units['x_num'], norm_values)
+        y_label = build_label(y_num, y_denom, sum_units['y_num'], norm_values)
+
+        if unit_problems:
+            reply = QMessageBox.warning(
+                self, "Adding fields with different units",
+                "Some ticked entries are added together although their units could not be "
+                "brought to a common unit:\n\n" + "\n".join(unit_problems) +
+                "\n\nMake sure that fields added together are concentrations reported in the "
+                "same unit. Plot anyway?",
+                QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+            if reply != QMessageBox_Ok:
+                return
+
         # Check required elements
         elements_needed = set()
-        for elem in [x_num, x_denom, y_num, y_denom] + ([size_field] if bubble_active else []):
+        for elem in x_num + x_denom + y_num + y_denom + self._bubble_terms('custom'):
             if elem != '1 (none)':
                 if elem == 'Mg#':
                     elements_needed.add('MgO')
@@ -4382,12 +6372,9 @@ class GeochemistryDockWidget(QDockWidget):
                 else:
                     elements_needed.add(elem)
         
-        missing_elements = []
-        for elem in sorted(elements_needed):
-            field = find_element_field(layer, elem)
-            if field is None:
-                missing_elements.append(elem)
-        
+        missing_elements = [elem for elem in sorted(elements_needed)
+                            if not _is_custom_term_available(layer, elem)]
+
         if missing_elements:
             QMessageBox.warning(self, "Warning", 
                 f"Missing elements: {', '.join(missing_elements)}\nPlot cannot be generated.")
@@ -4402,24 +6389,13 @@ class GeochemistryDockWidget(QDockWidget):
             # Negative values (commonly used to code "below detection
             # limit" in exploration datasets) are substituted per the Data
             # Preprocessing tab if enabled, otherwise passed through as
-            # literal negative numbers rather than being discarded.
-            x_num_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, x_num,
-                normalize=(norm_values is not None and x_num in REE_ELEMENTS),
-                norm_values=norm_values))
-            x_denom_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, x_denom,
-                normalize=(norm_values is not None and x_denom in REE_ELEMENTS),
-                norm_values=norm_values))
-
-            y_num_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, y_num,
-                normalize=(norm_values is not None and y_num in REE_ELEMENTS),
-                norm_values=norm_values))
-            y_denom_val = self._apply_bdl_substitution(get_custom_element_value(
-                feature, layer, y_denom,
-                normalize=(norm_values is not None and y_denom in REE_ELEMENTS),
-                norm_values=norm_values))
+            # literal negative numbers rather than being discarded. Several
+            # ticked entries are added together (after unit conversion).
+            x_num_val, x_denom_val, y_num_val, y_denom_val = (
+                custom_sum_value(feature, layer, terms, sum_factors[key], norm_values,
+                                 transform=self._apply_bdl_substitution)
+                for key, terms in (('x_num', x_num), ('x_denom', x_denom),
+                                   ('y_num', y_num), ('y_denom', y_denom)))
 
             x_val = None
             y_val = None
@@ -4432,8 +6408,9 @@ class GeochemistryDockWidget(QDockWidget):
 
             x_data.append(x_val)
             y_data.append(y_val)
-            size_val = self._apply_bdl_substitution(
-                get_custom_element_value(feature, layer, size_field)) if bubble_active else None
+            size_val = self._bubble_value(
+                feature, layer, 'custom',
+                transform=self._apply_bdl_substitution) if bubble_active else None
             size_data.append(size_val)
 
             if x_val is not None and y_val is not None:
@@ -4524,29 +6501,179 @@ class GeochemistryDockWidget(QDockWidget):
 
         ax.grid(True, alpha=0.3)
 
+        category_counts = category_count_pairs(
+            sample_names, [name for name, valid in zip(sample_names, valid_mask) if valid])
         export_legend_artists = {}
         category_legend_obj = None
         if self.custom_legend.isChecked() and len(unique_categories) > 0:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(sample_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.12), fontsize=8)
             category_legend_obj = ax.get_legend()
 
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                build_label(size_field, '1 (none)', None), category_legend_obj)
+                self._bubble_label(layer, 'custom'), category_legend_obj)
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(sample_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Custom XY Plot Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)
         self.current_fig = fig
+
+    def _ensure_selected_on_top(self, layer_id):
+        """Make selected features draw above unselected ones on the QGIS map.
+
+        Sets the layer renderer's "Control feature rendering order" to
+        is_selected() ascending (0 = unselected drawn first, 1 = selected
+        drawn last, i.e. on top), so points picked on a plot are never hidden
+        under overlapping unselected points.
+
+        Applied whenever a layer is chosen in the plugin, a plot is made, or
+        the layer's symbology is replaced (which resets the order). Any
+        ordering the user already set is kept as secondary sort keys.
+        """
+        layer = QgsProject.instance().mapLayer(layer_id) if isinstance(layer_id, str) else layer_id
+        if layer is None or not hasattr(layer, 'renderer'):
+            return
+        try:
+            from qgis.core import QgsFeatureRequest
+            renderer = layer.renderer()
+            if renderer is None:
+                return
+            existing = renderer.orderBy().list() if renderer.orderByEnabled() else []
+            if existing and existing[0].expression().expression().strip() == 'is_selected()' \
+                    and existing[0].ascending():
+                return  # already in place
+            others = [clause for clause in existing
+                      if clause.expression().expression().strip() != 'is_selected()']
+            # Positional (expression, ascending, nullsFirst): the keyword
+            # spelling differs between QGIS versions and fails silently here.
+            renderer.setOrderBy(QgsFeatureRequest.OrderBy(
+                [QgsFeatureRequest.OrderByClause('is_selected()', True, False)] + others))
+            renderer.setOrderByEnabled(True)
+            layer.triggerRepaint()
+        except Exception as exc:  # best-effort draw-order tweak, must not block selection/plotting
+            symbology_bridge.log(f'Could not set the selected-on-top rendering order: {exc}', warning=True)
+
+    def _attach_area_selectors(self, fig, ax, select_area, clear_selection):
+        """Add the freehand and rectangle area-selection tools to a plot.
+
+        `select_area(path, additive)` gets the drawn area as a matplotlib Path
+        in display coordinates (so it also holds on log axes), and whether to
+        add to the current selection (Shift held, or "Add to selection" on).
+        `clear_selection()` runs on Escape and from the style panel.
+
+        Returns the state dict, also stored as fig._geochem_selection_state:
+        'tool' ('freehand'/'rectangle'), 'add', 'sync()' (apply the tool),
+        'additive(key)' and 'was_drag(event)' for the plot's click handlers.
+        """
+        state = dict(self._plot_selection_prefs, press=None, press_key='', dragged=False,
+                     clear=clear_selection)
+
+        def on_press(event):
+            inside = event.button == 1 and event.inaxes is ax
+            state['press'] = (event.x, event.y) if inside else None
+            state['press_key'] = (event.key or '') if inside else ''
+            state['dragged'] = False
+
+        def on_motion(event):
+            # Tracked during the drag, as a freehand loop can end where it began.
+            press = state['press']
+            if press is not None and max(abs(event.x - press[0]), abs(event.y - press[1])) > 5:
+                state['dragged'] = True
+
+        def additive(key=None):
+            return state['add'] or 'shift' in (state['press_key'] if key is None else key or '').lower()
+
+        def was_drag(event):
+            on_motion(event)
+            return state['dragged']
+
+        def finish(vertices):
+            vertices = np.asarray(vertices, dtype=float)
+            if len(vertices) < 3 or not np.isfinite(vertices).all() or np.ptp(vertices, axis=0).max() <= 5:
+                return
+            select_area(Path(vertices), additive())
+            fig.canvas.draw_idle()
+
+        def on_rectangle(eclick, erelease):
+            x0, y0, x1, y1 = eclick.x, eclick.y, erelease.x, erelease.y
+            finish([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+
+        def on_lasso(vertices):
+            finish(ax.transData.transform(vertices))
+
+        def on_key(event):
+            if event.key == 'escape':
+                clear_selection()
+
+        # useblit=False: blitting caches a snapshot of the canvas at drag-start
+        # and restores it instead of a full redraw. Our own selection overlay
+        # (_draw_selection_overlay/show_selection) mutates artists and redraws
+        # independently (via draw_idle()); if that redraw hasn't been flushed
+        # yet when a drag starts, the selector's cached background goes stale
+        # and gets blitted back over the current frame, leaving a "ghost" of
+        # an earlier overlay frozen on the plot until something forces a full
+        # redraw (e.g. a resize).
+        rectangle = RectangleSelector(ax, on_rectangle, useblit=False, button=[1],
+                                      props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
+                                                 alpha=0.3, linewidth=1.5))
+        lasso = LassoSelector(ax, on_lasso, useblit=False, button=1,
+                              props=dict(color='steelblue', linewidth=1.5))
+        fig._geochem_selectors = (rectangle, lasso)  # keep references from being garbage-collected
+
+        def sync():
+            rectangle.set_active(state['tool'] == 'rectangle')
+            lasso.set_active(state['tool'] == 'freehand')
+
+        state.update(sync=sync, additive=additive, was_drag=was_drag)
+        sync()
+        fig.canvas.mpl_connect('button_press_event', on_press)
+        fig.canvas.mpl_connect('motion_notify_event', on_motion)
+        fig.canvas.mpl_connect('key_press_event', on_key)
+        fig._geochem_selection_state = state
+        return state
+
+    def _link_layer_selection(self, fig, layer_id, on_map_selection_changed):
+        """Wire a plot to its layer's selection, in both directions.
+
+        Applies the selected-on-top rendering order, and connects the layer's
+        selectionChanged signal to `on_map_selection_changed` so features
+        selected on the QGIS map (or via the attribute table) are highlighted
+        on the plot. The connection is dropped when the figure is closed.
+        """
+        self._ensure_selected_on_top(layer_id)
+
+        layer = QgsProject.instance().mapLayer(layer_id)
+        if layer is None:
+            return
+
+        state = {'closed': False}
+
+        def handler(selected, deselected, clear_and_select):
+            if state['closed']:
+                return
+            try:
+                on_map_selection_changed(selected, deselected, clear_and_select)
+            except Exception:  # nosec B110 - a stale/closing figure must never break QGIS selection
+                pass
+
+        def on_close(event):
+            state['closed'] = True
+            try:
+                layer.selectionChanged.disconnect(handler)
+            except (TypeError, RuntimeError):
+                pass  # already disconnected, or the layer was removed from the project
+
+        layer.selectionChanged.connect(handler)
+        fig.canvas.mpl_connect('close_event', on_close)
 
     def _attach_scatter_selection(self, fig, ax, pts_data, fid_list, fid_to_scatter, layer_id):
         """Wire up point selection on scatter-based plots.
@@ -4554,7 +6681,7 @@ class GeochemistryDockWidget(QDockWidget):
         Left-click (no toolbar mode): select nearest point in QGIS.
         Shift+left-click: toggle that point in the QGIS selection.
         Left-click on empty space: clear QGIS selection.
-        Left-drag: rubber-band rectangle selects all enclosed points.
+        Left-drag: freehand or rectangle area selects all enclosed points.
         Shift+left-drag: adds enclosed points to the current selection.
         Selected points are highlighted with a red edge on the plot.
         """
@@ -4572,11 +6699,67 @@ class GeochemistryDockWidget(QDockWidget):
             fontsize=8, visible=False, zorder=20
         )
 
-        def apply_selection(selected_fids):
+        # Points are drawn one collection per category, so a selected point
+        # keeps its category's depth and can be hidden under unselected
+        # points of categories drawn later. Copies of the selected points
+        # are therefore redrawn in overlay collections above every category
+        # (below labels/tooltips at zorder 20).
+        overlay_artists = []
+        overlay_selection = [set()]
+
+        def _draw_selection_overlay(selected_set):
+            overlay_selection[0] = set(selected_set)
+            for artist in overlay_artists:
+                try:
+                    artist.remove()
+                except Exception:  # nosec B110 - already removed with its axes
+                    pass
+            overlay_artists.clear()
+            by_collection = {}
+            for fid in selected_set:
+                entry = fid_to_scatter.get(fid)
+                if entry is not None:
+                    by_collection.setdefault(entry[0], []).append(entry[1])
+            for sc, indices in by_collection.items():
+                if not sc.get_visible():
+                    continue  # category hidden in the style panel
+                indices = sorted(indices)
+                offsets = sc.get_offsets()
+                faces, sizes = sc.get_facecolors(), sc.get_sizes()
+                pick = lambda values: [values[i if len(values) > 1 else 0] for i in indices]
+                overlay_kwargs = dict(
+                    sizes=pick(sizes) if len(sizes) else None,
+                    offsets=[offsets[i] for i in indices],
+                    facecolors=pick(faces) if len(faces) else 'none',
+                    edgecolors='red', linewidths=2.0, alpha=sc.get_alpha(), zorder=12,
+                    # ax.scatter() marks its PathCollection's own transform as
+                    # already "set" (to IdentityTransform, since its per-path
+                    # unit-marker shape is scaled/placed via sizes+offsets, not
+                    # this transform). Without this, add_collection() below
+                    # treats the transform as unset and defaults it to
+                    # ax.transData - which then wrongly re-maps the marker's
+                    # tiny unit-shape vertices as if they were data
+                    # coordinates, rendering it as a giant, mispositioned blob.
+                    transform=IdentityTransform())
+                try:
+                    overlay = PathCollection(sc.get_paths(), offset_transform=ax.transData,
+                                             **overlay_kwargs)
+                except (TypeError, AttributeError):
+                    # matplotlib < 3.6 spells the offsets' transform transOffset.
+                    overlay = PathCollection(sc.get_paths(), transOffset=ax.transData,
+                                             **overlay_kwargs)
+                ax.add_collection(overlay, autolim=False)
+                overlay_artists.append(overlay)
+
+        # The style panel calls this after visibility/style edits, so the
+        # overlay follows hidden categories and new colours/markers/sizes.
+        fig._geochem_refresh_selection_overlay = lambda: _draw_selection_overlay(overlay_selection[0])
+
+        def show_selection(selected_fids):
+            """Highlight (and optionally label) `selected_fids` on the plot only."""
             layer = QgsProject.instance().mapLayer(layer_id)
             if layer is None:
                 return
-            layer.selectByIds(selected_fids)
             selected_set = set(selected_fids)
 
             for ann in current_labels:
@@ -4605,9 +6788,10 @@ class GeochemistryDockWidget(QDockWidget):
             for sc in coll_edge:
                 sc.set_edgecolors(coll_edge[sc])
                 sc.set_linewidths(coll_lw[sc])
+            _draw_selection_overlay(selected_set)
 
             if self.discrim_label.isChecked() and selected_fids:
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 layer_field_names = [f.name() for f in layer.fields()]
                 if label_field in layer_field_names:
                     for fid in selected_fids:
@@ -4634,62 +6818,49 @@ class GeochemistryDockWidget(QDockWidget):
                             current_labels.append(ann)
 
             fig.canvas.draw_idle()
+
+        _syncing = [False]
+
+        def apply_selection(selected_fids):
+            """Plot -> map: select `selected_fids` in QGIS and highlight them here."""
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            _syncing[0] = True
+            try:
+                layer.selectByIds(selected_fids)
+            finally:
+                _syncing[0] = False
+            show_selection(selected_fids)
             self.refresh_selection()
 
-        # Ensure selected features always render on top of unselected ones in QGIS.
-        # Sorts by is_selected() ascending (0 = unselected first, 1 = selected last/on top).
-        _layer_init = QgsProject.instance().mapLayer(layer_id)
-        if _layer_init is not None:
-            try:
-                from qgis.core import QgsFeatureRequest
-                renderer = _layer_init.renderer()
-                if renderer is not None:
-                    order_by = QgsFeatureRequest.OrderBy([
-                        QgsFeatureRequest.OrderByClause('is_selected()', ascending=True, nullsfirst=False)
-                    ])
-                    renderer.setOrderBy(order_by)
-                    renderer.setOrderByEnabled(True)
-                    _layer_init.triggerRepaint()
-            except Exception:  # nosec B110 - best-effort draw-order tweak, must not block selection/plotting
-                pass
-
-        _rect_used = [False]
-
-        def on_rect_select(eclick, erelease):
-            if eclick.xdata is None or erelease.xdata is None:
+        def on_map_selection_changed(selected, deselected, clear_and_select):
+            """Map -> plot: mirror a selection made in QGIS onto this plot."""
+            if _syncing[0]:
                 return
-            try:
-                p1 = ax.transData.transform([[eclick.xdata, eclick.ydata]])[0]
-                p2 = ax.transData.transform([[erelease.xdata, erelease.ydata]])[0]
-                if np.linalg.norm(p2 - p1) < 5:
-                    return
-            except Exception:
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
                 return
-            _rect_used[0] = True
-            x1 = min(eclick.xdata, erelease.xdata)
-            x2 = max(eclick.xdata, erelease.xdata)
-            y1 = min(eclick.ydata, erelease.ydata)
-            y2 = max(eclick.ydata, erelease.ydata)
-            xs = pts_array[:, 0]
-            ys = pts_array[:, 1]
-            inside = (xs >= x1) & (xs <= x2) & (ys >= y1) & (ys <= y2)
+            show_selection(layer.selectedFeatureIds())
+
+        self._link_layer_selection(fig, layer_id, on_map_selection_changed)
+
+        def select_area(path, additive):
+            inside = path.contains_points(ax.transData.transform(pts_array))
             new_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
-            key = eclick.key or ''
-            if 'shift' in key.lower():
+            if additive:
                 layer = QgsProject.instance().mapLayer(layer_id)
                 if layer is not None:
-                    current = set(layer.selectedFeatureIds())
-                    current.update(new_fids)
-                    new_fids = list(current)
+                    new_fids = list(set(layer.selectedFeatureIds()) | set(new_fids))
             apply_selection(new_fids)
-            fig.canvas.draw_idle()
+
+        selection = self._attach_area_selectors(fig, ax, select_area, lambda: apply_selection([]))
 
         def on_click(event):
             if event.button != 1:
                 return
-            # If rectangle select just fired on this mouse-up, skip single-point logic
-            if _rect_used[0]:
-                _rect_used[0] = False
+            # A drag belongs to the area-selection tools, not the single-point logic.
+            if selection['was_drag'](event):
                 return
             try:
                 if fig.canvas.toolbar.mode != '':
@@ -4711,15 +6882,15 @@ class GeochemistryDockWidget(QDockWidget):
 
             dists = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
             nearest_idx = int(np.argmin(dists))
-            key = event.key or ''
+            additive = selection['additive'](event.key)
 
             if dists[nearest_idx] > 10:
-                if 'shift' not in key.lower():
+                if not additive:
                     apply_selection([])
                 return
 
             fid = fid_list[nearest_idx]
-            if 'shift' in key.lower():
+            if additive:
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
                 apply_selection(list(current))
@@ -4745,7 +6916,7 @@ class GeochemistryDockWidget(QDockWidget):
             nearest_idx = int(np.argmin(dists))
             if dists[nearest_idx] <= 10:
                 fid = fid_list[nearest_idx]
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 cache_key = (fid, label_field)
                 if cache_key not in _hover_cache:
                     layer = QgsProject.instance().mapLayer(layer_id)
@@ -4774,16 +6945,14 @@ class GeochemistryDockWidget(QDockWidget):
 
         fig.canvas.mpl_connect('button_release_event', on_click)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
-        rect = RectangleSelector(ax, on_rect_select, useblit=True, button=[1],
-                                 props=dict(edgecolor='steelblue', facecolor='lightsteelblue',
-                                            alpha=0.3, linewidth=1.5))
-        fig._rect_selector = rect  # keep reference so it isn't garbage-collected
 
     def _attach_spider_selection(self, fig, line_to_fid, layer_id):
-        """Wire up click-to-select on spider diagram lines.
+        """Wire up selection on spider diagram lines.
 
         Click on a line: select that sample in QGIS.
         Shift+click: toggle that sample in the QGIS selection.
+        Left-drag: freehand or rectangle area selects every sample with a
+        data point inside it (Shift+left-drag adds them to the selection).
         Selected lines are drawn bold; unselected lines are dimmed.
         """
         if not line_to_fid:
@@ -4794,12 +6963,21 @@ class GeochemistryDockWidget(QDockWidget):
         for line in line_to_fid:
             line.set_picker(5)
 
-        def apply_selection(selected_fids):
-            layer = QgsProject.instance().mapLayer(layer_id)
-            if layer is None:
-                return
-            layer.selectByIds(selected_fids)
+        # Remember each line's own look so an empty selection (e.g. cleared
+        # on the map) restores it instead of leaving every line dimmed.
+        original_look = {line: (line.get_linewidth(), line.get_alpha(), line.get_zorder())
+                         for line in line_to_fid}
+
+        def show_selection(selected_fids):
+            """Emphasise the lines of `selected_fids` on the plot only."""
             selected_set = set(selected_fids)
+            if not selected_set:
+                for line, (linewidth, alpha, zorder) in original_look.items():
+                    line.set_linewidth(linewidth)
+                    line.set_alpha(alpha)
+                    line.set_zorder(zorder)
+                fig.canvas.draw_idle()
+                return
             for fid, line in fid_to_line.items():
                 if fid in selected_set:
                     line.set_linewidth(3.0)
@@ -4810,7 +6988,36 @@ class GeochemistryDockWidget(QDockWidget):
                     line.set_alpha(0.35)
                     line.set_zorder(5)
             fig.canvas.draw_idle()
+
+        _syncing = [False]
+
+        def apply_selection(selected_fids):
+            """Plot -> map: select `selected_fids` in QGIS and emphasise them here."""
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            _syncing[0] = True
+            try:
+                layer.selectByIds(selected_fids)
+            finally:
+                _syncing[0] = False
+            show_selection(selected_fids)
             self.refresh_selection()
+
+        def on_map_selection_changed(selected, deselected, clear_and_select):
+            """Map -> plot: mirror a selection made in QGIS onto this plot."""
+            if _syncing[0]:
+                return
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if layer is None:
+                return
+            show_selection(layer.selectedFeatureIds())
+
+        self._link_layer_selection(fig, layer_id, on_map_selection_changed)
+
+        # A pick fires on mouse press, which also starts any area-selection
+        # drag, so it only takes effect on release if the mouse didn't move.
+        pending_pick = [None]
 
         def on_pick(event):
             if not isinstance(event.artist, Line2D):
@@ -4822,14 +7029,16 @@ class GeochemistryDockWidget(QDockWidget):
                     return
             except AttributeError:
                 pass
+            pending_pick[0] = line_to_fid[event.artist]
 
+        def on_pick_release(event):
+            fid, pending_pick[0] = pending_pick[0], None
+            if fid is None or selection['was_drag'](event):
+                return
             layer = QgsProject.instance().mapLayer(layer_id)
             if layer is None:
                 return
-
-            fid = line_to_fid[event.artist]
-            key = getattr(event.mouseevent, 'key', None) or ''
-            if 'shift' in key.lower():
+            if selection['additive'](event.key):
                 current = set(layer.selectedFeatureIds())
                 current.symmetric_difference_update({fid})
                 apply_selection(list(current))
@@ -4837,6 +7046,21 @@ class GeochemistryDockWidget(QDockWidget):
                 apply_selection([fid])
 
         ax = next(iter(line_to_fid)).axes
+
+        def select_area(path, additive):
+            fids = set()
+            for line, fid in line_to_fid.items():
+                points = np.column_stack(line.get_data()).astype(float)
+                points = points[np.isfinite(points).all(axis=1)]
+                if len(points) and path.contains_points(ax.transData.transform(points)).any():
+                    fids.add(fid)
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if additive and layer is not None:
+                fids |= set(layer.selectedFeatureIds())
+            apply_selection(list(fids))
+
+        selection = self._attach_area_selectors(fig, ax, select_area, lambda: apply_selection([]))
+
         hover_ann = ax.annotate(
             '', xy=(0, 0), xytext=(10, 10), textcoords='offset points',
             bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', ec='gray', alpha=0.9),
@@ -4859,7 +7083,7 @@ class GeochemistryDockWidget(QDockWidget):
                     hit_fid = fid
                     break
             if hit_fid is not None:
-                label_field = self.label_field_combo.currentText()
+                label_field = self.label_field_combo.currentData()
                 cache_key = (hit_fid, label_field)
                 if cache_key not in _hover_cache:
                     layer = QgsProject.instance().mapLayer(layer_id)
@@ -4887,6 +7111,7 @@ class GeochemistryDockWidget(QDockWidget):
                     fig.canvas.draw_idle()
 
         fig.canvas.mpl_connect('pick_event', on_pick)
+        fig.canvas.mpl_connect('button_release_event', on_pick_release)
         fig.canvas.mpl_connect('motion_notify_event', on_hover)
 
     # ------------------------------------------------------------------
@@ -5056,12 +7281,23 @@ class GeochemistryDockWidget(QDockWidget):
         artist.set_zorder(base_cache[key] + bonus)
 
     def _build_default_category_styles(self, sample_names):
-        """Build fresh default per-category styles seeded from the auto colour map."""
+        """Build fresh default per-category styles seeded from the auto colour map.
+
+        With "Use layer symbology" on, categories found in the layer's
+        Categorized renderer take its colour/marker/size/label/visibility
+        instead (marked 'source': 'layer'); the rest keep these defaults.
+        """
         category_colors, _, unique_categories, category_markers, _ = create_categorical_color_map(sample_names)
         category_styles = {
             cat: self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat])
             for i, cat in enumerate(unique_categories)
         }
+        # Kept for the plot panel's own "Use layer symbology" toggle, which
+        # restores these defaults when switched off.
+        self._last_default_category_styles = {cat: dict(style) for cat, style in category_styles.items()}
+        layer_styles = self._layer_symbology_styles()
+        if layer_styles:
+            category_styles = symbology_bridge.merge_layer_styles(category_styles, layer_styles)
         return category_styles, unique_categories
 
     def _category_arrays_from_styles(self, category_styles, sample_names):
@@ -5085,7 +7321,7 @@ class GeochemistryDockWidget(QDockWidget):
         for handle, text in zip(handles, legend.get_texts()):
             # Legend labels may carry a " (n=123)" count suffix; strip it to
             # recover the raw category name used as the artist_registry key.
-            category = re.sub(r'\s*\(n=\d+\)$', '', text.get_text())
+            category = CATEGORY_COUNT_SUFFIX_RE.sub('', text.get_text())
             text.set_color('black')
             role = 'scatter' if hasattr(handle, 'set_paths') else 'marker'
             export_legend_artists.setdefault(category, []).extend([
@@ -5118,7 +7354,7 @@ class GeochemistryDockWidget(QDockWidget):
                 markeredgecolor=style.get('color', '#000000'),
                 markersize=max(4.0, float(style.get('markersize', 8)) * 0.7),
                 alpha=float(style.get('alpha', 1.0))))
-            legend_labels.append(f"{cat} (n={category_counts.get(cat, 0)})")
+            legend_labels.append(f"{cat} ({format_category_count(category_counts, cat)})")
         ax.legend(legend_handles, legend_labels, loc='upper center',
                  bbox_to_anchor=bbox_to_anchor, fontsize=fontsize,
                  ncol=ncol, framealpha=0.9, borderaxespad=0.)
@@ -5126,7 +7362,7 @@ class GeochemistryDockWidget(QDockWidget):
 
     def _field_display_label(self, field):
         """Human-readable label for a single element/oxide field, with unit."""
-        if field in OXIDE_COMPOSITION:
+        if field in OXIDE_COMPOSITION or field in TOTAL_IRON_TERM_OXIDE:
             return f"{field} (wt%)"
         if field in CUSTOM_XY_ELEMENTS and field not in ('1 (none)', 'Mg#'):
             return f"{field} (ppm)"
@@ -5224,10 +7460,34 @@ class GeochemistryDockWidget(QDockWidget):
             if hasattr(artist, 'set_alpha'):
                 artist.set_alpha(alpha)
 
+    COPIED_PLOT_DPI = 300
+
+    def _copy_plot_to_clipboard(self, fig):
+        """Copy the figure to the clipboard as an image, cropped to its
+        contents so legends outside the axes are kept."""
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='png', dpi=self.COPIED_PLOT_DPI, bbox_inches='tight')
+        QApplication.clipboard().setImage(QImage.fromData(buffer.getvalue(), 'PNG'))
+        self.iface.messageBar().pushInfo("Geochemistry Plotting Tools", "Plot copied to the clipboard.")
+
+    def _add_copy_plot_button(self, fig):
+        """Add a "Copy PNG" button to the plot window's toolbar, after Save."""
+        toolbar = getattr(getattr(fig.canvas, 'manager', None), 'toolbar', None)
+        if toolbar is None or not hasattr(toolbar, 'addAction'):
+            return
+        action = toolbar.addAction('Copy PNG')
+        action.setToolTip('Copy the plot to the clipboard as a PNG image')
+        action.triggered.connect(lambda _checked=False: self._copy_plot_to_clipboard(fig))
+        actions = toolbar.actions()
+        save_action = getattr(toolbar, '_actions', {}).get('save_figure')
+        if save_action in actions:
+            toolbar.insertAction(actions[actions.index(save_action) + 1], action)
+
     def _open_category_panel(self, fig, artist_registry, category_counts=None,
                              category_styles=None, title='Plot Categories',
                              style_template_key=None, export_legend_artists=None,
-                             bubble_active=False, stats_registry=None, envelope_registry=None):
+                             bubble_active=False, stats_registry=None, envelope_registry=None,
+                             restyle_layer_categories=True):
         """Embed category visibility/style controls in a right-hand Qt panel.
 
         The panel is attached to the Matplotlib figure's own Qt window as a
@@ -5244,7 +7504,15 @@ class GeochemistryDockWidget(QDockWidget):
         _build_spider_stat_artists(). When either is non-empty, a
         "Statistics" control is added that reveals them and fades the raw
         points/lines, without needing to re-plot (Qt dock path only).
+
+        Styles imported from the layer ('source': 'layer', see
+        _build_default_category_styles) start hidden when their renderer
+        category is unchecked, show their renderer label, and - when
+        `restyle_layer_categories` is True - have their full style (incl.
+        size) pushed onto the plotted artists on open. Plots that already
+        draw with the imported size (spider diagram) pass False.
         """
+        self._add_copy_plot_button(fig)
         if not artist_registry:
             return
 
@@ -5254,7 +7522,78 @@ class GeochemistryDockWidget(QDockWidget):
         stats_registry = stats_registry or {}
         envelope_registry = envelope_registry or {}
         categories = sorted(artist_registry.keys(), key=lambda x: str(x))
-        visible_state = {category: True for category in categories}
+        visible_state = {category: bool(category_styles.get(category, {}).get('visible', True))
+                         for category in categories}
+        layer_categories = [category for category in categories
+                            if category_styles.get(category, {}).get('source') == 'layer']
+        # The plot was generated from the dock's current layer/Category
+        # selection, so capture them now for "Apply to layer" later on.
+        plot_layer_id = self.layer_combo.currentData()
+        plot_category_field = self._current_category_field()
+        plot_bubble_prefix = self._tab_bubble_prefix()
+        plot_bubble = dict(self._last_bubble_info) \
+            if bubble_active and getattr(self, '_last_bubble_info', None) else None
+
+        def _display_label(category):
+            return category_styles.get(category, {}).get('label') or str(category)
+
+        # Plugin default styles for this plot (before any layer styles were
+        # merged in), restored when the panel's "Use layer symbology" is unticked.
+        default_styles = {cat: dict(style) for cat, style in
+                          getattr(self, '_last_default_category_styles', {}).items()}
+
+        def _leaf_artists(entries):
+            for entry in entries:
+                artist = entry.get('artist') if isinstance(entry, dict) else entry
+                if isinstance(artist, (list, tuple)):
+                    yield from _leaf_artists(artist)
+                elif artist is not None:
+                    yield artist
+
+        # How each artist was first drawn, for the panel's "Use layer
+        # symbology" toggle: scatter sizes are restored when it is switched
+        # off (the default style's markersize is not the initial scatter
+        # size), and lines drawn without markers (spider diagram with
+        # markers off) stay marker-less either way.
+        drawn_state = {}
+        for category in categories:
+            for artist in _leaf_artists(artist_registry.get(category, []) +
+                                        export_legend_artists.get(category, [])):
+                if hasattr(artist, 'get_sizes'):
+                    drawn_state[id(artist)] = ('sizes', artist.get_sizes().copy())
+                elif hasattr(artist, 'get_marker') and artist.get_marker() in (None, 'None', '', ' '):
+                    drawn_state[id(artist)] = ('no_marker',)
+
+        def _restore_drawn_state(category, restore_sizes):
+            for artist in _leaf_artists(artist_registry.get(category, []) +
+                                        export_legend_artists.get(category, [])):
+                saved = drawn_state.get(id(artist))
+                if saved is None:
+                    continue
+                if saved[0] == 'no_marker':
+                    artist.set_marker('None')
+                elif restore_sizes:
+                    artist.set_sizes(saved[1])
+
+        def _count_label(category):
+            # "<label> (n=plotted/selected)" for the panel and plot legend.
+            return f'{_display_label(category)} ({format_category_count(category_counts, category)})'
+
+        def _apply_legend_labels():
+            # Every plot-legend entry reads "<label> (n=plotted/selected)":
+            # imported renderer labels replace the raw category value (which
+            # comes back when they are removed), and diagram legends that
+            # Matplotlib built from the scatter labels gain the counts.
+            for category in categories:
+                for entry in export_legend_artists.get(category, []):
+                    if entry.get('role') == 'legend_label':
+                        entry['artist'].set_text(
+                            _count_label(category) if category in category_counts
+                            else _display_label(category))
+
+        _apply_legend_labels()
+        fig.canvas.draw_idle()
+
         _stats_display_ref = [lambda: None]
         category_order = list(categories)
         zorder_base_cache = {}
@@ -5305,7 +7644,15 @@ class GeochemistryDockWidget(QDockWidget):
             # own value, which would undo any "Show mean +/- 2 sigma" fade -
             # so reapply that fade on top, if the Statistics toggle is on.
             _stats_display_ref[0]()
+            _refresh_selection_overlay()
             fig.canvas.draw_idle()
+
+        def _refresh_selection_overlay():
+            # Selected points are redrawn on top (see _attach_scatter_selection);
+            # keep those copies in step with visibility, style and fading.
+            refresh = getattr(fig, '_geochem_refresh_selection_overlay', None)
+            if refresh is not None:
+                refresh()
 
         def _sync_legend_symbols():
             for category in categories:
@@ -5325,12 +7672,23 @@ class GeochemistryDockWidget(QDockWidget):
             # The Statistics overlay's own visibility/fade also depends on
             # which categories are shown/hidden here.
             _stats_display_ref[0]()
+            _refresh_selection_overlay()
             fig.canvas.draw_idle()
 
         def _apply_all_category_styles():
             for category in categories:
                 _apply_category_style(category)
             _sync_legend_symbols()
+            _refresh_category_visibility()
+
+        def _apply_initial_layer_styles():
+            # No-op for default-styled plots, so their behaviour is unchanged.
+            if not layer_categories:
+                return
+            _apply_legend_labels()
+            if restyle_layer_categories:
+                for category in layer_categories:
+                    _apply_category_style(category)
             _refresh_category_visibility()
 
         manager = getattr(fig.canvas, 'manager', None)
@@ -5340,7 +7698,8 @@ class GeochemistryDockWidget(QDockWidget):
         if window is not None and hasattr(window, 'addDockWidget'):
             dock = QDockWidget(title, window)
             dock.setObjectName('GeochemCategoryDock')
-            dock.setAllowedAreas(LeftDockWidgetArea | RightDockWidgetArea)
+            dock.setAllowedAreas(
+                LeftDockWidgetArea | RightDockWidgetArea | TopDockWidgetArea | BottomDockWidgetArea)
 
             panel = QWidget(dock)
             panel_layout = QVBoxLayout(panel)
@@ -5351,16 +7710,32 @@ class GeochemistryDockWidget(QDockWidget):
                 stats_group = QGroupBox('Statistics', panel)
                 stats_layout = QVBoxLayout(stats_group)
                 stats_caption = QLabel(
-                    "Show each category's mean ± 2σ, with individual samples "
-                    "faded behind it (or replaced by a shaded envelope).", stats_group)
+                    "Show each category's statistics, with individual samples "
+                    "faded behind them (or replaced by a shaded envelope).", stats_group)
                 stats_caption.setWordWrap(True)
                 stats_layout.addWidget(stats_caption)
 
                 stats_checkbox = QCheckBox('Show mean ± 2σ', stats_group)
+                median_checkbox = QCheckBox('Show median', stats_group)
+                median_checkbox.setToolTip(
+                    "Open ring around the category's symbol (dashed line on spider diagrams).")
+                iqr_checkbox = QCheckBox('Show interquartile range (IQR)', stats_group)
+                iqr_checkbox.setToolTip(
+                    "25th to 75th percentile, as an unfilled box covering both axes "
+                    "(shaded band on spider diagrams).")
+                faded_data_checkbox = QCheckBox('Show faded individual data', stats_group)
+                faded_data_checkbox.setChecked(True)
+                faded_data_checkbox.setEnabled(False)
+                faded_data_checkbox.setToolTip(
+                    "Keep the individual points/lines, faint and transparent, behind the "
+                    "statistics. Untick to show the statistics alone.")
                 envelope_checkbox = QCheckBox(
                     'Individual data as envelope (instead of faint points/lines)', stats_group)
                 envelope_checkbox.setEnabled(False)
                 stats_layout.addWidget(stats_checkbox)
+                stats_layout.addWidget(median_checkbox)
+                stats_layout.addWidget(iqr_checkbox)
+                stats_layout.addWidget(faded_data_checkbox)
                 stats_layout.addWidget(envelope_checkbox)
 
                 opacity_row = QHBoxLayout()
@@ -5373,37 +7748,46 @@ class GeochemistryDockWidget(QDockWidget):
                 opacity_spin.setEnabled(False)
                 opacity_spin.setToolTip(
                     "Opacity of the individual points/lines (or envelope fill) shown "
-                    "behind the mean ± 2σ overlay.")
+                    "behind the statistics overlays.")
                 opacity_row.addWidget(opacity_label)
                 opacity_row.addWidget(opacity_spin)
                 stats_layout.addLayout(opacity_row)
 
                 width_row = QHBoxLayout()
-                width_label = QLabel('Error bar thickness:', stats_group)
+                width_label = QLabel('Line thickness:', stats_group)
                 width_spin = QDoubleSpinBox(stats_group)
                 width_spin.setRange(0.5, 6.0)
                 width_spin.setDecimals(1)
                 width_spin.setSingleStep(0.2)
                 width_spin.setValue(1.8)
                 width_spin.setEnabled(False)
-                width_spin.setToolTip("Line width of the mean ± 2σ marker/error bars.")
+                width_spin.setToolTip("Line width of the statistics markers, error bars and boxes.")
                 width_row.addWidget(width_label)
                 width_row.addWidget(width_spin)
                 stats_layout.addLayout(width_row)
 
-                panel_layout.addWidget(stats_group, 0)
+                stats_group.setTitle('')
+                panel_layout.addWidget(_CollapsibleSection('Statistics', stats_group, True, panel), 0)
 
                 def _apply_stats_display():
-                    enabled = stats_checkbox.isChecked()
+                    shown_kinds = {kind for kind, checkbox in (
+                        ('mean', stats_checkbox), ('median', median_checkbox),
+                        ('iqr', iqr_checkbox)) if checkbox.isChecked()}
+                    enabled = bool(shown_kinds)
                     envelope = envelope_checkbox.isChecked()
+                    show_faded_data = faded_data_checkbox.isChecked()
                     opacity = opacity_spin.value()
                     line_width = width_spin.value()
                     envelope_checkbox.setEnabled(enabled)
-                    opacity_spin.setEnabled(enabled)
+                    # The envelope replaces the faint points/lines, so this
+                    # choice only applies without it.
+                    faded_data_checkbox.setEnabled(enabled and not envelope)
+                    opacity_spin.setEnabled(enabled and (envelope or show_faded_data))
                     width_spin.setEnabled(enabled)
                     for category in categories:
                         cat_visible = visible_state.get(category, True)
-                        self._set_artist_visible(stats_registry.get(category, []), enabled and cat_visible)
+                        for entry in stats_registry.get(category, []):
+                            self._set_artist_visible(entry, entry['kind'] in shown_kinds and cat_visible)
                         self._set_artist_visible(
                             envelope_registry.get(category, []), enabled and envelope and cat_visible)
                         self._set_artist_linewidth(stats_registry.get(category, []), line_width)
@@ -5412,18 +7796,65 @@ class GeochemistryDockWidget(QDockWidget):
                         style = category_styles.get(category, self._default_category_style(0))
                         base_alpha = float(style.get('alpha', 1.0))
                         if enabled:
-                            effective_alpha = 0.0 if envelope else opacity
+                            effective_alpha = opacity if show_faded_data and not envelope else 0.0
                         else:
                             effective_alpha = base_alpha
                         for entry in artist_registry.get(category, []):
                             self._set_artist_alpha(entry, effective_alpha)
+                    _refresh_selection_overlay()
                     fig.canvas.draw_idle()
 
                 _stats_display_ref[0] = _apply_stats_display
-                stats_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
-                envelope_checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
+                for checkbox in (stats_checkbox, median_checkbox, iqr_checkbox,
+                                 faded_data_checkbox, envelope_checkbox):
+                    checkbox.stateChanged.connect(lambda _state: _apply_stats_display())
                 opacity_spin.valueChanged.connect(lambda _val: _apply_stats_display())
                 width_spin.valueChanged.connect(lambda _val: _apply_stats_display())
+
+            selection_state = getattr(fig, '_geochem_selection_state', None)
+            if selection_state is not None:
+                selection_group = QGroupBox('Selection', panel)
+                selection_layout = QVBoxLayout(selection_group)
+                selection_caption = QLabel(
+                    "Drag on the plot to select the samples in an area. Hold Shift, or tick "
+                    "\"Add to selection\", to combine several areas. Esc clears the selection.",
+                    selection_group)
+                selection_caption.setWordWrap(True)
+                selection_layout.addWidget(selection_caption)
+
+                tool_row = QHBoxLayout()
+                tool_row.addWidget(QLabel('Tool:', selection_group))
+                tool_combo = QComboBox(selection_group)
+                tool_combo.addItem('Freehand', 'freehand')
+                tool_combo.addItem('Rectangle', 'rectangle')
+                tool_combo.setCurrentIndex(tool_combo.findData(selection_state['tool']))
+                tool_row.addWidget(tool_combo, 1)
+                selection_layout.addLayout(tool_row)
+
+                add_checkbox = QCheckBox('Add to selection', selection_group)
+                add_checkbox.setChecked(selection_state['add'])
+                add_checkbox.setToolTip(
+                    "Each new area or clicked sample adds to the current selection "
+                    "(union), as when holding Shift.")
+                selection_layout.addWidget(add_checkbox)
+
+                clear_selection_btn = QPushButton('Clear selection', selection_group)
+                clear_selection_btn.clicked.connect(lambda: selection_state['clear']())
+                selection_layout.addWidget(clear_selection_btn)
+
+                def _on_selection_options_changed(*_args):
+                    selection_state['tool'] = tool_combo.currentData()
+                    selection_state['add'] = add_checkbox.isChecked()
+                    selection_state['sync']()
+                    # New plots start with the same options.
+                    self._plot_selection_prefs.update(
+                        tool=selection_state['tool'], add=selection_state['add'])
+
+                tool_combo.currentIndexChanged.connect(_on_selection_options_changed)
+                add_checkbox.stateChanged.connect(_on_selection_options_changed)
+
+                selection_group.setTitle('')
+                panel_layout.addWidget(_CollapsibleSection('Selection', selection_group, True, panel), 0)
 
             style_mgmt_group = QGroupBox('Style Management', panel)
             style_mgmt_layout = QVBoxLayout(style_mgmt_group)
@@ -5444,7 +7875,37 @@ class GeochemistryDockWidget(QDockWidget):
             for btn in (save_template_btn, load_template_btn, reset_styles_btn, delete_template_btn):
                 template_row.addWidget(btn)
             style_mgmt_layout.addLayout(template_row)
-            panel_layout.addWidget(style_mgmt_group, 0)
+
+            # Same option as the dock's "Use layer symbology", but applied
+            # live to this plot (and mirrored back to the dock for new plots).
+            plot_layer = QgsProject.instance().mapLayer(plot_layer_id) if plot_layer_id else None
+            symbology_usable, symbology_reason = symbology_bridge.layer_symbology_status(
+                plot_layer, plot_category_field)
+            # A toggle button (stays pressed while on), styled like "Apply to layer…".
+            layer_symbology_cb = QPushButton('Use layer symbology', style_mgmt_group)
+            layer_symbology_cb.setCheckable(True)
+            layer_symbology_cb.setChecked(bool(layer_categories))
+            layer_symbology_cb.setEnabled(symbology_usable or bool(layer_categories))
+            layer_symbology_cb.setToolTip(
+                symbology_reason + ' Click again to go back to the default plot styles.'
+                if symbology_usable else symbology_reason)
+            style_mgmt_layout.addWidget(layer_symbology_cb)
+
+            export_layer_btn = QPushButton('Apply to layer…')
+            if plot_category_field:
+                export_layer_btn.setToolTip(
+                    "Set the map layer's symbology to a Categorized renderer on "
+                    f"'{plot_category_field}' using these category colours, markers, sizes "
+                    "and visibility (asks for confirmation; the current layer style is kept "
+                    "so it can be restored).")
+            else:
+                export_layer_btn.setEnabled(False)
+                export_layer_btn.setToolTip(
+                    'This plot has no Category field, so there are no categories to '
+                    'apply to the layer.')
+            style_mgmt_layout.addWidget(export_layer_btn)
+            style_mgmt_group.setTitle('')
+            panel_layout.addWidget(_CollapsibleSection('Style Management', style_mgmt_group, False, panel), 0)
 
             class_group = QGroupBox('Categories', panel)
             class_layout = QVBoxLayout(class_group)
@@ -5478,7 +7939,7 @@ class GeochemistryDockWidget(QDockWidget):
 
                 form = QFormLayout()
                 marker_cb = QComboBox(dlg)
-                for label, marker in STYLE_MARKER_OPTIONS:
+                for label, marker in STYLE_MARKER_OPTIONS_ALL:
                     marker_cb.addItem(label, marker)
                 marker_index = marker_cb.findData(style.get('marker', 'o'))
                 if marker_index >= 0:
@@ -5552,8 +8013,8 @@ class GeochemistryDockWidget(QDockWidget):
                 row_layout.setContentsMargins(0, 0, 0, 0)
                 row_layout.setSpacing(4)
 
-                checkbox = QCheckBox(f'{category} (n={category_counts.get(category, 0)})', row_widget)
-                checkbox.setChecked(True)
+                checkbox = QCheckBox(_count_label(category), row_widget)
+                checkbox.setChecked(visible_state[category])
                 checkbox_by_category[category] = checkbox
 
                 order_spin = QSpinBox(row_widget)
@@ -5595,10 +8056,23 @@ class GeochemistryDockWidget(QDockWidget):
             scroll.setWidget(controls_widget)
             scroll.setMinimumHeight(120)
             class_layout.addWidget(scroll, 1)
-            panel_layout.addWidget(class_group, 1)
 
-            legend_group = QGroupBox('Legend', panel)
+            # Categories and Legend sit in a vertical splitter: drag the bar
+            # between them to give either more room.
+            section_splitter = QSplitter(Qt_Vertical, panel)
+            section_splitter.setChildrenCollapsible(False)
+            section_splitter.setHandleWidth(6)
+            section_splitter.setStyleSheet(
+                "QSplitter::handle { background: palette(mid); }"
+                "QSplitter::handle:hover { background: palette(highlight); }")
+            class_group.setTitle('')
+            class_section = _CollapsibleSection('Categories', class_group, True, panel)
+            section_splitter.addWidget(class_section)
+            panel_layout.addWidget(section_splitter, 1)
+
+            legend_group = QGroupBox('', panel)
             legend_symbol_by_category = {}
+            legend_text_by_category = {}
             legend_layout = QVBoxLayout(legend_group)
             legend_layout.setSpacing(4)
 
@@ -5614,24 +8088,175 @@ class GeochemistryDockWidget(QDockWidget):
                 marker_label = _MarkerSymbolWidget(marker, colour, row_widget)
                 marker_label.setToolTip(f'{marker} / {colour}')
 
-                category_label = QLabel(f'{category} (n={category_counts.get(category, 0)})', row_widget)
+                category_label = QLabel(_count_label(category), row_widget)
                 category_label.setWordWrap(True)
 
                 row_layout.addWidget(marker_label)
                 row_layout.addWidget(category_label, 1)
                 legend_layout.addWidget(row_widget)
                 legend_symbol_by_category[category] = marker_label
+                legend_text_by_category[category] = category_label
 
             legend_scroll = QScrollArea(dock)
             legend_scroll.setWidgetResizable(True)
             legend_scroll.setWidget(legend_group)
-            legend_scroll.setMaximumHeight(180)
-            panel_layout.addWidget(legend_scroll, 0)
+            legend_scroll.setMinimumHeight(60)
+            legend_section = _CollapsibleSection('Legend', legend_scroll, True, panel)
+            section_splitter.addWidget(legend_section)
+            section_splitter.setStretchFactor(0, 3)
+            section_splitter.setStretchFactor(1, 1)
+            section_splitter.setSizes([420, 150])
 
-            dock.setWidget(panel)
-            dock.setMinimumWidth(260)
+            # Collapsing one of the two splitter sections gives its space to the
+            # other; remember the split so expanding restores it.
+            splitter_memory = {'sizes': None}
+
+            def _remember_splitter_sizes(_expanded):
+                # Only worth keeping while both sections are open.
+                if class_section.is_expanded() and legend_section.is_expanded():
+                    splitter_memory['sizes'] = section_splitter.sizes()
+
+            def _restore_splitter_sizes(expanded):
+                saved = splitter_memory['sizes']
+                if expanded and saved and class_section.is_expanded() and legend_section.is_expanded():
+                    section_splitter.setSizes(saved)
+
+            for section in (class_section, legend_section):
+                section.toggling.connect(_remember_splitter_sizes)
+                section.toggled.connect(_restore_splitter_sizes)
+
+            # The whole panel scrolls, so the dock can be dragged much smaller
+            # (in either direction) without clipping its controls.
+            body = QScrollArea(dock)
+            body.setWidgetResizable(True)
+            body.setWidget(panel)
+
+            # Custom title bar: collapse/expand button, title, float button.
+            dock_min_width, dock_min_height, strip_size, size_max = 180, 120, 28, 16777215
+            title_bar = QWidget(dock)
+            title_layout = QHBoxLayout(title_bar)
+            title_layout.setContentsMargins(2, 2, 4, 2)
+            title_layout.setSpacing(4)
+            collapse_btn = QToolButton(title_bar)
+            collapse_btn.setAutoRaise(True)
+            collapse_btn.setFixedSize(22, 22)
+            title_label = QLabel(title, title_bar)
+            title_label.setStyleSheet('font-weight: bold;')
+            float_btn = QToolButton(title_bar)
+            float_btn.setAutoRaise(True)
+            float_btn.setFixedSize(22, 22)
+            float_btn.setText('\u29c9')
+            float_btn.setToolTip('Float this panel in its own window / dock it back')
+            title_layout.addWidget(collapse_btn)
+            title_layout.addWidget(title_label, 1)
+            title_layout.addWidget(float_btn)
+            bar_height = title_bar.sizeHint().height() + 4
+
+            dock.setTitleBarWidget(title_bar)
+            dock.setWidget(body)
             dock.setFeatures(QDockWidget_Movable | QDockWidget_Floatable)
             window.addDockWidget(RightDockWidgetArea, dock)
+
+            # Visible, hover-highlighted drag bars between the plot and the panel.
+            if not window.property('geochemSeparatorStyled'):
+                window.setStyleSheet(
+                    window.styleSheet() +
+                    " QMainWindow::separator { background: palette(mid); width: 6px; height: 6px; }"
+                    " QMainWindow::separator:hover { background: palette(highlight); }")
+                window.setProperty('geochemSeparatorStyled', True)
+
+            collapse_state = {'collapsed': False, 'area': RightDockWidgetArea, 'size': None}
+
+            def _dock_side():
+                """'left'/'right'/'top'/'bottom' when docked, None when floating."""
+                if dock.isFloating():
+                    return None
+                area = collapse_state['area']
+                if area == LeftDockWidgetArea:
+                    return 'left'
+                if area == TopDockWidgetArea:
+                    return 'top'
+                if area == BottomDockWidgetArea:
+                    return 'bottom'
+                return 'right'
+
+            def _relayout_collapse():
+                """Re-apply size limits, visibility and arrow for the current
+                side and collapsed/expanded state."""
+                side = _dock_side()
+                collapsed = collapse_state['collapsed']
+                sideways = side in ('left', 'right')
+                body.setVisible(not collapsed)
+                # A collapsed side dock is a slim strip that only has room for the button.
+                title_label.setVisible(not (collapsed and sideways))
+                float_btn.setVisible(not (collapsed and sideways))
+                if collapsed and sideways:
+                    dock.setMinimumSize(strip_size, 0)
+                    dock.setMaximumSize(strip_size, size_max)
+                elif collapsed:
+                    dock.setMinimumSize(0, bar_height)
+                    dock.setMaximumSize(size_max, bar_height)
+                else:
+                    dock.setMinimumSize(dock_min_width, dock_min_height)
+                    dock.setMaximumSize(size_max, size_max)
+
+                # The arrow points to where the panel goes when collapsing,
+                # and back towards the plot when expanding.
+                collapse_arrows = {'right': '\u25b6', 'left': '\u25c0', 'top': '\u25b2',
+                                   'bottom': '\u25bc', None: '\u25b2'}
+                expand_arrows = {'right': '\u25c0', 'left': '\u25b6', 'top': '\u25bc',
+                                 'bottom': '\u25b2', None: '\u25bc'}
+                arrows = expand_arrows if collapsed else collapse_arrows
+                collapse_btn.setText(arrows[side])
+                collapse_btn.setToolTip(
+                    'Expand the panel' if collapsed else 'Collapse the panel to give the plot more room')
+
+            def _orientation():
+                """'h' for a left/right dock, 'v' for top/bottom, 'f' when floating."""
+                side = _dock_side()
+                return 'f' if side is None else ('h' if side in ('left', 'right') else 'v')
+
+            def _set_collapsed(collapsed):
+                if collapsed == collapse_state['collapsed']:
+                    return
+                if collapsed:
+                    collapse_state['size'] = (dock.width(), dock.height(), _orientation())
+                collapse_state['collapsed'] = collapsed
+                _relayout_collapse()
+                if collapsed:
+                    return
+                # Restore the size from before collapsing, unless the panel was
+                # moved to a different kind of place meanwhile (e.g. from the
+                # right edge to the bottom), where that size would be wrong.
+                width, height, orientation = collapse_state['size'] or (None, None, None)
+                if orientation != _orientation():
+                    width = max(300, dock_min_width)
+                    height = min(260, max(dock_min_height, int(window.height() * 0.4)))
+                try:
+                    orientation = _orientation()
+                    if orientation == 'h':
+                        window.resizeDocks([dock], [width], Qt_Horizontal)
+                    elif orientation == 'v':
+                        window.resizeDocks([dock], [height], Qt_Vertical)
+                    else:
+                        dock.resize(width, 480 if height is None else height)
+                except Exception:  # nosec B110 - restoring the old size is cosmetic only
+                    pass
+
+            def _on_dock_location_changed(area):
+                collapse_state['area'] = area
+                _relayout_collapse()
+
+            collapse_btn.clicked.connect(lambda: _set_collapsed(not collapse_state['collapsed']))
+            float_btn.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
+            dock.dockLocationChanged.connect(_on_dock_location_changed)
+            dock.topLevelChanged.connect(lambda floating: _relayout_collapse())
+            _relayout_collapse()
+            try:
+                initial_width = min(max(300, panel.sizeHint().width() + 24), int(window.width() * 0.4))
+                window.resizeDocks([dock], [max(initial_width, dock_min_width)], Qt_Horizontal)
+            except Exception:  # nosec B110 - initial width is cosmetic only
+                pass
 
             def _set_checkbox_state(category, state):
                 checkbox = checkbox_by_category[category]
@@ -5760,17 +8385,99 @@ class GeochemistryDockWidget(QDockWidget):
             load_template_btn.clicked.connect(_load_template)
             reset_styles_btn.clicked.connect(_reset_styles)
             delete_template_btn.clicked.connect(_delete_template)
+            def _toggle_layer_symbology(_state):
+                use = layer_symbology_cb.isChecked()
+                changed = set(layer_categories)
+                if use:
+                    layer = QgsProject.instance().mapLayer(plot_layer_id) if plot_layer_id else None
+                    usable, reason = symbology_bridge.layer_symbology_status(layer, plot_category_field)
+                    if not usable:
+                        QMessageBox.information(panel, 'Use layer symbology', reason)
+                        layer_symbology_cb.blockSignals(True)
+                        layer_symbology_cb.setChecked(False)
+                        layer_symbology_cb.blockSignals(False)
+                        layer_symbology_cb.setToolTip(reason)
+                        return
+                    # Re-read the renderer, in case the map was restyled since plotting.
+                    imported = symbology_bridge.read_layer_category_styles(layer, plot_category_field)
+                    new_layer_categories = []
+                    for category in categories:
+                        style = imported.get(str(category))
+                        if not style:
+                            continue
+                        merged = dict(category_styles.get(category) or default_styles.get(category)
+                                      or self._default_category_style(0))
+                        merged.update(style)
+                        category_styles[category] = merged
+                        visible_state[category] = bool(merged.get('visible', True))
+                        new_layer_categories.append(category)
+                else:
+                    # Back to the plugin defaults for every layer-styled category.
+                    for i, category in enumerate(categories):
+                        if category in changed:
+                            category_styles[category] = dict(
+                                default_styles.get(category) or self._default_category_style(i))
+                            visible_state[category] = True
+                    new_layer_categories = []
+                layer_categories[:] = new_layer_categories
+                changed.update(new_layer_categories)
+
+                for category in categories:
+                    text = _count_label(category)
+                    checkbox_by_category[category].setText(text)
+                    _set_checkbox_state(category, visible_state[category])
+                    if category in legend_text_by_category:
+                        legend_text_by_category[category].setText(text)
+                _apply_legend_labels()
+                for category in categories:
+                    if category in changed:
+                        _apply_category_style(category)
+                        _restore_drawn_state(category, restore_sizes=not use)
+                _sync_legend_symbols()
+                _refresh_category_visibility()
+
+                # Keep the dock's option in step, so the next plot matches.
+                if self.use_layer_symbology.isEnabled():
+                    self.use_layer_symbology.blockSignals(True)
+                    self.use_layer_symbology.setChecked(use)
+                    self.use_layer_symbology.blockSignals(False)
+                    # A data-defined symbol size on the layer becomes this
+                    # plot tab's Bubble Size setting; bubble sizes need the
+                    # plot to be regenerated.
+                    bubble_settings = self._apply_layer_bubble_settings(plot_bubble_prefix) if use else None
+                    if bubble_settings:
+                        method_labels = {m: label for label, m in BUBBLE_SCALE_METHODS.items()}
+                        details = [f"Size by: {bubble_settings['size_field']}"]
+                        if bubble_settings.get('method'):
+                            details.append(f"Scaling: {method_labels[bubble_settings['method']]}")
+                        if bubble_settings.get('min_size') and bubble_settings.get('max_size'):
+                            details.append(f"Size: {bubble_settings['min_size']:.0f} – "
+                                           f"{bubble_settings['max_size']:.0f} pt²")
+                        message = ("The layer's symbology also sizes symbols by a field. Its "
+                                   "Bubble Size settings have been set in the plugin window:\n\n  " +
+                                   "\n  ".join(details) +
+                                   "\n\nGenerate the plot again to apply them.")
+                        if bubble_settings.get('note'):
+                            message += f"\n\n{bubble_settings['note']}"
+                        QMessageBox.information(panel, 'Use layer symbology', message)
+
+            layer_symbology_cb.toggled.connect(_toggle_layer_symbology)
+            export_layer_btn.clicked.connect(lambda: self._export_styles_to_layer(
+                panel, plot_layer_id, plot_category_field, categories,
+                category_styles, visible_state, bubble=plot_bubble))
+
+            _apply_initial_layer_styles()
 
             self._category_controls = {
                 'dock': dock, 'panel': panel, 'checkboxes': checkbox_by_category,
                 'style_buttons': style_button_by_category, 'styles': category_styles,
-                'visible_state': visible_state,
+                'visible_state': visible_state, 'layer_symbology': layer_symbology_cb,
             }
             return
 
         # Fallback for non-Qt Matplotlib backends: on-axes CheckButtons/Button,
         # visibility toggling only (no per-category style editing).
-        labels = [f'{category} (n={category_counts.get(category, 0)})' for category in categories]
+        labels = [_count_label(category) for category in categories]
         label_to_category = dict(zip(labels, categories))
         try:
             fig.subplots_adjust(right=0.68)
@@ -5779,7 +8486,8 @@ class GeochemistryDockWidget(QDockWidget):
 
         check_ax = fig.add_axes([0.72, 0.42, 0.25, 0.45])
         check_ax.set_title('Categories', fontsize=9)
-        checks = CheckButtons(check_ax, labels, [True] * len(labels))
+        checks = CheckButtons(check_ax, labels, [visible_state[c] for c in categories])
+        _apply_initial_layer_styles()
 
         def _set_button_state(index, state):
             if checks.get_status()[index] != state:
@@ -5827,17 +8535,6 @@ class GeochemistryDockWidget(QDockWidget):
             'visible_state': visible_state, 'axes': (check_ax, show_ax, hide_ax, invert_ax),
         }
 
-    def save_plot(self):
-        """Save the current plot."""
-        if self.current_fig is None:
-            QMessageBox.warning(self, "Warning", "Please generate a plot first.")
-            return
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "",
-            "PNG Files (*.png);;PDF Files (*.pdf);;SVG Files (*.svg);;All Files (*)")
-        if file_path:
-            self.current_fig.savefig(file_path, dpi=300, bbox_inches='tight')
-            QMessageBox.information(self, "Success", f"Plot saved to:\n{file_path}")
-
     def get_numeric_field_names(self):
         """Get numeric field names from the current layer."""
         layer_id = self.layer_combo.currentData()
@@ -5856,46 +8553,16 @@ class GeochemistryDockWidget(QDockWidget):
         """Refresh custom XY combo boxes based on the show-all-fields checkbox."""
         if self.custom_show_all_fields.isChecked():
             field_names = self.get_numeric_field_names()
-            none_option = ['1 (none)']
-            num_items = field_names          # numerator: no '1 (none)'
-            denom_items = none_option + field_names  # denominator: '1 (none)' at top
-
-            for combo in [self.x_num_combo, self.y_num_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(num_items)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
-
-            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(denom_items)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
+            num_items = field_names                   # numerator: no '1 (none)'
+            denom_items = ['1 (none)'] + field_names  # denominator: '1 (none)' at top
         else:
             # Restore predefined lists
-            for combo in [self.x_num_combo, self.y_num_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(CUSTOM_XY_ELEMENTS[1:])
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
-
-            for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
-                prev = combo.currentText()
-                combo.blockSignals(True)
-                combo.clear()
-                combo.addItems(CUSTOM_XY_ELEMENTS)
-                idx = combo.findText(prev)
-                combo.setCurrentIndex(idx if idx >= 0 else 0)
-                combo.blockSignals(False)
+            num_items = CUSTOM_XY_ELEMENTS[1:]
+            denom_items = CUSTOM_XY_ELEMENTS
+        for combo in [self.x_num_combo, self.y_num_combo]:
+            self._repopulate_combo(combo, num_items)
+        for combo in [self.x_denom_combo, self.y_denom_combo, self.custom_bubble_field_combo]:
+            self._repopulate_combo(combo, denom_items)
 
     def refresh_custom_ternary_combos(self):
         """Refresh ternary apex combo boxes based on the show-all-fields checkbox."""
@@ -5909,21 +8576,26 @@ class GeochemistryDockWidget(QDockWidget):
             num_items   = CUSTOM_XY_ELEMENTS[1:]
             denom_items = CUSTOM_XY_ELEMENTS
         for combo in num_combos:
-            prev = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(num_items)
-            idx = combo.findText(prev)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
+            self._repopulate_combo(combo, num_items)
         for combo in denom_combos + [self.tern_bubble_field_combo]:
-            prev = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(denom_items)
-            idx = combo.findText(prev)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
+            self._repopulate_combo(combo, denom_items)
+
+    @staticmethod
+    def _repopulate_combo(combo, items):
+        """Replace a combo's entries, keeping the current selection (all
+        ticked entries for a tickable list) where still offered, else the
+        first entry."""
+        if isinstance(combo, _CheckableComboBox):
+            combo.set_items(items)
+            return
+        prev = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(items)
+        idx = combo.findText(prev)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+        fit_popup_width(combo)
 
     def refresh_petrophysics_combos(self):
         """Populate petrophysics field dropdowns with all fields from the current layer."""
@@ -5939,61 +8611,83 @@ class GeochemistryDockWidget(QDockWidget):
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
 
-        prev = self.petro_bubble_field_combo.currentText()
-        self.petro_bubble_field_combo.blockSignals(True)
-        self.petro_bubble_field_combo.clear()
-        self.petro_bubble_field_combo.addItems(['1 (none)'] + field_names)
-        idx = self.petro_bubble_field_combo.findText(prev)
-        self.petro_bubble_field_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.petro_bubble_field_combo.blockSignals(False)
+        self._repopulate_combo(self.petro_bubble_field_combo, ['1 (none)'] + field_names)
 
     def generate_custom_ternary_plot(self, layer, features, sample_names):
-        """Generate a custom ternary (triangle) diagram."""
-        def apex_label(num, denom):
-            if denom == '1 (none)':
-                return num
-            return f"{num} / {denom}"
+        """Generate a custom ternary (triangle) diagram.
 
-        a_num   = self.tern_a_num_combo.currentText()
-        a_denom = self.tern_a_denom_combo.currentText()
-        b_num   = self.tern_b_num_combo.currentText()
-        b_denom = self.tern_b_denom_combo.currentText()
-        c_num   = self.tern_c_num_combo.currentText()
-        c_denom = self.tern_c_denom_combo.currentText()
+        Each apex numerator/denominator is a list of ticked entries, added
+        together (e.g. Na2O + K2O); see custom_sum_plan() for units. The Log
+        scale plots log10(value) on all three apexes, or log10(1 + value) if
+        any plotted sample has a value below 1, which plain log10 would turn
+        negative (ternary positions need non-negative values).
+        """
+        log_scale = self.tern_scale_combo.currentIndex() == 1
 
-        a_label = apex_label(a_num, a_denom)
-        b_label = apex_label(b_num, b_denom)
-        c_label = apex_label(c_num, c_denom)
+        def apex_label(num, denom, log_prefix):
+            def sum_str(terms, bracket):
+                text = ' + '.join(terms)
+                return f"({text})" if bracket and len(terms) > 1 else text
+            if denom == ['1 (none)']:
+                label = sum_str(num, False)
+            else:
+                label = f"{sum_str(num, True)} / {sum_str(denom, True)}"
+            return f"{log_prefix}{label})" if log_prefix else label
+
+        a_num   = self.tern_a_num_combo.checked_items()
+        a_denom = self.tern_a_denom_combo.checked_items() or ['1 (none)']
+        b_num   = self.tern_b_num_combo.checked_items()
+        b_denom = self.tern_b_denom_combo.checked_items() or ['1 (none)']
+        c_num   = self.tern_c_num_combo.checked_items()
+        c_denom = self.tern_c_denom_combo.checked_items() or ['1 (none)']
+
+        if not a_num or not b_num or not c_num:
+            QMessageBox.warning(self, "Warning", "Please select A, B and C fields.")
+            return
 
         size_field, bubble_active, bubble_min_size, bubble_max_size, bubble_method = \
             self._read_bubble_controls('tern')
 
+        # How each (possibly multi-entry) sum is added up.
+        sum_factors, unit_problems = {}, []
+        for terms in (a_num, a_denom, b_num, b_denom, c_num, c_denom):
+            factors, _unit, problem = custom_sum_plan(layer, terms)
+            sum_factors[tuple(terms)] = factors
+            if problem:
+                unit_problems.append(f"{' + '.join(terms)}: {problem}")
+        if unit_problems:
+            reply = QMessageBox.warning(
+                self, "Adding fields with different units",
+                "Some ticked entries are added together although their units could not be "
+                "brought to a common unit:\n\n" + "\n".join(unit_problems) +
+                "\n\nMake sure that fields added together are concentrations reported in the "
+                "same unit. Plot anyway?",
+                QMessageBox_Ok | QMessageBox_Cancel, QMessageBox_Cancel)
+            if reply != QMessageBox_Ok:
+                return
+
         # Check that all required fields exist in the layer
         elements_needed = set()
-        for elem in [a_num, a_denom, b_num, b_denom, c_num, c_denom] + ([size_field] if bubble_active else []):
+        for elem in a_num + a_denom + b_num + b_denom + c_num + c_denom + \
+                self._bubble_terms('tern'):
             if elem != '1 (none)':
                 elements_needed.add(elem)
-        missing = [e for e in sorted(elements_needed) if find_element_field(layer, e) is None]
+        missing = [e for e in sorted(elements_needed) if not _is_custom_term_available(layer, e)]
         if missing:
             QMessageBox.warning(self, "Warning",
                 f"Missing elements: {', '.join(missing)}\nPlot cannot be generated.")
             return
 
         # Compute raw A, B, C values per sample
-        raw_data = []
-        valid_features = []
-        valid_names = []
-        fid_list = []
-        size_data = []
-
+        candidates = []
         for feature, name in zip(features, sample_names):
             def val(num, denom):
-                n = get_custom_element_value(feature, layer, num)
+                n = custom_sum_value(feature, layer, num, sum_factors[tuple(num)])
                 if num == denom:
                     return 1.0 if n is not None and n > 0 else None
-                if denom == '1 (none)':
+                if denom == ['1 (none)']:
                     return n if (n is not None and n > 0) else None
-                d = get_custom_element_value(feature, layer, denom)
+                d = custom_sum_value(feature, layer, denom, sum_factors[tuple(denom)])
                 if n is None or d is None or d == 0:
                     return None
                 return n / d
@@ -6002,14 +8696,40 @@ class GeochemistryDockWidget(QDockWidget):
             b = val(b_num, b_denom)
             c = val(c_num, c_denom)
 
-            if a is None or b is None or c is None or (a + b + c) == 0:
+            if a is None or b is None or c is None:
+                continue
+            if log_scale and min(a, b, c) < 0:
+                continue  # no logarithm, whichever form is used
+            candidates.append(((a, b, c), feature, name))
+
+        # Log scale: plain log10 unless a plotted value below 1 requires the
+        # +1 offset, applied to all three apexes so they stay comparable.
+        log_offset = 1.0 if log_scale and any(min(v) < 1 for v, _f, _n in candidates) else 0.0
+        log_prefix = ''
+        if log_scale:
+            log_prefix = 'log10(1 + ' if log_offset else 'log10('
+
+        a_label = apex_label(a_num, a_denom, log_prefix)
+        b_label = apex_label(b_num, b_denom, log_prefix)
+        c_label = apex_label(c_num, c_denom, log_prefix)
+
+        raw_data = []
+        valid_features = []
+        valid_names = []
+        fid_list = []
+        size_data = []
+
+        for values, feature, name in candidates:
+            a, b, c = (math.log10(log_offset + v) for v in values) if log_scale else values
+
+            if (a + b + c) == 0:
                 continue
 
             raw_data.append((a, b, c))
             valid_features.append(feature)
             valid_names.append(name)
             fid_list.append(feature.id())
-            size_data.append(get_custom_element_value(feature, layer, size_field) if bubble_active else None)
+            size_data.append(self._bubble_value(feature, layer, self._tab_bubble_prefix()) if bubble_active else None)
 
         if not raw_data:
             QMessageBox.warning(self, "Warning", "No valid data points to plot.")
@@ -6032,13 +8752,18 @@ class GeochemistryDockWidget(QDockWidget):
             self._category_arrays_from_styles(category_styles, valid_names)
 
         fig, ax = plt.subplots(figsize=(10, 9))
-        # labels: bottom-left = A, bottom-right = B, top = C
+        # The UI defines A = top apex, B = bottom-left, C = bottom-right, but
+        # plot_ternary_axes() takes labels in (bottom-left, bottom-right, top)
+        # order and ternary_to_cartesian() puts its 1st/2nd/3rd values at
+        # bottom-left/bottom-right/top. Labels and data must use the same
+        # order, so both are given as (B, C, A).
         plot_ternary_axes(ax, [b_label, c_label, a_label])
+        plot_triples = [(b, c, a) for a, b, c in raw_data]
 
         # Build pts_data (cartesian) and fid_to_scatter via _scatter_grouped
         # Pass ternary coords as 3-tuples: _scatter_grouped normalises internally
         fid_to_scatter, category_artists = _scatter_grouped(
-            ax, raw_data, fid_list, valid_names, sample_colors,
+            ax, plot_triples, fid_list, valid_names, sample_colors,
             sample_markers if self.tern_markers.isChecked() else [],
             show_category_legend=self.tern_legend.isChecked(),
             category_colors=category_colors, sample_sizes=sample_sizes,
@@ -6049,9 +8774,9 @@ class GeochemistryDockWidget(QDockWidget):
         # Build pts_data list in the same fid order for _attach_scatter_selection
         pts_data = []
         ordered_fids = []
-        for (a, b, c), fid in zip(raw_data, fid_list):
+        for (bl, br, top), fid in zip(plot_triples, fid_list):
             if fid in fid_to_scatter:
-                x, y = ternary_to_cartesian(a, b, c)
+                x, y = ternary_to_cartesian(bl, br, top)
                 pts_data.append((x, y))
                 ordered_fids.append(fid)
 
@@ -6065,24 +8790,25 @@ class GeochemistryDockWidget(QDockWidget):
         title = f"{a_label}  –  {b_label}  –  {c_label}  (n={len(raw_data)})"
         ax.set_title(title, fontsize=11, pad=12)
 
+        category_counts = category_count_pairs(sample_names, valid_names)
         export_legend_artists = {}
         category_legend_obj = None
         if self.tern_legend.isChecked() and len(unique_categories) > 0:
             export_legend_artists = self._build_category_legend(
-                ax, unique_categories, category_styles, Counter(valid_names),
+                ax, unique_categories, category_styles, category_counts,
                 bbox_to_anchor=(0.5, -0.05), fontsize=8)
             category_legend_obj = ax.get_legend()
 
         if bubble_active:
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
-                self._field_display_label(size_field), category_legend_obj)
+                self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, ordered_fids, fid_to_scatter, layer.id())
         self._open_category_panel(
-            fig, artist_registry, category_counts=Counter(valid_names), category_styles=category_styles,
+            fig, artist_registry, category_counts=category_counts, category_styles=category_styles,
             style_template_key=self._category_field_label(), export_legend_artists=export_legend_artists,
             title='Ternary Plot Categories', bubble_active=bubble_active,
             stats_registry=stats_registry, envelope_registry=envelope_registry)

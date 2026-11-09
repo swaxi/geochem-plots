@@ -1,33 +1,59 @@
 ![icon](icon_sm.png) 
 # Geochemistry Plotting Tools
 
-_July 2026 - version 0.0.5_
+_October 2026 - version 1.0.0_
 
-A geochemistry plotting tool for QGIS that creates spider diagrams, tectonic discrimination/classification diagrams, custom XY and ternary plots, mineral classification plots, and petrophysics cross-plots directly from point layer attributes. 
-Developed for UWA EART3343 Lab exercises.
+A geochemistry plotting tool for QGIS that plot geochemical data straight from QGIS point layers.
+ Supports:
+ - spider diagrams with a choice of normalisations,
+ - REE shape coefficients (λ0-λ4, O'Neill 2016) written to the attribute table,
+ - tectonic discrimination and rock classification diagrams,
+ - mineral classification plots, petrophysics cross-plots,
+ - custom XY and ternary plots built from any element, oxide or numeric field; 
+ - interactive plots linked to the map: selecting points on a plot selects them on the map, and the other way round, and plot styles can be shared with the layer's symbology,
+ - advanced plotting options: samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR), 
+ - automatic element and oxide field recognision and conversion to common units.
+ Firstly developed for the UWA EART3343 lab exercises.
 
+# Changelog 1.0.0
 
-
-# Changelog 0.0.5
-
-      * Declared explicit numpy/matplotlib version ranges in requirements.txt, harmonised with the GEOL-QMAPS and Stereoplot plugins, so installing all three on the same QGIS Python environment converges on one mutually compatible dependency set.
-      * Fixed a bug where a missing matplotlib installation crashed at import time instead of degrading gracefully.
-      * Fixed a Qt6/QGIS4 compatibility bug affecting QAction, which moved from QtWidgets to QtGui in Qt6.
-      * Declared Qt6/QGIS4 support in metadata.txt, now that Qt6 compatibility has been verified.
-      * Add Geochemical Differentiation of Sedimentary Rocks ternary diagram (Hasterok et al. 2018, after Mason 1966), with a first-screening check for required oxide fields and a below-detection-limit (negative value) handling option   
-      * Add category mean ± 2σ statistics overlay (all plot tabs), toggled live from the interactive style panel: shows each category's mean ± 2σ with individual samples faded behind it, or replaced by a semi-transparent contour-less envelope, with adjustable background opacity and error bar/marker thickness; the mean marker follows bubble sizing when active and stays in sync with the category's colour/marker   
-      * Add per-category drawing (z-stack) order control to the interactive style panel   
-      * Add hollow/full symbol fill option (white fill, coloured outline) to the interactive style panel     
-      * Add interactive per-category style panel (colour, marker, size, transparency) with save/load/reset/delete templates, replacing the old style JSON file   
-      * Add "no category" option to plot all points with a single symbol   
-      * Add bubble plots: scale symbol size by a chosen field (linear, log10 or exponential scaling), available for every plot type   
-      * Add Filter Layer to Selected / Clear Filter buttons to turn a plot selection into a QGIS layer filter   
-      * Fix Ti vs Zr (Pearce & Cann 1973) diagram and add automatic ppm/ppb/wt%/oxide unit conversion across all plots   
-      * Recognise many more elements and oxides in Custom XY plots
-      * Add Data Preprocessing sub-tab to Custom XY for below-detection-limit (negative value) handling, with substitution options and a review/histogram tool   
-      * Add plot-type dropdown to the Minerals tab, ready for future classification schemes   
-      * Improve point label readability (white background) and stacking order (always drawn above points)   
-      * Various dock panel usability fixes: horizontal scrolling, tabs resize to content, tighter control alignment    
+      * Recognise element fields named by isotope mass number (`Sr88`, `Y89`, `La139`, `Ce140`, `Pr141`, `Nd146`, `88Sr`, `Sr_88`, `Sr88_ppm`...), preferring the most abundant isotope when several are present
+      * Never treat normalised, ratio, error or detection-limit fields (`Sr_ChondriteNorm`, `La_N`, `Y_2SE`, `Nb_LOD`...) as a raw element concentration - previously they could be picked up in place of the real field and give wrong Sr/Y, ΣLREE, etc.
+      * Winchester & Floyd (1977) diagram now plots Zr/TiO₂ with both terms in ppm (TiO₂ wt% × 10000, or Ti ppm × 1.6685 when only Ti is available); a measured TiO₂ (or Ti, for Zr/Ti diagrams) field is used in preference to a converted one
+      * Rename the Minerals-tab apatite scheme to "Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020)"
+      * Select Samples list shows each category once (with its sample count) instead of repeating it for every sample; selecting a category selects all of its samples
+      * Selecting features on the QGIS map now highlights the corresponding points/lines on every open plot (previously only plot → map worked)
+      * The selected-on-top layer rendering order (`is_selected()`) is now also applied when plotting from the Spider tab
+      * Style panel in the plot window can now be collapsed/expanded with a button, docked to any side of the plot window (or floated), and resized by dragging the bars between it and the plot and between its Categories and Legend sections
+      * Each section of the style panel (Statistics, Style Management, Categories, Legend) can be collapsed/expanded by clicking its header
+      * The options on every tab of the main plugin window are now grouped into collapsible sections, each with a drag bar to resize it (double-click to reset)
+      * Layer Selection, Plot Options (the tabs) and Samples are now collapsible groups separated by two draggable bars, and the window automatically re-fits (giving spare height to the Samples list) when groups or sections are collapsed/expanded or the tab changes
+      * Fix Custom Ternary plots drawing data towards the wrong apexes: values for A (top), B (bottom-left) and C (bottom-right) now plot towards their own labelled apex
+      * Fix chemical formulas in plot titles and axis labels (e.g. TiO₂ shown as a square): digits in formulas such as TiO2, SiO2, Na2O and Al2O3 are now drawn as proper subscripts
+      * Ratio axis label on the Zr/Ti vs Nb/Y diagram (Pearce 1996) no longer carries a "(both in ppm)" suffix; the Zr/TiO₂ vs Nb/Y diagram (Winchester & Floyd 1977) keeps a "(in ppm)" qualifier to avoid ambiguity with Ti expressed in ppm
+      * Fix the automatic selected-on-top map rendering order (`is_selected()` ascending), which was silently not being applied; it is now set as soon as a layer is chosen in the plugin and restored after any symbology change, keeping any rendering order you had already defined as a secondary sort
+      * Points selected on the map are now drawn above all unselected points on scatter-type plots, so they are no longer hidden in densely clustered data
+      * Fix selecting points (on a plot or on the map) sometimes drawing a huge, wrongly-placed copy of the selected symbols on the plot instead of a normal-sized highlight: the highlight copies weren't marked with their own transform, so Matplotlib defaulted them to one meant for data coordinates rather than for the tiny marker shape itself
+      * The rubber-band selection tool no longer caches/blits its own background, avoiding a separate glitch where it could go stale and get redrawn over the plot's actual current state
+      * Recognise FeOT/Fe2O3T ("total iron") fields - FeOT, FeOt, FeO*, FeOtot, FeO-tot, FeO(T), FeO(t) and the equivalent Fe2O3 forms - as FeO/Fe2O3: a dataset reporting only FeOT (no separate FeO) previously had FeO flagged as missing; a real FeO/Fe2O3 field, when also present, still takes priority over its FeOT/Fe2O3T counterpart
+      * New "FeO-T"/"Fe2O3-T" entries in the Custom XY/Ternary and bubble "Size by" dropdowns, for reading the total-iron field specifically (any of the spellings above) even when a separate, non-total FeO/Fe2O3 field is also present
+      * Fix the Custom XY/Ternary Num/Denom tick lists starting with an entry pre-ticked (and refusing to let it be deselected on its own) and sometimes toggling an entry just from clicking to open the list; they now start empty and only toggle an entry on a deliberate click. Num/Denom can be left blank - a blank Denom is treated as no denominator (as "1 (none)" already was), while Generate Plot now asks for the missing X/Y (or A/B/C, on Custom Ternary) fields if a Num list is left empty
+      * Custom XY and Custom Ternary: the "Show all numeric fields" option is renamed "Show all numeric fields (including data different from concentrations)" to make clear it also lists non-concentration numeric fields
+      * Fix apatite (and other) plots using the wrong field for an element when the layer also holds ratio or coordinate columns: a precomputed ratio such as `Sr_Y` (Sr/Y) could be read as Sr, and a `Y_UTM` coordinate as Y, pushing Sr/Y far too low. Ratio/anomaly fields (`Sr_Y`, `Sr/Y`, `Sm_Nd`, `Eu_Eu*`...) are now never read as concentrations, `Symbol_Fullname` fields must use the element's real name (`Y_Yttrium`), and isotope fields (`Sr88`, `Y89`) take precedence over other `Symbol_word` fields. The fields used for each plot are listed in the QGIS Log Messages panel
+      * Custom XY and Custom Ternary: the Numerator/Denominator lists are now tick lists, and several ticked entries are added together (e.g. Na2O + K2O), with built-in oxides/elements and unit-suffixed layer fields converted to a common unit; a warning is shown when the units of the added entries can't be reconciled. The bubble **Size by** list works the same way on every tab (a summed size is also exported to/imported from the map's data-defined size), and on the Spider, Discrimination and Minerals tabs it now lists the layer's numeric fields instead of accepting a typed field name. Drop-down lists open wide enough to show every entry in full
+      * Category sample counts in plot legends and the style panel now read `n=x/y`: x samples actually plotted out of the y selected samples in that category (samples missing a variable the plot needs are not plotted). Discrimination and Minerals legends now show these counts too, and the Spider diagram title counts only samples actually drawn
+      * New opt-in "Use layer symbology" checkbox (Layer Selection): when the layer uses a Categorized symbology on the selected Category field, each category's colour, marker shape, size and label are taken from the map, and categories unchecked on the map start hidden in the plot; categories without a map style keep the default plot styling. A matching "Use layer symbology" toggle button in the plot style panel (Style Management) restyles the open plot live, and clicking it again restores the default plot styles. A data-defined symbol size on the layer (e.g. from the QGIS Size Assistant) fills in the tab's Bubble Size settings. See [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)
+      * New "Apply to layer…" button (plot style panel > Style Management) sets the layer's symbology to a Categorized renderer matching the plot's category styles, after confirmation; the previous layer style is kept in the layer's style list so it can be restored. When the plot uses bubble sizing, the symbols get a matching data-defined size (same field, unit conversion, scaling and size range)
+      * The style panel's **Statistics** section can now also show each category's median and interquartile range (IQR), with two new checkboxes alongside **Show mean ± 2σ**; the three can be combined freely, and a **Show faded individual data** checkbox (ticked by default) hides the faint points/lines behind them (see [Category statistics overlay](#category-statistics-overlay-mean--2σ-median-iqr))
+      * Layer Selection: the layer selected in the QGIS Layers panel is now preselected if it's suitable for the plugin, and followed while the plugin is open; the Category and Add label lists show field aliases as `alias (fieldname)` when defined
+      * Custom Ternary: the three apexes can now use a Linear or Log scale (log10, or log10(1 + value) when a plotted value is below 1, as shown in the apex labels). Plot Options: Bubble Size is now the last section on every tab, and Axis Scales and Display follows the field definitions on Custom XY and Custom Ternary
+      * Samples: all samples are selected by default when the layer has no QGIS selection, and the list now follows map selections by itself. Rows ticked in the list now select those samples on the map and on open plots, and **All** is a true all (it also clears any QGIS selection). New **Copy Table** and **Copy Labels** buttons copy the selected samples to the clipboard, and a **Selections** list with ◀ ▶ buttons recalls earlier selections, which can be saved with a name and notes (see [Recall, save and copy selections](#recall-save-and-copy-selections))
+      * Plots: new freehand area selection (as in Stereoplot) alongside the rectangle, now also on Spider diagrams, chosen in the Style panel's **Selection** section; an **Add to selection** option combines several zones without holding Shift. Fix a Shift-drag also toggling the nearest point and making the following click ignored
+      * Custom XY and Custom Ternary: Num and Denom lists are now the same width, and a **⋮** menu next to each one clears the ticked entries or saves them under a name for later use, in any project
+      * Plots: new **Copy PNG** button in the plot window's toolbar, copying the whole plot with its markers and legends to the clipboard as a 300 dpi image. The **Save...** button of the plugin window is removed: plots are saved from the plot window's toolbar
+      * Spider tab: new **Add λ0-λ4 to Layer (selected samples)** button writing the REE shape coefficients λ0-λ4 of O'Neill (2016, *J. Petrology* 57, 1463-1508) to the layer fields `lambda0`-`lambda4`, using the paper's CI chondrite abundances, Shannon ionic radii and orthogonal polynomials (Eu excluded; a sample needs at least 6 REE, including one of La-Nd and one of Er-Lu). The fields can then be plotted (e.g. λ2 vs λ1) on the Custom XY tab with **Show all numeric fields**
+      * Dependencies: `requirements.txt` now declares minimum versions only (`numpy>=1.21`, `matplotlib>=3.5`), harmonised with GEOL-QMAPS and Stereoplot. The previous upper caps (`numpy<2.0`, `matplotlib<3.12`) conflicted with the numpy 2.x shipped by QGIS 3.44 and QGIS 4, making qpip install an older duplicate numpy that shadows QGIS's own. qpip is now declared as a plugin dependency, so the Plugin Manager offers to install it with the plugin
+      * QGIS 4 (Qt6): confirmed compatible - QGIS 4 decides compatibility from `qgisMaximumVersion` (4.99), the `supportsQt6` flag being obsolete; the map-to-plot selection highlight now also works with matplotlib 3.5
 
 Full changelog: <a href="https://github.com/swaxi/geochem-plots/blob/main/metadata.txt">Metadata</a>
 
@@ -39,7 +65,7 @@ Before installing **Geochemistry Plotting Tools**, it is recommended to:
 1. Install the **qpip** plugin from the QGIS Plugin Manager.
 2. Allow **qpip** to install any missing dependencies automatically when prompted by the **Geochemistry Plotting Tools** plugin (or any other plugin with depedencies).
 
-Using **qpip** ensures that all Python dependencies are installed within the active QGIS environment and avoids conflicts with system-wide Python installations. The declared version ranges (`numpy>=1.26.4,<2.0`, `matplotlib>=3.7,<3.12`) match those used by the other `swaxi` QGIS plugins (GEOL-QMAPS, Stereoplot), so installing several of them together converges on one consistent set of package versions.
+Using **qpip** ensures that all Python dependencies are installed within the active QGIS environment and avoids conflicts with system-wide Python installations. The plugin only declares minimum versions (`numpy>=1.21`, `matplotlib>=3.5`), the same as the other `swaxi` QGIS plugins (GEOL-QMAPS, Stereoplot), and no upper limits: QGIS's own bundled numpy/matplotlib (e.g. numpy 2.x in QGIS 3.44 and QGIS 4) already satisfy them, so qpip normally has nothing to install and never replaces the packages QGIS ships.
 
 > **Important:** If the **Geochemistry Plotting Tools** plugin fails to start or reports missing Python modules, first verify that qpip is installed and that all required dependencies have been successfully installed. In most cases, dependency-related issues can be resolved by reinstalling the missing packages through qpip and restarting QGIS.
 
@@ -60,7 +86,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 
 ![Spider Plots](tab1.png)
 
-4. Under **Layer Selection**, choose your **Layer**, the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field
+4. Under **Layer Selection**, choose your **Layer** (the layer selected in the QGIS **Layers** panel is picked automatically, if it's suitable for the plugin), the **Category** field to colour/group samples by (or `(none)` to plot everything with a single symbol - see [Categories and styling](#categories-and-styling)), and optionally an **Add label** field. Fields with an alias are listed as `alias (fieldname)`. Tick **Use layer symbology** to reuse the map's category colours and symbols (see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map))
 5. Pick a plot tab - **Spider, Discrimination/Classification, Custom XY, Custom Ternary, Minerals** or **Petrophysics** (see [Tabs](#tabs) below for what each one offers)
 
 ![Discrimination/Classification](tab2.png)
@@ -68,44 +94,50 @@ Using **qpip** ensures that all Python dependencies are installed within the act
 ![Custom XY](tab3.png)
 
 6. Select samples to plot, using any of:
-   - The **Samples** list in the plugin (multi-select as usual)
-   - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (click **Refresh** in the plugin if the list doesn't update)
-   - The **All** button to select every feature (combine with a layer filter or QGIS selection to narrow this down first)
+   - The **Samples** list in the plugin (multi-select as usual). When a **Category** field is chosen, each category is listed once with its sample count, and selecting it selects all of its samples. Rows you tick also select those samples on the map and on open plots
+   - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (the list follows it automatically)
+   - The **All** button to select every feature, which also clears any QGIS selection (combine with a layer filter to narrow this down first). All samples are selected by default when the layer has no QGIS selection, so you can click **Generate Plot** straight away
 
 ![Map selection](map2plot.png)
 
 7. Click **Generate Plot**
-8. Click **Save...** to export the current plot as PNG, PDF or SVG
-9. Click **None** to clear the sample selection
+8. Use the plot window's toolbar to save the plot (Save icon: PNG, PDF, SVG...) or copy it to the clipboard (**Copy PNG**)
+9. Click **None** to untick every row of the Samples list, e.g. before ticking a few categories (any QGIS selection stays until you tick a row)
 
 ## Tabs
+
+On every tab the options are grouped into sections (e.g. **Normalization and Elements**, **Display**, **Bubble Size**, **X-Axis**). Click a section's header to collapse or expand it, which shortens the panel so the Samples list and buttons stay in view. Drag the thin bar under a section to change its height (the section scrolls if it becomes shorter than its contents), and double-click the bar to reset it to its natural size.
+
+The plugin window itself is made of three main groups - **Layer Selection**, **Plot Options** (the tabs) and **Samples** - each with a darker header you can click to collapse or expand it, separated by two draggable bars so you can trade height between them (each group scrolls if it is made smaller than its contents). The window automatically re-fits whenever you collapse, expand or resize a group or section, or switch tab: every open group gets just the height its contents need, and all the remaining space goes to the Samples list, which grows to show more samples (or to Plot Options if Samples is collapsed).
 
 ### Spider
 - **Normalize** - choose a reference composition to normalise against: 4 chondrite datasets (Sun & McDonough 1989, McDonough & Sun 1995, Boynton 1984, Nakamura 1974), 2 primitive mantle datasets (Sun & McDonough 1989, McDonough & Sun 1995), OIB and N-MORB/E-MORB (Sun & McDonough 1989), 2 depleted mantle datasets (Salters & Stracke 2004, Workman & Hart 2005), and 2 upper continental crust datasets (Rudnick & Gao 2003, Taylor & McLennan 1985)
 - **Elements** - REE only (La-Lu), Extended (Ba-Yb, 19 trace elements) or Extended Alt (Cs-Lu, 27 trace elements)
 - **Legend** / **Markers** checkboxes
 - Y-axis is always log-scaled; oxide fields (e.g. `TiO2`) are automatically converted to their elemental ppm equivalent for normalisation
+- **REE Shape Coefficients** - see [REE shape coefficients (λ0-λ4)](#ree-shape-coefficients-λ0-λ4)
 - [Bubble Size](#bubble-size-all-tabs) section to scale each sample's line markers by an extra field
 
 ### Discrimination/Classification
-- Plot-type drop-down with 9 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996; Winchester & Floyd 1977), Zr/4-Nb×2-Y ternary (Meschede 1986), Geochemical Differentiation of Sedimentary Rocks ternary (Hasterok et al. 2018, after Mason 1966), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
+- Plot-type drop-down with 9 diagrams: TAS plutonic (Wilson 1989) and volcanic (Cox et al. 1979), Zr/Ti vs Nb/Y (Pearce 1996), Zr/TiO₂ vs Nb/Y (Winchester & Floyd 1977; Zr and TiO₂ both in ppm), Zr/4-Nb×2-Y ternary (Meschede 1986), Geochemical Differentiation of Sedimentary Rocks ternary (Hasterok et al. 2018, after Mason 1966), Nb vs Y (Pearce et al. 1984), Rb vs Y+Nb (Pearce et al. 1984), Ti vs Zr (Pearce & Cann 1973)
 - **Field Legend** shows the diagram's named fields; **Category Legend** shows sample categories
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** (in the Samples panel) writes the field name each point falls into (or void) back to the layer, for the currently selected diagram
 
 ### Custom XY
 Split into two sub-tabs:
-- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator), plus **Show all numeric fields** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
+- **Plot Setup**: X-Axis and Y-Axis, each with a Numerator and an optional Denominator picked from ~70 built-in elements/oxides (or `1 (none)` for no denominator) - see [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size), plus **Show all numeric fields (including data different from concentrations)** to pick literal layer field names instead; **REE Normalization** (same reference datasets as Spider); **Linear/Log** scale per axis; **Legend**/**Markers**; [Bubble Size](#bubble-size-all-tabs)
 - **Data Preprocessing**: handling for negative, below-detection-limit-coded values - see [Below-detection-limit values](#below-detection-limit-values-custom-xy-only)
 
 ### Custom Ternary
-- Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY
-- **Show all numeric fields** toggle
+- Three apexes (A: top, B: bottom-left, C: bottom-right), each with a Numerator/Denominator pair from the same element/oxide list as Custom XY (several entries can be ticked and added together - see [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size))
+- **Show all numeric fields (including data different from concentrations)** toggle
+- **Linear/Log** scale, shared by the three apexes: **Log** plots log10(value) before they are normalised. If any plotted sample has a value below 1 in A, B or C (plain log10 would make it negative, which a ternary can't show), log10(1 + value) is used for all three apexes instead; the apex labels show which one was used
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 
 ### Minerals
-- Plot-type drop-down (currently one scheme: Detrital Apatite Classification, Sullivan 2020; more classification schemes can be added here in future)
+- Plot-type drop-down (currently one scheme: Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020); more classification schemes can be added here in future)
 - **Field Legend** / **Category Legend** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** also works from this tab, for the selected classification scheme
@@ -123,15 +155,50 @@ Split into two sub-tabs:
 
 The **Category** field (Layer Selection) groups and colours samples. Choose `(none) - plot all points with one symbol` to skip categorisation and plot every selected sample identically.
 
-Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots. If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+Each category in a plot's legend and Style panel is followed by its sample count, **n=x/y**: *y* is the number of selected samples in that category and *x* the number actually plotted. They differ when some samples lack a variable the plot needs (e.g. no Y on a Nb/Y diagram); on Spider diagrams, missing elements leave gaps in a sample's line, and a sample counts as plotted if any of it is visible (one usable element with markers on, two adjacent ones with markers off). Plot titles give the total number of samples plotted.
 
-### Category mean ± 2σ statistics overlay
+Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots, and holds the **Use layer symbology** and **Apply to layer…** buttons that exchange styles with the QGIS map (see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)). If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
 
-The Style panel's **Statistics** section adds a **Show mean ± 2σ** toggle to any generated plot. When enabled, each visible category's individual points/lines are faded into the background and a mean marker (or, for Spider diagrams, a mean trace) with 2-standard-deviation error bars is drawn on top. An **Individual data as envelope** checkbox swaps the faded points/lines for a plain, contour-less semi-transparent envelope (a convex hull for scatter-type plots, a min/max band for Spider diagrams) instead. **Background opacity** and **Error bar thickness** spinboxes control the faded/envelope opacity and the mean marker/error-bar line weight. The mean marker follows the plot's bubble-size scaling when active, and stays in sync with a category's colour, marker and fill style if you edit them afterwards.
+**Making room for the plot:** the panel's title bar has a **collapse/expand arrow** button - collapsing shrinks the panel to a slim strip at the window edge (or to just its title bar when docked at the top/bottom) so the plot gets the space, and expanding restores its previous size. The panel can be docked to any side of the plot window (drag its title, or use the float button to detach it into its own window), and the highlighted **bars** between the plot and the panel, and between the **Categories** and **Legend** sections, can be dragged to change their width/height. The panel scrolls if it is made smaller than its contents. Each section of the panel (**Statistics**, **Style Management**, **Categories**, **Legend**) also has a clickable header that collapses or expands it; **Style Management** starts collapsed, and collapsing one of Categories/Legend gives its space to the other.
+
+### Sharing symbology with the QGIS map
+
+Plots and the map can use the same category colours, marker shapes, sizes and labels. Both directions are opt-in; without them plots keep the plugin's default styling.
+
+**Map → plot: Use layer symbology.** Style the layer in QGIS with a **Categorized** symbology on the same field as the plot's **Category**, then either tick **Use layer symbology** under Layer Selection (applies to the next plot) or click the **Use layer symbology** toggle button in an open plot's Style panel (**Style Management**), which restyles that plot straight away - click it again to return to the default plot styles. The two are kept in sync.
+- Each category takes its colour, marker shape, size and label from the map; categories unchecked in the QGIS Layers panel start hidden (untick them in the Style panel to show them).
+- Categories missing from the map symbology, and QGIS's "all other values" category, keep the default plot styling.
+- Map marker shapes without a plot equivalent (e.g. heart, arrow, SVG or font markers) are drawn as circles; a note is written to the QGIS **Log Messages** panel.
+- The option is greyed out, with a tooltip explaining why, when the layer's symbology isn't Categorized or classifies a different field than the plot's Category.
+- If the map symbols have a **data-defined size** (e.g. set with the QGIS **Size Assistant**), it fills in the current tab's [Bubble Size](#bubble-size-all-tabs) settings (field, scaling, min/max size). A size set by **Apply to layer…** comes back exactly; a Size Assistant setting is converted to the closest plugin scaling, and the plot scales between the minimum and maximum of the plotted data. From the Style panel button, generate the plot again to apply the bubble sizes.
+
+**Plot → map: Apply to layer….** In the Style panel's **Style Management** section, **Apply to layer…** replaces the layer's symbology, after confirmation, with a Categorized symbology on the plot's Category field that matches the plot: colour, marker shape, size, fill, transparency, labels and which categories are shown. Values not in the plot go to a grey "all other values" category so no features disappear from the map. If the plot uses bubble sizing, the map symbols get a matching data-defined size (same field, unit conversion, scaling and size range). The layer's previous style is saved first (named "Before plot style export …"), so you can switch back to it from **Layer Properties > Symbology > Style**.
+
+### Category statistics overlay (mean ± 2σ, median, IQR)
+
+The Style panel's **Statistics** section adds three independent checkboxes to any generated plot. When any of them is ticked, each visible category's individual points/lines are faded into the background and the chosen statistics are drawn on top:
+- **Show mean ± 2σ**: a mean marker (or, for Spider diagrams, a mean trace) with 2-standard-deviation error bars
+- **Show median**: an open ring around the category's symbol (a dashed trace with open markers on Spider diagrams)
+- **Show interquartile range (IQR)**: an unfilled box from the 25th to the 75th percentile on both axes (a shaded band on Spider diagrams)
+
+Spider diagram statistics are computed in log10 space. Untick **Show faded individual data** (ticked by default) to hide the faint points/lines and show the statistics alone. An **Individual data as envelope** checkbox swaps the faded points/lines for a plain, contour-less semi-transparent envelope (a convex hull for scatter-type plots, a min/max band for Spider diagrams) instead. **Background opacity** and **Line thickness** spinboxes control the faded/envelope opacity and the statistics' line weight. The mean and median markers follow the plot's bubble-size scaling when active, and all the statistics stay in sync with a category's colour and marker if you edit them afterwards.
 
 ### Bubble Size (all tabs)
 
-Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by, choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point.
+Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by (**Size by** is a tick list: tick several entries to size by their sum, with the same unit handling and warnings as described in [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size); on the Spider, Discrimination and Minerals tabs it also lists the layer's own numeric fields after the built-in elements/oxides), choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point. Bubble sizing can be exported to, or read from, a data-defined symbol size on the QGIS layer - see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map).
+
+### Adding fields together (Custom XY, Custom Ternary and Bubble Size)
+
+The Numerator and Denominator lists of Custom XY and Custom Ternary, and the **Size by** list of every tab's Bubble Size section, are tick lists: tick several entries to add them together, e.g. **Na2O + K2O** for a total-alkali axis, `(Na2O + K2O) / Al2O3` with Al2O3 as the denominator, or symbols sized by Na2O + K2O. Entries are added in the order you tick them, and the sum is shown in the list and in the axis/apex label or bubble-size legend. `1 (none)` can't be combined with other entries. The lists open wide enough to show every entry in full.
+
+The **⋮** button next to each Num and Denom list has a **Clear** option to untick everything, and **Save ticked entries as…** to give the current entries a name (e.g. *Alkalis* for Na2O + K2O). Saved selections then appear in the **⋮** menu of every Num and Denom list, on both tabs, and are kept in your QGIS user settings, so they stay available in other projects. Entries the current list doesn't offer (e.g. layer fields missing from this layer) are left unticked, with a warning in the message bar.
+
+Units are made consistent before adding:
+- Built-in oxides are added in wt%, built-in elements in ppm; a mix of oxides and elements is converted to ppm.
+- With **Show all numeric fields**, layer fields are used as stored; only a ppm/ppb/wt% suffix in a field name (e.g. `Rb_ppm`, `Ba_ppb`, `Na2O_pct`) lets the plugin convert them to a common unit.
+- If the units of the ticked entries can't be reconciled (unknown units, Mg#, or REE-normalised values mixed with others), a warning lists them before plotting and lets you cancel. **Make sure fields added together are concentrations reported in the same unit.**
+
+A sample is only plotted if every ticked entry has a value.
 
 ### Below-detection-limit values (Custom XY only)
 
@@ -152,8 +219,9 @@ Substitution is computed per-row from each value's own encoded detection limit, 
 | Left-click a point | Select that feature in QGIS (replaces current selection) |
 | Shift + left-click a point | Add or remove that feature from the QGIS selection |
 | Left-click empty space | Clear the QGIS selection |
-| Left-click drag (rectangle) | Select all points enclosed by the rectangle |
-| Shift + left-click drag | Add all points enclosed by the rectangle to the current selection |
+| Left-click drag | Select all points enclosed by the drawn area (freehand or rectangle) |
+| Shift + left-click drag | Add all points enclosed by the area to the current selection (union) |
+| Esc | Clear the QGIS selection |
 
 **Spider diagrams:**
 
@@ -161,8 +229,15 @@ Substitution is computed per-row from each value's own encoded detection limit, 
 |---|---|
 | Click a sample line | Select that feature in QGIS (replaces current selection) |
 | Shift + click a sample line | Add or remove that feature from the QGIS selection |
+| Left-click drag | Select every sample with a data point inside the drawn area (freehand or rectangle) |
+| Shift + left-click drag | Add those samples to the current selection (union) |
+| Esc | Clear the QGIS selection |
 
-Selected features are highlighted on the map using QGIS's standard selection colour, and rendered on top of other features in the layer. Hovering near a point/line shows a popup tooltip using the **Add label** field.
+The Style panel's **Selection** section sets the drawing **Tool** (**Freehand** or **Rectangle**; new plots keep your last choice) and has a **Clear selection** button. Tick **Add to selection** to combine several zones of interest without holding Shift: each new area or clicked sample then adds to the selection.
+
+Selected features are highlighted on the map using QGIS's standard selection colour, and rendered on top of other features in the layer: as soon as a layer is chosen in the plugin, its **Control feature rendering order** is set to `is_selected()` ascending, and set again whenever the layer's symbology is changed (including by **Apply to layer…**). Any rendering order you had already defined is kept as a secondary sort.
+
+Selection also works in the other direction: features you select on the QGIS map (Select Features tools, attribute table, etc.) are highlighted on every plot that is open for that layer, so you can, for example, select a lava flow or area on the map and see where it falls on a TAS or discrimination diagram. On scatter-type plots, selected points (red outline) are drawn above all unselected points, so they stay visible in densely clustered data; on Spider diagrams, selected sample lines are drawn bold and on top while the others are dimmed. Hovering near a point/line shows a popup tooltip using the **Add label** field.
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
@@ -172,6 +247,14 @@ Selected features are highlighted on the map using QGIS's standard selection col
 
 The **Add label** dropdown and checkbox (Layer Selection) permanently labels selected points/lines in a plot using the chosen field, and also defines the hover popup label. Labels are drawn with a semi-transparent white background and always on top of plotted points, for readability.
 
+### Recall, save and copy selections
+
+Every selection made on the map or on a plot while the plugin is open is added to the **Selections** list in the Samples section. Pick an entry, or use the **◀** and **▶** buttons, to select those samples again on the map, the plots and the Samples list.
+
+**Save…** gives the current selection a name and notes (shown as a tooltip in the list), handy for keeping track of different tests. Saved selections are marked ★ and stored with the layer in the QGIS project (save the project to keep them); the others last until QGIS closes, and the 30 most recent are kept. **Delete** removes the listed entry, without changing what is selected.
+
+**Copy Table** copies the attribute table of the samples selected in the Samples list to the clipboard, tab-separated so it pastes straight into a spreadsheet. **Copy Labels** copies the values of the **Add label** field for those samples, one per line.
+
 ### Filter layer to selection
 
 In the **Samples** section, **Filter Layer to Selected** turns whatever is currently selected in QGIS (e.g. after lasso/rectangle-selecting points on a plot) into a real layer filter, so the sample list, plots and attribute table only see those features - handy for saving a selection without editing the source data. **Clear Filter** removes it again.
@@ -180,12 +263,33 @@ In the **Samples** section, **Filter Layer to Selected** turns whatever is curre
 
 For Discrimination/Classification and Minerals plots, **Add Classification Field to Layer** (Samples panel) writes a new/updated text field to the layer, containing the field name each feature falls into for the currently selected diagram (or `void` if outside all defined fields).
 
+### REE shape coefficients (λ0-λ4)
+
+On the Spider tab, **Add λ0-λ4 to Layer (selected samples)** (in the **REE Shape Coefficients** section) fits the chondrite-normalised REE pattern of each sample selected in the Samples list to the orthogonal polynomials of O'Neill (2016), and writes the shape coefficients to the numeric layer fields `lambda0` to `lambda4` (created if needed; other features are left unchanged):
+
+ln([REE]/[REE]CI) = λ0 + λ1·f1 + λ2·f2 + λ3·f3 + λ4·f4
+
+- **λ0**: average of ln([REE]/[REE]CI) (overall REE enrichment)
+- **λ1**: linear slope (positive for LREE-enriched patterns)
+- **λ2**: quadratic curvature
+- **λ3**: sigmoidal deviation (inflections at the ends of the pattern)
+- **λ4**: W/M-shaped term
+
+The calculation uses only the paper's reference data - CI chondrite abundances and REE³⁺ ionic radii in eight-fold coordination (Shannon, 1976) from its Table 1, and the orthogonal polynomials f1-f4 from its Table 2 - whatever normalisation is chosen for the spider diagram. Eu is never used in the fit (Eu anomalies), and the same polynomials are used whatever REE are missing, so the coefficients stay comparable between samples. A sample needs at least 6 REE with positive values (Eu excluded), including one of La-Nd and one of Er-Lu; otherwise its fields are left empty and the reason is given in the summary message. REE fields are found and converted to ppm as for the plots, and the fields used are listed in the QGIS **Log Messages** panel.
+
+λ0, λ1 and λ2 capture nearly all the information of common REE patterns; λ3 and λ4 are only significant with very precise analyses (about 2% or better). The classic **λ2 vs λ1** diagram can be drawn on the Custom XY tab with **Show all numeric fields** ticked.
+
+O'Neill, H. St. C. (2016). The Smoothness and Shapes of Chondrite-normalized Rare Earth Element Patterns in Basalts. *Journal of Petrology* 57, 1463-1508. [doi:10.1093/petrology/egw047](https://doi.org/10.1093/petrology/egw047). The same method is implemented in [pyrolite](https://pyrolite.readthedocs.io/en/main/examples/geochem/lambdas.html).
+
 ## Data Requirements
 
 Your layer should have fields containing geochemical data. The plugin automatically finds fields matching common naming conventions:
 - Plain element/oxide names: `La`, `Ce`, `Nb`, `Zr`, `TiO2`, `K2O`, etc.
 - With unit suffixes: `La_ppm`, `Zr_PPM`, `Nb (ppm)`, `TiO2_pct`, `K2O_wt`, etc.
-- `Symbol_Fullname` style: `Na_Sodium`, `K_Potassium`, `Cl_Chlorine`, etc.
+- `Symbol_Fullname` style: `Na_Sodium`, `K_Potassium`, `Cl_Chlorine`, etc. (the suffix must be the element's name, so e.g. a `Y_UTM` coordinate field is never taken as yttrium)
+- Isotope-labelled element fields: `Sr88`, `Y89`, `La139`, `88Sr`, `Sr_88`, `Sr88_ppm`, etc. (if several isotopes of one element are present, the most abundant is used)
+- Normalised, ratio, anomaly, error and detection-limit fields (names containing e.g. `Norm`, `Chondrite`, `Ratio`, `_N`, `_2SE`, `_LOD`, or a second element symbol such as `Sr_Y`, `Sr/Y`, `Sm_Nd`, `Eu_Eu*`) are never treated as raw concentrations, so you can keep chondrite-normalised and ratio columns next to the raw data
+- Each time a plot is generated, the fields actually used for each element/oxide are listed in the QGIS **Log Messages** panel (**Geochemistry Plotting Tools** tab), e.g. `Sr ← Sr88, Y ← Y89`, so you can check which columns were picked up
 - Units (ppm, ppb, wt%) and elemental/oxide forms are auto-detected per field and converted as needed for each plot (e.g. a layer with only `TiO2_pct` can still drive a Ti-in-ppm plot, and vice versa)
 - Negative values coded as below-detection-limit are supported in Custom XY plots - see [Below-detection-limit values](#below-detection-limit-values-custom-xy-only)
 

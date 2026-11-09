@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('geochem_dock.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -m pyflakes geochem_dock.py)"
+    ]
+  }
+}
