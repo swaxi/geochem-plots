@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, custom XY and ternary plots, and REE shape coefficients for geochemical data
 version=1.0.0
 author=Julien Perret, Mark Jessell (Centre for Exploration Targeting, University of Western Australia)
-email=julien.perret@uwa.edu.au; mark.jessell@uwa.edu.au
+email=julien.perret@uwa.edu.au
 
 about=Plot geochemical data straight from QGIS point layers.
  Supports:
