@@ -3,7 +3,7 @@ name=Geochemistry Plotting Tools
 qgisMinimumVersion=3.24
 qgisMaximumVersion=4.99
 description=Create spider diagrams, discrimination diagrams, custom XY and ternary plots, and REE shape coefficients for geochemical data
-version=1.0.0
+version=1.0.1
 author=Julien Perret, Mark Jessell (Centre for Exploration Targeting, University of Western Australia)
 email=julien.perret@uwa.edu.au
 
@@ -22,7 +22,17 @@ about=Plot geochemical data straight from QGIS point layers.
 tracker=https://github.com/swaxi/geochem-plots/issues
 repository=https://github.com/swaxi/geochem-plots
 
-changelog=1.0.0
+changelog=1.0.1
+     1.0.1 2026-11
+       **Bug Fixes**
+       * Custom XY: total-iron oxides (Fe2O3-T, FeO-T) are now labelled in wt pct, not ppm, in the axis labels and plot title (the plotted values were already in wt pct)
+       * Category legends no longer overflow the figure: the number of legend columns is chosen to fit the figure width instead of up to 6 whatever the length of the category names, the legend text shrinks when the plot window is narrowed (e.g. by the docked Style panel), and the bottom margin is raised so every legend row stays inside the figure; both are recomputed whenever the plot window is resized
+       * Axis and tick labels are no longer cut at the edges of the plot window: the layout is redone for the window's size whenever it is resized
+       * Spider diagram: the y-axis label now shows only the normalising reservoir (e.g. "Sample / Chondrite"), the full reference being already given in the title; the full name was longer than the axes are tall
+
+       **Documentation**
+       * README: introduction video (English and French subtitles), refreshed screenshots of the current interface, and new screenshots of the Custom Ternary, Minerals and Petrophysics tabs, the Style panel, shared symbology, statistics overlays and bubble plots
+
      1.0.0 2026-10
        **Bug Fixes**
        * Recognise element fields named by isotope mass number (Sr88, Y89, La139, Ce140, Pr141, Nd146, 88Sr, Sr_88, Sr88_ppm ...), preferring the most abundant isotope when several are present
