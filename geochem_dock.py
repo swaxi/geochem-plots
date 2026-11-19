@@ -2106,6 +2106,117 @@ def _build_spider_stat_artists(ax, x_positions, plot_data, sample_names,
     return stats_registry, envelope_registry
 
 
+def legend_ncol(ax, labels, fontsize, max_ncol=6):
+    """Number of columns for a category legend drawn under `ax`.
+
+    Starts from about four rows per column (at most `max_ncol` columns) and
+    drops columns until the legend, measured with the figure's renderer,
+    fits within the figure width - long category names (e.g. lithologies)
+    would otherwise push the legend out of the figure on both sides.
+    """
+    n = len(labels)
+    preferred = max(1, min(max_ncol, (n + 3) // 4))
+    if n == 0:
+        return preferred
+    from matplotlib.font_manager import FontProperties
+    fig = ax.figure
+    try:
+        renderer = fig.canvas.get_renderer()
+    except Exception:
+        return preferred
+    rc = matplotlib.rcParams
+    font_px = FontProperties(size=fontsize).get_size_in_points() * fig.dpi / 72.0
+    item_extra = (rc['legend.handlelength'] + rc['legend.handletextpad']) * font_px
+    widths = np.array([
+        renderer.get_text_width_height_descent(str(label), FontProperties(size=fontsize), ismath=False)[0]
+        + item_extra for label in labels])
+    available = fig.bbox.width * 0.96
+    for ncol in range(preferred, 0, -1):
+        columns = [col for col in np.array_split(widths, ncol) if len(col)]
+        total = (sum(col.max() for col in columns) +
+                 (len(columns) - 1) * rc['legend.columnspacing'] * font_px +
+                 2 * (rc['legend.borderpad'] + rc['legend.borderaxespad']) * font_px)
+        if total <= available:
+            return ncol
+    return 1
+
+
+def fit_figure_layout(fig, ax, pad_px=4, min_fontsize=5.0):
+    """Keep the axis labels and the legend(s) under `ax` inside the figure.
+
+    Margins are figure fractions computed once for the initial figure size,
+    so once the window is resized - or narrowed by the docked Style panel -
+    tick and axis labels can be cut at the edges: the tight layout is redone
+    for the new size on every resize.
+
+    A legend anchored below the axes also overflows the figure when it has
+    many rows, or when the window is narrower than the figure size its
+    columns were chosen for. Its text is shrunk until it fits the width, and
+    the bottom margin raised until it fits the height, starting again from
+    the plot's own settings on every resize so they also grow back. Every
+    legend of the axes is considered: with bubble sizing on, the category
+    legend is kept as a plain artist next to the bubble legend.
+    """
+    import warnings
+    from matplotlib.legend import Legend
+    base_bottom = fig.subplotpars.bottom
+    base_sizes = {}
+
+    def fit(event=None):
+        try:
+            renderer = fig.canvas.get_renderer()
+        except Exception:
+            return
+        legends = [child for child in ax.get_children()
+                   if isinstance(child, Legend) and child.get_visible()]
+
+        def overflows(legend):
+            # Centred on the axes, not the figure: check both edges.
+            extent = legend.get_window_extent(renderer)
+            return extent.x0 < pad_px or extent.x1 > fig.bbox.width - pad_px
+
+        for legend in legends:
+            for text in legend.get_texts():
+                text.set_fontsize(base_sizes.setdefault(id(text), text.get_fontsize()))
+        bottom = base_bottom
+        if event is not None:
+            # The plot laid itself out for its initial size just before this
+            # was first called; redo it for the window's current size. The
+            # legends are left out: their room is made below.
+            in_layout = [legend.get_in_layout() for legend in legends]
+            for legend in legends:
+                legend.set_in_layout(False)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                try:
+                    fig.tight_layout()
+                except Exception:
+                    pass
+            for legend, state in zip(legends, in_layout):
+                legend.set_in_layout(state)
+            bottom = max(base_bottom, fig.subplotpars.bottom)
+        fig.subplots_adjust(bottom=bottom)
+        if not legends:
+            return
+        for legend in legends:
+            texts = legend.get_texts()
+            while (texts and overflows(legend) and
+                   texts[0].get_fontsize() * 0.9 >= min_fontsize):
+                for text in texts:
+                    text.set_fontsize(text.get_fontsize() * 0.9)
+        # The legend hangs from the axes, so raising the margin also shrinks
+        # the axes it is anchored to: converge in a few passes.
+        for _ in range(4):
+            deficit = pad_px - min(legend.get_window_extent(renderer).y0 for legend in legends)
+            if deficit <= 0.5 or fig.bbox.height <= 0:
+                break
+            bottom = min(0.6, bottom + deficit / fig.bbox.height)
+            fig.subplots_adjust(bottom=bottom)
+
+    fit()
+    fig.canvas.mpl_connect('resize_event', fit)
+
+
 class PolygonDiagramMixin:
     """Shared classify_point and draw_fields for diagram classes that define _get_fields().
 
@@ -2268,8 +2379,7 @@ class Pearce1996_NbY_ZrTi(PolygonDiagramMixin):
         ax.set_ylim(0.001, 1)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -2405,8 +2515,7 @@ class Winchester_Floyd1977_NbY_ZrTi(PolygonDiagramMixin):
         ax.set_ylim(0.001, 1)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -2498,8 +2607,7 @@ class Meschede1986_Ternary(PolygonDiagramMixin):
         ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
@@ -2664,8 +2772,7 @@ class Hasterok2018_Sedimentary(PolygonDiagramMixin):
         ax.set_title(f'{subscript_formula(cls.name)}{n_str}\n{cls.reference}', fontsize=11)
 
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -2742,8 +2849,7 @@ class Pearce1984_YNb:
         ax.set_ylim(1, 2000)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
@@ -2824,8 +2930,7 @@ class Pearce1984_YNbRb:
         ax.set_ylim(1, 10000)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         
@@ -2900,8 +3005,7 @@ class PearceCann1973_ZrTi(PolygonDiagramMixin):
         ax.set_ylim(0, 9000)
 
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
 
@@ -3078,8 +3182,7 @@ class Wilson1989_TAS(PolygonDiagramMixin):
         ax.set_ylim(0, 17)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -3218,8 +3321,7 @@ class Cox1979_TAS(PolygonDiagramMixin):
         ax.set_ylim(0, 17)
         
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                      ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -3431,8 +3533,7 @@ class ApatiteGroupPlot(PolygonDiagramMixin):
         ax.set_ylim(0.001, 1000)
 
         if show_category_legend and category_colors and len(category_colors) > 0:
-            n_categories = len(category_colors)
-            ncol = max(1, min(6, (n_categories + 3) // 4))
+            ncol = legend_ncol(ax, ax.get_legend_handles_labels()[1], 8)
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), fontsize=8,
                       ncol=ncol, framealpha=0.9, borderaxespad=0.)
         return fid_to_scatter, category_artists
@@ -5605,7 +5706,9 @@ class GeochemistryDockWidget(QDockWidget):
         ax.set_xticks(x_positions)
         ax.set_xticklabels(element_order, fontsize=10)
 
-        ax.set_ylabel(f'Sample / {norm_name}', fontsize=12)
+        # Only the reservoir (e.g. "Chondrite"): the full reference is in the
+        # title, and the full name is longer than the axes are tall.
+        ax.set_ylabel(f"Sample / {norm_name.split(' - ')[0]}", fontsize=12)
         ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
         ax.yaxis.set_major_locator(ticker.LogLocator(base=10.0, numticks=10))
         ax.grid(True, which='major', axis='y', linestyle='-', alpha=0.3)
@@ -5645,6 +5748,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_spider_selection(fig, line_to_fid, layer.id())
         self._open_category_panel(
@@ -5903,6 +6007,7 @@ class GeochemistryDockWidget(QDockWidget):
                 self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
@@ -5984,6 +6089,7 @@ class GeochemistryDockWidget(QDockWidget):
                 self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         valid_names = [name for name, valid in zip(sample_names, valid_mask) if valid]
@@ -6140,6 +6246,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
@@ -6286,7 +6393,7 @@ class GeochemistryDockWidget(QDockWidget):
                     return ''
                 if elem in ('1 (none)', 'Mg#'):
                     return ''
-                if elem in OXIDE_COMPOSITION:
+                if elem in OXIDE_COMPOSITION or elem in TOTAL_IRON_TERM_OXIDE:
                     return ' (wt%)'
                 return ' (ppm)'
 
@@ -6465,6 +6572,7 @@ class GeochemistryDockWidget(QDockWidget):
 
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, fid_list, fid_to_scatter, layer.id())
         self._open_category_panel(
@@ -7288,8 +7396,6 @@ class GeochemistryDockWidget(QDockWidget):
         """
         if not category_values:
             return {}
-        n_categories = len(category_values)
-        ncol = max(1, min(6, (n_categories + 3) // 4))
         legend_handles = []
         legend_labels = []
         for cat in category_values:
@@ -7302,6 +7408,7 @@ class GeochemistryDockWidget(QDockWidget):
                 markersize=max(4.0, float(style.get('markersize', 8)) * 0.7),
                 alpha=float(style.get('alpha', 1.0))))
             legend_labels.append(f"{cat} ({format_category_count(category_counts, cat)})")
+        ncol = legend_ncol(ax, legend_labels, fontsize)
         ax.legend(legend_handles, legend_labels, loc='upper center',
                  bbox_to_anchor=bbox_to_anchor, fontsize=fontsize,
                  ncol=ncol, framealpha=0.9, borderaxespad=0.)
@@ -8752,6 +8859,7 @@ class GeochemistryDockWidget(QDockWidget):
                 self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
         plt.tight_layout()
+        fit_figure_layout(fig, ax)
         plt.show()
         self._attach_scatter_selection(fig, ax, pts_data, ordered_fids, fid_to_scatter, layer.id())
         self._open_category_panel(
