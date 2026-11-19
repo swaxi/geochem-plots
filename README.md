@@ -21,6 +21,7 @@ A geochemistry plotting tool for QGIS that plot geochemical data straight from Q
  - interactive plots linked to the map: selecting points on a plot selects them on the map, and the other way round, and plot styles can be shared with the layer's symbology,
  - advanced plotting options: samples can be grouped and styled by category, sized by a field (bubble plots), and summarised with category statistics (mean, median, IQR), 
  - automatic element and oxide field recognision and conversion to common units.
+ 
  Firstly developed for the UWA EART3343 lab exercises.
 
 # Changelog 1.0.0
