@@ -2152,16 +2152,42 @@ def fit_figure_layout(fig, ax, pad_px=4, min_fontsize=5.0):
 
     A legend anchored below the axes also overflows the figure when it has
     many rows, or when the window is narrower than the figure size its
-    columns were chosen for. Its text is shrunk until it fits the width, and
-    the bottom margin raised until it fits the height, starting again from
-    the plot's own settings on every resize so they also grow back. Every
-    legend of the axes is considered: with bubble sizing on, the category
-    legend is kept as a plain artist next to the bubble legend.
+    columns were chosen for. Its entries are regrouped into fewer columns
+    and/or its text shrunk until it fits the width, and the bottom margin
+    is raised until it fits the height, starting again from the plot's own
+    settings on every resize so they also grow back. Every legend of the
+    axes is considered: with bubble sizing on, the category legend is kept
+    as a plain artist next to the bubble legend.
     """
     import warnings
     from matplotlib.legend import Legend
     base_bottom = fig.subplotpars.bottom
     base_sizes = {}
+    base_columns = {}   # id(legend) -> (entries in order, number of columns)
+    below_axes = {}     # id(legend) -> True if the plot hung it below the axes
+
+    def set_columns(legend, ncol=None):
+        """Regroup the legend's own entries into `ncol` columns (None: the
+        number the plot chose), keeping the handle/text artists the style
+        panel restyles. Relies on Matplotlib's legend layout internals;
+        returns the number of columns set, or 0 if they aren't there."""
+        try:
+            from matplotlib.offsetbox import VPacker
+            box = legend._legend_handle_box
+            key = id(legend)
+            if key not in base_columns:
+                entries = [entry for column in box.get_children() for entry in column.get_children()]
+                base_columns[key] = (entries, len(box.get_children()))
+            entries, base_ncol = base_columns[key]
+            ncol = ncol or base_ncol
+            sep = legend.labelspacing * legend._fontsize
+            box._children = [
+                VPacker(pad=0, sep=sep, align='baseline', children=list(column))
+                for column in np.array_split(np.array(entries, dtype=object), ncol) if len(column)]
+            legend.stale = True
+            return ncol
+        except Exception:
+            return 0
 
     def fit(event=None):
         try:
@@ -2199,20 +2225,74 @@ def fit_figure_layout(fig, ax, pad_px=4, min_fontsize=5.0):
         fig.subplots_adjust(bottom=bottom)
         if not legends:
             return
-        for legend in legends:
+        def fit_text(legend, scale):
+            """Text scaled by `scale` of the plot's own size, then shrunk
+            until the legend fits the width (or reaches min_fontsize)."""
             texts = legend.get_texts()
-            while (texts and overflows(legend) and
-                   texts[0].get_fontsize() * 0.9 >= min_fontsize):
+            for text in texts:
+                text.set_fontsize(base_sizes[id(text)] * scale)
+            while texts and overflows(legend) and texts[0].get_fontsize() * 0.9 >= min_fontsize:
                 for text in texts:
                     text.set_fontsize(text.get_fontsize() * 0.9)
-        # The legend hangs from the axes, so raising the margin also shrinks
-        # the axes it is anchored to: converge in a few passes.
+            return texts[0].get_fontsize() / base_sizes[id(texts[0])] if texts else 1.0
+
+        for legend in legends:
+            # Try every number of columns from the plot's own choice (made
+            # for its initial width) down to one, each with the largest text
+            # that fits the width. Keep the one with the largest text whose
+            # height leaves room for the plot, preferring more columns on a
+            # tie; failing that, the shortest one.
+            base_ncol = set_columns(legend)
+            max_height = 0.45 * fig.bbox.height
+            options = []
+            for ncol in range(base_ncol, 0, -1) if base_ncol else [0]:
+                if ncol:
+                    set_columns(legend, ncol)
+                scale = fit_text(legend, 1.0)
+                # Then smaller still if it is too tall to leave room for the plot.
+                texts = legend.get_texts()
+                while (texts and legend.get_window_extent(renderer).height > max_height and
+                       texts[0].get_fontsize() * 0.9 >= min_fontsize):
+                    scale *= 0.9
+                    for text in texts:
+                        text.set_fontsize(text.get_fontsize() * 0.9)
+                extent = legend.get_window_extent(renderer)
+                options.append((ncol, scale, not overflows(legend), extent.height))
+            good = [o for o in options if o[2] and o[3] <= max_height]
+            if good:
+                choice = max(good, key=lambda o: (round(o[1], 3), o[0]))
+            else:
+                choice = min(options, key=lambda o: (not o[2], o[3]))
+            if choice[0]:
+                set_columns(legend, choice[0])
+            fit_text(legend, choice[1])
+        # Legends hanging below the axes (not the bubble-size legend inside
+        # them) are anchored a fixed fraction of the axes height below them,
+        # which creeps up into the x-axis labels when the axes shrink: hang
+        # them just under the x-axis labels instead.
+        for legend in legends:
+            if id(legend) not in below_axes:
+                below_axes[id(legend)] = legend.get_window_extent(renderer).y1 <= ax.bbox.y0
+
+        def hang_below_axis():
+            for legend in legends:
+                if not below_axes.get(id(legend)) or ax.bbox.height <= 0:
+                    continue
+                axis_box = ax.xaxis.get_tightbbox(renderer)
+                top = (axis_box.y0 if axis_box is not None else ax.bbox.y0) - pad_px
+                legend.set_bbox_to_anchor((0.5, (top - ax.bbox.y0) / ax.bbox.height),
+                                          transform=ax.transAxes)
+
+        # Raising the margin also shrinks the axes the legend hangs from:
+        # converge in a few passes.
+        hang_below_axis()
         for _ in range(4):
             deficit = pad_px - min(legend.get_window_extent(renderer).y0 for legend in legends)
             if deficit <= 0.5 or fig.bbox.height <= 0:
                 break
-            bottom = min(0.6, bottom + deficit / fig.bbox.height)
+            bottom = min(0.7, bottom + deficit / fig.bbox.height)
             fig.subplots_adjust(bottom=bottom)
+            hang_below_axis()
 
     fit()
     fig.canvas.mpl_connect('resize_event', fit)
@@ -3579,6 +3659,8 @@ class GeochemistryDockWidget(QDockWidget):
         # Style template last loaded in a plot's style panel, applied to every
         # new plot for the rest of the session: {'name': ..., 'styles': {category: style}}.
         self._session_style = None
+        # {layer id: (filter set by "Filter Layer to Selected", filter it replaced)}
+        self._plugin_filters = {}
         # {layer id: [selection entries]}, see _record_selection().
         self._selection_history = {}
         self._selection_watched_layer = None
@@ -3601,6 +3683,9 @@ class GeochemistryDockWidget(QDockWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # (Re)opening the plugin starts from the layer selected in the QGIS
+        # Layers panel, as on its first opening, not the one used last time.
+        self.on_active_layer_changed(self.iface.activeLayer())
         self._schedule_splitter_fit()
 
     def _schedule_splitter_fit(self, *_args):
@@ -4117,8 +4202,9 @@ class GeochemistryDockWidget(QDockWidget):
         self.title_prefix_edit.setPlaceholderText("Optional header added above every plot title")
         self.title_prefix_edit.setClearButtonEnabled(True)
         self.title_prefix_edit.setToolTip(
-            "Text added as a first title line on every plot generated from now on "
-            "(e.g. a project or area name). It is kept until QGIS is closed.")
+            "Text added above the title of every plot generated from now on "
+            "(e.g. a project or area name). Type \\n to start a new line. "
+            "It is kept until QGIS is closed.")
         layer_layout.addLayout(self._label_row("Title prefix:", self.title_prefix_edit))
 
         # Style template loaded from a plot's style panel, applied to new plots.
@@ -4573,7 +4659,8 @@ class GeochemistryDockWidget(QDockWidget):
         copy_labels_btn = QPushButton("Copy Labels")
         copy_labels_btn.setToolTip(
             "Copy the values of the \"Add label\" field for the samples selected in the "
-            "list above to the clipboard, one per line.")
+            "list above to the clipboard, as an expression ready to paste into a filter "
+            "or below a figure, e.g. \"Sample\" IN ('TAR4-S001', 'TAR4-S005').")
         copy_labels_btn.clicked.connect(self.copy_selection_labels)
         copy_row.addWidget(copy_table_btn)
         copy_row.addWidget(copy_labels_btn)
@@ -4596,7 +4683,10 @@ class GeochemistryDockWidget(QDockWidget):
         )
         filter_to_selection_btn.clicked.connect(self.filter_layer_to_selection)
         clear_filter_btn = QPushButton("Clear Filter")
-        clear_filter_btn.setToolTip("Remove the filter and show all features in the layer again.")
+        clear_filter_btn.setToolTip(
+            "Undo \"Filter Layer to Selected\", giving back the layer's previous filter (if any).\n"
+            "A filter not set by this plugin is only removed after a warning.\n"
+            "To plot all the samples the filter lets through, use \"All\" instead.")
         clear_filter_btn.clicked.connect(self.clear_layer_filter)
         filter_row.addWidget(filter_to_selection_btn)
         filter_row.addWidget(clear_filter_btn)
@@ -5406,7 +5496,10 @@ class GeochemistryDockWidget(QDockWidget):
         self._copy_to_clipboard('\n'.join(lines), f"Attribute table of {len(features)} sample(s)")
 
     def copy_selection_labels(self):
-        """Copy the "Add label" field's values of the selected samples, one per line."""
+        """Copy the "Add label" field's values of the selected samples as a
+        QGIS expression, e.g. "Sample" IN ('TAR4-S001', 'TAR4-S005'), ready
+        to paste into a filter or below a figure."""
+        from qgis.core import QgsExpression
         selection = self._selected_features_for_copy()
         if selection is None:
             return
@@ -5415,9 +5508,15 @@ class GeochemistryDockWidget(QDockWidget):
         if not label_field or layer.fields().indexOf(label_field) < 0:
             QMessageBox.warning(self, "Warning", "Please choose a field under \"Add label\".")
             return
-        values = [self._clipboard_cell(feature[label_field]) for feature in features]
-        values = [value for value in values if value]
-        self._copy_to_clipboard('\n'.join(values), f"{len(values)} '{label_field}' label(s)")
+        values = []
+        for feature in features:
+            value = feature[label_field]
+            if value is None or value == NULL or value == '' or value in values:
+                continue
+            values.append(value)
+        expression = '{} IN ({})'.format(QgsExpression.quotedColumnRef(label_field),
+                                         ', '.join(QgsExpression.quotedValue(v) for v in values))
+        self._copy_to_clipboard(expression, f"Expression with {len(values)} '{label_field}' label(s)")
 
     def _selected_feature_ids(self):
         """Feature ids carried by the selected rows of the sample list, in list order."""
@@ -5507,6 +5606,13 @@ class GeochemistryDockWidget(QDockWidget):
                 "(e.g. lasso/rectangle-select on a plot), then filter.")
             return
 
+        # The layer's own filter (if any) is remembered, so "Clear Filter"
+        # gives it back instead of removing every filter. Filtering again
+        # keeps the filter that was there before the first one.
+        previous = layer.subsetString()
+        record = self._plugin_filters.get(layer.id())
+        if record and record[0] == previous:
+            previous = record[1]
         subset = self._build_fid_subset_string(layer, selected_ids)
         if not layer.setSubsetString(subset):
             QMessageBox.warning(self, "Filter failed",
@@ -5515,25 +5621,58 @@ class GeochemistryDockWidget(QDockWidget):
                 "use QGIS's Export > Save Selected Features As... to create a "
                 "new layer from the selection.")
             return
+        self._plugin_filters[layer.id()] = (subset, previous)
 
         self.update_feature_list(layer)
         QMessageBox.information(self, "Filter applied",
             f"Layer filtered to {len(selected_ids)} selected sample(s).\n"
-            "Use \"Clear Filter\" to show all features again.")
+            "Use \"Clear Filter\" to go back to "
+            + ("the layer's previous filter." if previous else "all features."))
+
+    @staticmethod
+    def _short_expression(expression, limit=600):
+        return expression if len(expression) <= limit else expression[:limit] + " …"
 
     def clear_layer_filter(self):
-        """Remove any filter applied by "Filter Layer to Selected", restoring all features."""
+        """Undo "Filter Layer to Selected", giving back the layer's previous
+        filter; a filter the plugin didn't set is only removed after a warning."""
         layer_id = self.layer_combo.currentData()
         layer = QgsProject.instance().mapLayer(layer_id)
         if layer is None:
             QMessageBox.warning(self, "Warning", "Please select a valid layer.")
             return
-        if not layer.subsetString():
+        current = layer.subsetString()
+        if not current:
             QMessageBox.information(self, "No filter", "This layer isn't currently filtered.")
             return
-        if not layer.setSubsetString(''):
+        record = self._plugin_filters.get(layer.id())
+        if record and record[0] == current:
+            target = record[1]
+            if target:
+                text = ("Remove the \"Filter Layer to Selected\" filter and give back the "
+                        "layer's previous filter?\n\n" + self._short_expression(target))
+            else:
+                text = "Remove the \"Filter Layer to Selected\" filter and show all features again?"
+            reply = QMessageBox.question(self, "Clear Filter", text,
+                                         QMessageBox_Yes | QMessageBox_No, QMessageBox_Yes)
+        else:
+            # Not set by this plugin: once removed it can't be recovered.
+            target = ''
+            reply = QMessageBox.warning(
+                self, "Clear Filter",
+                "This layer has its own filter, which was not set by \"Filter Layer to "
+                "Selected\":\n\n" + self._short_expression(current) +
+                "\n\nClearing it removes it from the layer for good (copy it from "
+                "Layer Properties > Source first if you may need it again). "
+                "To plot all the samples it lets through, click \"All\" instead.\n\n"
+                "Remove this filter anyway?",
+                QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
+        if reply != QMessageBox_Yes:
+            return
+        if not layer.setSubsetString(target):
             QMessageBox.warning(self, "Error", "Could not clear the filter on this layer.")
             return
+        self._plugin_filters.pop(layer.id(), None)
         self.update_feature_list(layer)
 
     def get_element_order(self):
@@ -5697,7 +5836,7 @@ class GeochemistryDockWidget(QDockWidget):
         fig, ax = plt.subplots(figsize=(12, 8))
         x_positions = np.arange(len(element_order))
 
-        category_styles, unique_categories = self._build_default_category_styles(sample_names)
+        category_styles, unique_categories = self._build_default_category_styles(sample_names, default_fill='hollow')
         category_colors, category_markers, sample_colors, sample_markers = \
             self._category_arrays_from_styles(category_styles, sample_names)
 
@@ -5724,8 +5863,10 @@ class GeochemistryDockWidget(QDockWidget):
                     if category_styles[name].get('source') == 'layer' else 8
             sample_line_markersizes.append(line_markersize)
 
+            # Same fill as the category's legend entry and style panel.
+            face = 'white' if category_styles[name].get('fill') == 'hollow' else color
             lines = ax.plot(x_positions, values, marker=marker, markersize=line_markersize, linewidth=1.5,
-                   label=label, color=color, markerfacecolor='white' if marker else None,
+                   label=label, color=color, markerfacecolor=face if marker else None,
                    markeredgecolor=color, markeredgewidth=1.5)
             line_to_fid[lines[0]] = feature.id()
             artist_registry.setdefault(name, []).append({'artist': lines[0], 'role': 'marker'})
@@ -6782,6 +6923,12 @@ class GeochemistryDockWidget(QDockWidget):
         fid_to_pt = dict(zip(fid_list, pts_data))
         current_labels = []
 
+        def visible_mask():
+            """Which points are shown: points of a category hidden in the
+            style panel can't be hovered, clicked or area-selected."""
+            return np.array([fid_to_scatter[fid][0].get_visible() if fid in fid_to_scatter else True
+                             for fid in fid_list], dtype=bool)
+
         # Hover tooltip annotation (hidden until mouse is near a point)
         hover_ann = ax.annotate(
             '', xy=(0, 0), xytext=(10, 10), textcoords='offset points',
@@ -6936,7 +7083,7 @@ class GeochemistryDockWidget(QDockWidget):
         self._link_layer_selection(fig, layer_id, on_map_selection_changed)
 
         def select_area(path, additive):
-            inside = path.contains_points(ax.transData.transform(pts_array))
+            inside = path.contains_points(ax.transData.transform(pts_array)) & visible_mask()
             new_fids = [fid_list[i] for i, flag in enumerate(inside) if flag]
             if additive:
                 layer = QgsProject.instance().mapLayer(layer_id)
@@ -6971,6 +7118,7 @@ class GeochemistryDockWidget(QDockWidget):
                 return
 
             dists = np.sqrt(np.sum((pts_disp - click_disp) ** 2, axis=1))
+            dists[~visible_mask()] = np.inf
             nearest_idx = int(np.argmin(dists))
             additive = selection['additive'](event.key)
 
@@ -7003,6 +7151,7 @@ class GeochemistryDockWidget(QDockWidget):
             except Exception:
                 return
             dists = np.sqrt(np.sum((pts_disp - cur_disp) ** 2, axis=1))
+            dists[~visible_mask()] = np.inf
             nearest_idx = int(np.argmin(dists))
             if dists[nearest_idx] <= 10:
                 fid = fid_list[nearest_idx]
@@ -7112,7 +7261,7 @@ class GeochemistryDockWidget(QDockWidget):
         def on_pick(event):
             if not isinstance(event.artist, Line2D):
                 return
-            if event.artist not in line_to_fid:
+            if event.artist not in line_to_fid or not event.artist.get_visible():
                 return
             try:
                 if fig.canvas.toolbar.mode != '':
@@ -7140,6 +7289,8 @@ class GeochemistryDockWidget(QDockWidget):
         def select_area(path, additive):
             fids = set()
             for line, fid in line_to_fid.items():
+                if not line.get_visible():
+                    continue  # category hidden in the style panel
                 points = np.column_stack(line.get_data()).astype(float)
                 points = points[np.isfinite(points).all(axis=1)]
                 if len(points) and path.contains_points(ax.transData.transform(points)).any():
@@ -7168,6 +7319,8 @@ class GeochemistryDockWidget(QDockWidget):
                 return
             hit_fid = None
             for line, fid in line_to_fid.items():
+                if not line.get_visible():
+                    continue  # category hidden in the style panel
                 contains, _ = line.contains(event)
                 if contains:
                     hit_fid = fid
@@ -7246,7 +7399,8 @@ class GeochemistryDockWidget(QDockWidget):
     def _apply_title_prefix(self, ax):
         """Add the session's title prefix (Layer Selection) as a first line of
         the plot title; call before the plot's tight layout so it makes room."""
-        prefix = self.title_prefix_edit.text().strip()
+        # A typed "\n" starts a new line, for a header of several lines.
+        prefix = self.title_prefix_edit.text().strip().replace('\\n', '\n')
         if prefix:
             title = ax.title.get_text()
             ax.title.set_text(f"{prefix}\n{title}" if title else prefix)
@@ -7390,16 +7544,19 @@ class GeochemistryDockWidget(QDockWidget):
             base_cache[key] = artist.get_zorder() if hasattr(artist, 'get_zorder') else 1.0
         artist.set_zorder(base_cache[key] + bonus)
 
-    def _build_default_category_styles(self, sample_names):
+    def _build_default_category_styles(self, sample_names, default_fill='full'):
         """Build fresh default per-category styles seeded from the auto colour map.
 
-        With "Use layer symbology" on, categories found in the layer's
-        Categorized renderer take its colour/marker/size/label/visibility
-        instead (marked 'source': 'layer'); the rest keep these defaults.
+        `default_fill` is the palette's symbol fill ('hollow' on spider
+        diagrams, whose sample lines use open symbols). With "Use layer
+        symbology" on, categories found in the layer's Categorized renderer
+        take its colour/marker/size/label/visibility instead (marked
+        'source': 'layer'); the rest keep these defaults.
         """
         category_colors, _, unique_categories, category_markers, _ = create_categorical_color_map(sample_names)
         category_styles = {
-            cat: self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat])
+            cat: dict(self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat]),
+                      fill=default_fill)
             for i, cat in enumerate(unique_categories)
         }
         # A style template loaded earlier in the session replaces the palette
@@ -7464,8 +7621,10 @@ class GeochemistryDockWidget(QDockWidget):
             legend_handles.append(Line2D(
                 [0], [0], linestyle='none',
                 marker=style.get('marker', 'o'),
-                markerfacecolor=style.get('color', '#000000'),
+                # Hollow categories (e.g. spider-diagram open symbols) look the same in the legend.
+                markerfacecolor='white' if style.get('fill') == 'hollow' else style.get('color', '#000000'),
                 markeredgecolor=style.get('color', '#000000'),
+                markeredgewidth=1.5 if style.get('fill') == 'hollow' else 1.0,
                 markersize=max(4.0, float(style.get('markersize', 8)) * 0.7),
                 alpha=float(style.get('alpha', 1.0))))
             legend_labels.append(f"{cat} ({format_category_count(category_counts, cat)})")

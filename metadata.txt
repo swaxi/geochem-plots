@@ -26,11 +26,16 @@ changelog=1.0.1
      1.0.1 2026-11
        **Improvements**
        * A style template loaded in a plot's Style panel now becomes the default style of every new or regenerated plot for the rest of the session (shown as "Session style" under Layer Selection), until another template is loaded, Reset is clicked, or it is cleared with its x button; previously every new plot went back to the default palette
-       * New "Title prefix" field (Layer Selection): a header added as a first title line on every plot generated afterwards, kept until QGIS is closed, so it no longer needs to be edited on each plot
+       * New "Title prefix" field (Layer Selection): a header added above the auto-generated title of every plot generated afterwards (type \n for a header of several lines), kept until QGIS is closed, so it no longer needs to be edited on each plot
+       * Copy Labels now copies the labels as an expression, e.g. "Sample" IN ('TAR4-S001', 'TAR4-S005', 'TAR4-S011'), ready to paste into a filter or below a figure, instead of one label per line
+       * Clear Filter no longer removes a filter by accident: it gives back the filter the layer had before Filter Layer to Selected (after confirmation), and a filter not set by the plugin is only removed after a warning showing it
 
        **Bug Fixes**
        * Custom XY: total-iron oxides (Fe2O3-T, FeO-T) are now labelled in wt pct, not ppm, in the axis labels and plot title (the plotted values were already in wt pct)
-       * Category legends no longer overflow the figure: the number of legend columns is chosen to fit the figure width instead of up to 6 whatever the length of the category names, the legend text shrinks when the plot window is narrowed (e.g. by the docked Style panel), and the bottom margin is raised so every legend row stays inside the figure; both are recomputed whenever the plot window is resized
+       * Category legends no longer overflow the figure: the number of legend columns is chosen to fit the figure width instead of up to 6 whatever the length of the category names; when the plot window is narrowed (e.g. by the docked Style panel) the legend's columns and text size are adjusted to fit, it hangs just below the x-axis labels, and the bottom margin is raised so every legend row stays inside the figure; all this is recomputed whenever the plot window is resized
+       * Fix the hover tooltip (and clicks and area selections) picking points and lines of categories hidden in the Style panel, on all plots
+       * Fix Spider diagram legends showing filled symbols while the sample lines use open ones: spider categories now default to hollow symbols, used alike by the lines, the legend and the Style panel
+       * Fix the plugin opening on the layer used last time instead of the layer selected in the QGIS Layers panel, after the first opening of a session
        * Axis and tick labels are no longer cut at the edges of the plot window: the layout is redone for the window's size whenever it is resized
        * Spider diagram: the y-axis label now shows only the normalising reservoir (e.g. "Sample / Chondrite"), the full reference being already given in the title; the full name was longer than the axes are tall
 
