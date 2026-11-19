@@ -4,6 +4,7 @@ Geochemistry Plotting Tools - Dock Widget
 Contains the main dockable widget with all plotting functionality.
 """
 
+import html
 import io
 import os
 import re
@@ -3575,6 +3576,9 @@ class GeochemistryDockWidget(QDockWidget):
         self._category_controls = None
         # Area-selection tool last chosen in a plot's style panel, for new plots.
         self._plot_selection_prefs = {'tool': 'freehand', 'add': False}
+        # Style template last loaded in a plot's style panel, applied to every
+        # new plot for the rest of the session: {'name': ..., 'styles': {category: style}}.
+        self._session_style = None
         # {layer id: [selection entries]}, see _record_selection().
         self._selection_history = {}
         self._selection_watched_layer = None
@@ -4107,6 +4111,32 @@ class GeochemistryDockWidget(QDockWidget):
         self.discrim_label.setToolTip("Label selected points using this field")
         layer_layout.addLayout(
             self._label_row("Add label:", self.label_field_combo, self.discrim_label, expand_index=0))
+
+        # Kept for the session: added above the title of every new plot.
+        self.title_prefix_edit = QLineEdit()
+        self.title_prefix_edit.setPlaceholderText("Optional header added above every plot title")
+        self.title_prefix_edit.setClearButtonEnabled(True)
+        self.title_prefix_edit.setToolTip(
+            "Text added as a first title line on every plot generated from now on "
+            "(e.g. a project or area name). It is kept until QGIS is closed.")
+        layer_layout.addLayout(self._label_row("Title prefix:", self.title_prefix_edit))
+
+        # Style template loaded from a plot's style panel, applied to new plots.
+        self.session_style_label = QLabel()
+        self.session_style_label.setWordWrap(True)
+        self.session_style_clear = QToolButton()
+        self.session_style_clear.setText("✕")
+        self.session_style_clear.setAutoRaise(True)
+        self.session_style_clear.setToolTip(
+            "Stop applying this style template to new plots (they use the default palette again)")
+        self.session_style_clear.clicked.connect(lambda: self._set_session_style(None))
+        self.session_style_row = QWidget()
+        session_style_layout = QHBoxLayout(self.session_style_row)
+        session_style_layout.setContentsMargins(0, 0, 0, 0)
+        session_style_layout.addWidget(self.session_style_label, 1)
+        session_style_layout.addWidget(self.session_style_clear)
+        layer_layout.addWidget(self.session_style_row)
+        self._set_session_style(self._session_style)
 
         layer_container = QWidget()
         layer_container_layout = QVBoxLayout(layer_container)
@@ -5746,6 +5776,7 @@ class GeochemistryDockWidget(QDockWidget):
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.25)
         fit_figure_layout(fig, ax)
@@ -6005,6 +6036,7 @@ class GeochemistryDockWidget(QDockWidget):
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         fit_figure_layout(fig, ax)
@@ -6087,6 +6119,7 @@ class GeochemistryDockWidget(QDockWidget):
             self._add_bubble_size_legend(
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, self._tab_bubble_prefix()), ax.get_legend())
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         fit_figure_layout(fig, ax)
@@ -6244,6 +6277,7 @@ class GeochemistryDockWidget(QDockWidget):
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         fit_figure_layout(fig, ax)
@@ -6570,6 +6604,7 @@ class GeochemistryDockWidget(QDockWidget):
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, 'custom'), category_legend_obj)
 
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fig.subplots_adjust(bottom=0.2)
         fit_figure_layout(fig, ax)
@@ -7196,6 +7231,26 @@ class GeochemistryDockWidget(QDockWidget):
             'fill': 'full',
         }
 
+    def _set_session_style(self, session_style):
+        """Make a loaded style template the default of every new plot for the
+        rest of the session (None: back to the default palette), and show it
+        under Layer Selection."""
+        self._session_style = session_style
+        if session_style:
+            self.session_style_label.setText(
+                f"Session style: <b>{html.escape(session_style['name'])}</b> "
+                "(applied to new plots)")
+        self.session_style_row.setVisible(bool(session_style))
+        self._schedule_splitter_fit()
+
+    def _apply_title_prefix(self, ax):
+        """Add the session's title prefix (Layer Selection) as a first line of
+        the plot title; call before the plot's tight layout so it makes room."""
+        prefix = self.title_prefix_edit.text().strip()
+        if prefix:
+            title = ax.title.get_text()
+            ax.title.set_text(f"{prefix}\n{title}" if title else prefix)
+
     def _style_templates_path(self):
         """Return the project-level JSON file used for category style templates."""
         project_file = QgsProject.instance().fileName()
@@ -7347,6 +7402,12 @@ class GeochemistryDockWidget(QDockWidget):
             cat: self._default_category_style(i, color=category_colors[cat], marker=category_markers[cat])
             for i, cat in enumerate(unique_categories)
         }
+        # A style template loaded earlier in the session replaces the palette
+        # for every category it has a style for.
+        session_styles = self._session_style['styles'] if self._session_style else {}
+        for i, cat in enumerate(unique_categories):
+            if str(cat) in session_styles:
+                category_styles[cat] = self._normalise_category_style(session_styles[str(cat)], i)
         # Kept for the plot panel's own "Use layer symbology" toggle, which
         # restores these defaults when switched off.
         self._last_default_category_styles = {cat: dict(style) for cat, style in category_styles.items()}
@@ -8394,16 +8455,23 @@ class GeochemistryDockWidget(QDockWidget):
                     if str(category) in styles:
                         category_styles[category] = self._normalise_category_style(styles[str(category)], i)
                 _apply_all_category_styles()
+                # New and regenerated plots use it too, until Reset or another Load.
+                self._set_session_style({'name': str(name), 'styles': dict(styles)})
 
             def _reset_styles():
+                question = 'Reset all category styles to the default palette?'
+                if self._session_style:
+                    question += (f'\n\nNew plots will also stop using the style template '
+                                 f'"{self._session_style["name"]}" loaded for this session.')
                 reply = QMessageBox.question(
-                    panel, 'Reset styles', 'Reset all category styles to the default palette?',
+                    panel, 'Reset styles', question,
                     QMessageBox_Yes | QMessageBox_No, QMessageBox_No)
                 if reply != QMessageBox_Yes:
                     return
                 for i, category in enumerate(categories):
                     category_styles[category] = self._default_category_style(i)
                 _apply_all_category_styles()
+                self._set_session_style(None)
 
             def _delete_template():
                 data = self._load_style_templates()
@@ -8858,6 +8926,7 @@ class GeochemistryDockWidget(QDockWidget):
                 ax, bubble_vmin, bubble_vmax, bubble_min_size, bubble_max_size, bubble_method,
                 self._bubble_label(layer, self._tab_bubble_prefix()), category_legend_obj)
 
+        self._apply_title_prefix(ax)
         plt.tight_layout()
         fit_figure_layout(fig, ax)
         plt.show()
