@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Promotion videos: shown on GitHub but kept out of the plugin zip / git archive
+videos/ export-ignore

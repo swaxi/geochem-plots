@@ -3,6 +3,14 @@
 
 _October 2026 - version 1.0.0_
 
+## 🎬 Introduction video
+
+[![Geochemistry Plotting Tools - promotion video](videos/GeochemistryPlottingTools_promo_thumbnail.jpg)](videos/GeochemistryPlottingTools_promo.mp4)
+
+▶️ **[Watch the Geochemistry Plotting Tools introduction video](videos/GeochemistryPlottingTools_promo.mp4)** · Subtitles: [English](videos/GeochemistryPlottingTools_promo.en.srt) | [Français](videos/GeochemistryPlottingTools_promo.fr.srt)
+
+<sub>To display the subtitles, download the video together with its `.srt` file(s) into the same folder and open it in a player such as VLC.</sub>
+
 A geochemistry plotting tool for QGIS that plot geochemical data straight from QGIS point layers.
  Supports:
  - spider diagrams with a choice of normalisations,
@@ -98,6 +106,7 @@ Using **qpip** ensures that all Python dependencies are installed within the act
    - The QGIS **Select Features** tool on the map, after selecting the layer in the **QGIS Layers** panel (the list follows it automatically)
    - The **All** button to select every feature, which also clears any QGIS selection (combine with a layer filter to narrow this down first). All samples are selected by default when the layer has no QGIS selection, so you can click **Generate Plot** straight away
 
+_Samples selected on the map with the QGIS **Select Features** tool (red) are highlighted on the plot_
 ![Map selection](map2plot.png)
 
 7. Click **Generate Plot**
@@ -136,11 +145,15 @@ Split into two sub-tabs:
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 
+![Custom Ternary](tab_ternary.png)
+
 ### Minerals
 - Plot-type drop-down (currently one scheme: Apatite – Sr/Y vs ΣLREE (La+Ce+Pr+Nd) – O’Sullivan et al. (2020); more classification schemes can be added here in future)
 - **Field Legend** / **Category Legend** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
 - **Add Classification Field to Layer** also works from this tab, for the selected classification scheme
+
+![Minerals](tab_minerals.png)
 
 ### Petrophysics
 - **X-Axis (Density)**: Field picker + units (No Scaling, CGS, or SI [÷1000])
@@ -148,6 +161,8 @@ Split into two sub-tabs:
 - Y-axis is always log-scaled
 - **Legend** / **Markers** checkboxes
 - [Bubble Size](#bubble-size-all-tabs) section
+
+![Petrophysics](tab_petrophysics.png)
 
 ## Features available on every tab
 
@@ -158,6 +173,9 @@ The **Category** field (Layer Selection) groups and colours samples. Choose `(no
 Each category in a plot's legend and Style panel is followed by its sample count, **n=x/y**: *y* is the number of selected samples in that category and *x* the number actually plotted. They differ when some samples lack a variable the plot needs (e.g. no Y on a Nb/Y diagram); on Spider diagrams, missing elements leave gaps in a sample's line, and a sample counts as plotted if any of it is visible (one usable element with markers on, two adjacent ones with markers off). Plot titles give the total number of samples plotted.
 
 Every generated plot opens alongside a **Style** panel docked to the plot window, listing each category with a visibility checkbox, a drawing-order spinbox and a **Style…** button. The Style… dialog changes a category's symbol shape, size, colour, transparency and fill (**full** or **hollow** - white fill with a coloured outline) live. The drawing-order spinbox controls that category's z-stack position, so overlapping categories can be reordered without regenerating the plot. The panel's **Style Management** section lets you Save, Load, Reset or Delete named style templates, stored per QGIS project so they can be re-applied to future plots, and holds the **Use layer symbology** and **Apply to layer…** buttons that exchange styles with the QGIS map (see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map)). If a plot has bubble sizing enabled, symbol size is controlled by the bubble scale instead and can't be overridden per category.
+
+_A Wilson (1989) TAS diagram with its Style panel (here, the samples outside all TAS fields - `NULL` - are hidden)_
+![Plot window and Style panel](plot_window_style_panel.png)
 
 **Making room for the plot:** the panel's title bar has a **collapse/expand arrow** button - collapsing shrinks the panel to a slim strip at the window edge (or to just its title bar when docked at the top/bottom) so the plot gets the space, and expanding restores its previous size. The panel can be docked to any side of the plot window (drag its title, or use the float button to detach it into its own window), and the highlighted **bars** between the plot and the panel, and between the **Categories** and **Legend** sections, can be dragged to change their width/height. The panel scrolls if it is made smaller than its contents. Each section of the panel (**Statistics**, **Style Management**, **Categories**, **Legend**) also has a clickable header that collapses or expands it; **Style Management** starts collapsed, and collapsing one of Categories/Legend gives its space to the other.
 
@@ -172,6 +190,9 @@ Plots and the map can use the same category colours, marker shapes, sizes and la
 - The option is greyed out, with a tooltip explaining why, when the layer's symbology isn't Categorized or classifies a different field than the plot's Category.
 - If the map symbols have a **data-defined size** (e.g. set with the QGIS **Size Assistant**), it fills in the current tab's [Bubble Size](#bubble-size-all-tabs) settings (field, scaling, min/max size). A size set by **Apply to layer…** comes back exactly; a Size Assistant setting is converted to the closest plugin scaling, and the plot scales between the minimum and maximum of the plotted data. From the Style panel button, generate the plot again to apply the bubble sizes.
 
+_The map (left) and the plot (right) share the same categorised symbology, on the TAS classification field_
+![Shared symbology](symbology_sync.png)
+
 **Plot → map: Apply to layer….** In the Style panel's **Style Management** section, **Apply to layer…** replaces the layer's symbology, after confirmation, with a Categorized symbology on the plot's Category field that matches the plot: colour, marker shape, size, fill, transparency, labels and which categories are shown. Values not in the plot go to a grey "all other values" category so no features disappear from the map. If the plot uses bubble sizing, the map symbols get a matching data-defined size (same field, unit conversion, scaling and size range). The layer's previous style is saved first (named "Before plot style export …"), so you can switch back to it from **Layer Properties > Symbology > Style**.
 
 ### Category statistics overlay (mean ± 2σ, median, IQR)
@@ -183,9 +204,15 @@ The Style panel's **Statistics** section adds three independent checkboxes to an
 
 Spider diagram statistics are computed in log10 space. Untick **Show faded individual data** (ticked by default) to hide the faint points/lines and show the statistics alone. An **Individual data as envelope** checkbox swaps the faded points/lines for a plain, contour-less semi-transparent envelope (a convex hull for scatter-type plots, a min/max band for Spider diagrams) instead. **Background opacity** and **Line thickness** spinboxes control the faded/envelope opacity and the statistics' line weight. The mean and median markers follow the plot's bubble-size scaling when active, and all the statistics stay in sync with a category's colour and marker if you edit them afterwards.
 
+_Spider diagrams of granites, granodiorites and diorites: mean ± 2σ over the faded samples (left), interquartile range bands (centre), and mean ± 2σ over min/max envelopes (right)_
+![Statistics overlays](stats_overlay.png)
+
 ### Bubble Size (all tabs)
 
 Every tab has an optional **Bubble Size** section: pick a numeric field to scale symbol size by (**Size by** is a tick list: tick several entries to size by their sum, with the same unit handling and warnings as described in [Adding fields together](#adding-fields-together-custom-xy-custom-ternary-and-bubble-size); on the Spider, Discrimination and Minerals tabs it also lists the layer's own numeric fields after the built-in elements/oxides), choose a scaling method (**Linear**, **Log10** or **Exponential**), and set the minimum/maximum symbol size. The data range mapped to those sizes is computed automatically from the selected samples (shown in the panel) and a small reference-size legend is drawn on the plot. On the Spider tab, bubble sizing scales each sample's line markers instead of a scatter point. Bubble sizing can be exported to, or read from, a data-defined symbol size on the QGIS layer - see [Sharing symbology with the QGIS map](#sharing-symbology-with-the-qgis-map).
+
+_Fe₂O₃T vs MgO, with bubbles scaled by SiO₂ (linear scaling) and the reference-size legend_
+![Bubble plot](bubble_plot.png)
 
 ### Adding fields together (Custom XY, Custom Ternary and Bubble Size)
 
@@ -241,6 +268,7 @@ Selection also works in the other direction: features you select on the QGIS map
 
 > **Note:** Selection is only active when the matplotlib toolbar is in its default state. If zoom or pan is active, click the home/arrow button in the toolbar first to deactivate it.
 
+_The most Na₂O-rich granites, selected on a Na₂O-MgO-Fe₂O₃T ternary and labelled with their SAMPLEID, are selected on the map at the same time_
 ![Plot Selection](plot2map.png)
 
 ### Assign labels to points

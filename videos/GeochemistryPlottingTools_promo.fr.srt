@@ -1,0 +1,125 @@
+1
+00:00:00,300 --> 00:00:04,100
+Geochemistry Plotting Tools
+Classer, tracer et explorer la géochimie dans QGIS
+
+2
+00:00:04,500 --> 00:00:08,500
+Tirer le meilleur parti de vos données géochimiques
+A : classification · B : statistiques de populations · C : exploration interactive
+
+3
+00:00:08,900 --> 00:00:10,700
+A · Classification des échantillons
+Des lithologies de terrain aux classes TAS
+
+4
+00:00:10,950 --> 00:00:15,150
+Nous partons de 149 échantillons, colorés par lithologie de terrain
+Catégorie LITHNAME, étiquettes SAMPLEID ; tous les échantillons sélectionnés (rouge)
+
+5
+00:00:15,350 --> 00:00:19,750
+Diagramme TAS de Wilson (1989), prêt à lire
+L’un des neuf diagrammes de discrimination intégrés
+
+6
+00:00:19,950 --> 00:00:23,950
+Appliquez le style du graphique à la couche
+Le style précédent de la couche est sauvegardé au préalable
+
+7
+00:00:24,150 --> 00:00:26,950
+La carte correspond désormais au graphique
+Mêmes couleurs, symboles et catégories
+
+8
+00:00:27,150 --> 00:00:31,350
+Écrivez la classification TAS dans la table attributaire
+119 des 149 échantillons reçoivent un nom TAS (Wilsn89TAS) ; 30 sont hors de tout domaine
+
+9
+00:00:31,550 --> 00:00:33,950
+Reclassez la couche sur le nouveau champ TAS
+Les échantillons non classés (NULL) sont désactivés à partir d’ici
+
+10
+00:00:34,150 --> 00:00:36,950
+Échantillons cartographiés par classe TAS
+Un style catégorisé sur Wilsn89TAS, en quelques secondes
+
+11
+00:00:37,300 --> 00:00:39,100
+B · Statistiques de populations
+Granite, granodiorite et diorite uniquement
+
+12
+00:00:39,350 --> 00:00:42,150
+Ne conservez que granite, granodiorite et diorite
+58 échantillons sélectionnés par expression sur Wilsn89TAS
+
+13
+00:00:42,350 --> 00:00:47,150
+Spectre de terres rares normalisé aux chondrites
+Couleurs reprises directement de la symbologie de la couche
+
+14
+00:00:47,350 --> 00:00:49,750
+Superpositions statistiques : moyenne ± 2σ
+Les échantillons individuels passent en arrière-plan
+
+15
+00:00:49,950 --> 00:00:52,350
+Bandes d’intervalle interquartile
+Comparez les populations d’un coup d’œil
+
+16
+00:00:52,550 --> 00:00:55,350
+Enveloppes min–max avec moyenne ± 2σ
+Des figures propres, prêtes pour un rapport ou une présentation
+
+17
+00:00:55,700 --> 00:00:57,500
+C · Exploration interactive
+Diagrammes à bulles, ternaires et sélection bidirectionnelle
+
+18
+00:00:57,750 --> 00:01:03,750
+Fe₂O₃T en fonction de MgO, bulles proportionnelles à SiO₂
+Échelle linéaire, avec légende des tailles sur le graphique
+
+19
+00:01:03,950 --> 00:01:07,950
+Les mêmes échantillons sur un ternaire Na₂O–MgO–Fe₂O₃T
+Pôles personnalisés, même taille de bulles selon SiO₂
+
+20
+00:01:08,150 --> 00:01:10,950
+Sélection à main levée directement sur le graphique
+Ici : les granites les plus riches en Na₂O
+
+21
+00:01:11,150 --> 00:01:13,550
+Les échantillons sélectionnés sont étiquetés
+Étiquettes SAMPLEID ; copiez la table en un clic
+
+22
+00:01:13,750 --> 00:01:16,350
+…et sélectionnés sur la carte en même temps
+12 échantillons, affichés en rouge
+
+23
+00:01:16,550 --> 00:01:20,150
+Enregistrez des sélections nommées avec des notes
+Rappelez-les plus tard depuis la liste des sélections
+
+24
+00:01:20,500 --> 00:01:25,300
+Tout dans un seul panneau QGIS
+Diagrammes, statistiques, sélection, symbologie et export
+
+25
+00:01:25,700 --> 00:01:29,800
+Libre et open source (MIT)
+Disponible dans le gestionnaire d’extensions QGIS · github.com/swaxi/geochem-plots
+

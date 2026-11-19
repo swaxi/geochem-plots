@@ -1,0 +1,125 @@
+1
+00:00:00,300 --> 00:00:04,100
+Geochemistry Plotting Tools
+Classify, plot and explore geochemistry inside QGIS
+
+2
+00:00:04,500 --> 00:00:08,500
+Making the most of your geochemical data
+A: classification · B: population statistics · C: interactive exploration
+
+3
+00:00:08,900 --> 00:00:10,700
+A · Classification of the samples
+From field lithologies to TAS classes
+
+4
+00:00:10,950 --> 00:00:15,150
+We start with 149 samples, coloured by field lithology
+Category LITHNAME, labels SAMPLEID; all samples selected (red)
+
+5
+00:00:15,350 --> 00:00:19,750
+Wilson (1989) TAS diagram, ready to read
+One of nine built-in discrimination diagrams
+
+6
+00:00:19,950 --> 00:00:23,950
+Push the plot style back to the layer
+The previous layer style is saved first
+
+7
+00:00:24,150 --> 00:00:26,950
+The map now matches the plot
+Same colours, markers and categories
+
+8
+00:00:27,150 --> 00:00:31,350
+Write the TAS classification to the attribute table
+119 of 149 samples get a TAS name (Wilsn89TAS); 30 fall outside all fields
+
+9
+00:00:31,550 --> 00:00:33,950
+Re-classify the layer on the new TAS field
+Unclassified (NULL) samples are switched off from here on
+
+10
+00:00:34,150 --> 00:00:36,950
+Samples mapped by TAS class
+A categorised style on Wilsn89TAS, in seconds
+
+11
+00:00:37,300 --> 00:00:39,100
+B · Population statistics
+Granite, granodiorite and diorite only
+
+12
+00:00:39,350 --> 00:00:42,150
+Keep only granite, granodiorite and diorite
+58 samples selected by expression on Wilsn89TAS
+
+13
+00:00:42,350 --> 00:00:47,150
+REE spider diagram, chondrite-normalised
+Colours taken straight from the layer symbology
+
+14
+00:00:47,350 --> 00:00:49,750
+Statistics overlays: mean ± 2σ
+Individual samples fade into the background
+
+15
+00:00:49,950 --> 00:00:52,350
+Interquartile range bands
+Compare populations at a glance
+
+16
+00:00:52,550 --> 00:00:55,350
+Min–max envelopes with mean ± 2σ
+Clean figures, ready for a report or a talk
+
+17
+00:00:55,700 --> 00:00:57,500
+C · Interactive exploration
+Bubble plots, ternaries and two-way selection
+
+18
+00:00:57,750 --> 00:01:03,750
+Fe₂O₃T vs MgO, bubbles scaled by SiO₂
+Linear scaling, with a size legend on the plot
+
+19
+00:01:03,950 --> 00:01:07,950
+The same samples on a Na₂O–MgO–Fe₂O₃T ternary
+Custom apexes, same SiO₂ bubble sizing
+
+20
+00:01:08,150 --> 00:01:10,950
+Freehand selection directly on the plot
+Here: the most Na₂O-rich granites
+
+21
+00:01:11,150 --> 00:01:13,550
+Selected samples are labelled
+Labels from SAMPLEID; copy the table in one click
+
+22
+00:01:13,750 --> 00:01:16,350
+…and selected on the map at the same time
+12 samples, shown in red
+
+23
+00:01:16,550 --> 00:01:20,150
+Save named selections with notes
+Recall them later from the Selections list
+
+24
+00:01:20,500 --> 00:01:25,300
+Everything in one QGIS panel
+Diagrams, statistics, selection, symbology sync and export
+
+25
+00:01:25,700 --> 00:01:29,800
+Free and open source (MIT)
+github.com/swaxi/geochem-plots
+
